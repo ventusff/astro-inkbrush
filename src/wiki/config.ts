@@ -14,7 +14,7 @@
  * Only types + the identity helper live in this module so the root config
  * file can import it without pulling in any server code.
  */
-import type { LocaleDef, LocaleInput } from './shared/locales';
+import type { LocaleDef, LocaleInput } from './shared/locales.ts';
 
 export type { LocaleDef, LocaleInput };
 
@@ -90,6 +90,9 @@ export interface IdentityConfig {
   /** admin role name (default 'admin') — admins manage the member list; the
    *  server enforces that at least one admin always remains */
   adminRole?: string;
+  /** register an unknown SSO user with defaultRole at first login (default
+   *  true); false refuses unknown users at login */
+  autoRegister?: boolean;
 }
 
 export interface WikiConfigInput {
@@ -129,12 +132,20 @@ export interface WikiConfigInput {
   /** async git push of the content repo after each autocommit (turn on for
    *  deployment machines). default false */
   autopush?: boolean;
-  /** which claude CLI the AI endpoints run */
+  /** the AI endpoints: which claude CLI runs the jobs, and what a job may see */
   claude?: {
     /** executable (default 'claude') */
     bin?: string;
     /** `--model` override (default: the CLI's own default) */
     model?: string;
+    /** project-relative files or directories a job may read and change
+     *  beside the note's own directory — e.g. the demo module a note
+     *  mounts. Called per job with the note; default: none */
+    companions?: (note: { id: string; file: string; dir: string; source: string }) => string[];
+    /** the site's own writing constraints, appended to the dialect's in
+     *  every prompt (component vocabulary, heading attributes, generated
+     *  numbering, …). Default [] */
+    rules?: string[];
   };
   content?: {
     /** note content directory, relative to the site root.
@@ -175,7 +186,7 @@ export interface WikiConfig {
     };
   };
   /** null = identity module off */
-  identity: null | { dir: string; roles: string[]; defaultRole: string; adminRole: string };
+  identity: null | { dir: string; roles: string[]; defaultRole: string; adminRole: string; autoRegister: boolean };
   inbox: {
     /** absolute path, or null = watcher disabled */
     dir: string | null;
@@ -184,7 +195,12 @@ export interface WikiConfig {
   };
   autocommit: boolean;
   autopush: boolean;
-  claude: { bin: string; model: string | null };
+  claude: {
+    bin: string;
+    model: string | null;
+    companions: ((note: { id: string; file: string; dir: string; source: string }) => string[]) | null;
+    rules: string[];
+  };
   content: { dir: string; locales: readonly LocaleDef[] };
   /** false = share module off (the token only ever lives in the
    *  SHARE_GATEWAY_TOKEN env var) */

@@ -3,10 +3,9 @@
  *
  * The snapshot moves `index.html` to the share root while assets keep the
  * site's directory layout, so every reference has to be re-expressed relative
- * to that root. Root-relative refs were always handled; page-relative ones —
- * what co-located note attachments use — were not, and every attachment 404'd
- * under `/s/<id>/`. These tests pin both, plus the values that must be left
- * strictly alone.
+ * to that root: root-relative refs and page-relative ones (what co-located
+ * note attachments use) alike. These tests pin both, plus the values that
+ * must be left strictly alone.
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -104,7 +103,7 @@ test('document rewrite covers attributes, srcset and inline style', () => {
   assert.match(out, /href="#anchor"/);
   // injected hardening
   assert.match(out, /name="robots" content="noindex,nofollow"/);
-  assert.match(out, /vite:preloadError/);
+  assert.match(out, /<script src="\.\/_share\/preload\.js"><\/script><\/head>/);
 });
 
 test('single-quoted attributes keep their quote style', () => {

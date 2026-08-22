@@ -1,16 +1,20 @@
 /**
  * Static snapshot builder for the share module.
  *
- * A share is a fully self-contained copy of ONE built page: we run a WIKI-free
- * `astro build` into `.wiki/share-dist` (cached across shares until any file
- * under src/content changes), then extract the route's index.html plus its
- * complete asset closure (CSS → url() refs, JS → import graph + emitted
- * `/_astro/…` asset strings) into a temp dir, rewriting only the HTML from
- * root-relative to `./`-relative (the page lands at /s/<id>/index.html and the
- * assets keep their site-root-relative directory structure).
+ * A share is a self-contained copy of one built page: a WIKI-free
+ * `astro build` into `.wiki/share-dist` (cached across shares while none of
+ * the build inputs changed since the build began), then the route's
+ * index.html plus its complete asset closure (CSS → url() refs, JS → import
+ * graph + emitted `/_astro/…` asset strings) copied into a temp dir. The HTML
+ * is re-based from root-relative to `./`-relative (the page lands at
+ * /s/<id>/index.html; assets keep their site-root-relative structure), and
+ * copied stylesheets likewise. The output is asserted free of CMS and Vite
+ * dev strings.
  *
- * The WIKI-free build guarantees zero CMS/vite pollution; we still assert
- * defensively that no `/api/wiki` or vite-client strings survive.
+ * Build inputs tracked by the cache: src/, public/, packages/, vendor/, the
+ * astro config, package.json and the lockfiles. Environment variables that
+ * change a build are not tracked — a deployment that builds differently by
+ * env removes `.wiki/share-dist` when the env changes.
  */
 import { spawn } from 'node:child_process';
 import {
@@ -63,23 +67,20 @@ function latestMtime(path: string): number {
   return latest;
 }
 
-/**
- * Everything whose change makes a cached build stale.
- *
- * Watching only `src/content` was too narrow: a share is a copy of the built
- * SITE, so a template, a stylesheet, an integration or a config edit changes it
- * just as much as a note does — and silently kept serving pages built from code
- * that no longer exists. `src` covers the content directory as well.
- */
+/** everything whose change makes a cached build stale: a share is a copy of
+ *  the built site, so templates, styles, integrations and config count as
+ *  much as content */
 function buildInputs(root: string): string[] {
   return [
     join(root, 'src'),
     join(root, 'public'),
     join(root, 'packages'),
-    join(root, 'astro.config.ts'),
-    join(root, 'astro.config.mjs'),
+    join(root, 'vendor'),
+    ...['ts', 'mts', 'js', 'mjs', 'cjs'].map((ext) => join(root, `astro.config.${ext}`)),
     join(root, 'package.json'),
+    join(root, 'package-lock.json'),
     join(root, 'pnpm-lock.yaml'),
+    join(root, 'yarn.lock'),
   ];
 }
 
@@ -134,8 +135,11 @@ async function ensureBuild(root: string, onProgress: Progress): Promise<string> 
       return;
     }
     onProgress('Building the static site (WIKI-free astro build) — may take a few minutes on first share…');
+    // the stamp is the moment the build began: an input changed while it ran
+    // is newer than the stamp and invalidates the cache next time
+    const startedAt = Date.now();
     await runAstroBuild(root, '.wiki/share-dist', onProgress);
-    writeFileSync(stampFile, String(Date.now()));
+    writeFileSync(stampFile, String(startedAt));
     onProgress('Static build finished');
   };
   const chained = buildChain.then(run, run);
@@ -702,15 +706,18 @@ export function rewriteHtml(html: string, pageDir: string): string {
     out = out.replace(/<head([^>]*)>/i, '<head$1><meta name="robots" content="noindex,nofollow">');
   }
 
-  // Vite's preload helper prepends the site base '/' to chunk deps, which
-  // escapes the /s/<id>/ scope at runtime (gated → 404 → import aborted).
-  // Suppressing vite:preloadError degrades the PRELOAD to a no-op while the
-  // actual dynamic import (emitted relative, `./chunk.js`) proceeds normally.
-  return out.replace(
-    /<\/head>/i,
-    '<script>window.addEventListener("vite:preloadError",function(e){e.preventDefault()})</script></head>',
-  );
+  // Vite's preload helper resolves a chunk's dependencies against the site
+  // base '/', which under /s/<id>/ points outside the share; the preload of
+  // such a dependency fails and the helper would abort the import. The
+  // listener (an external file, so a strict CSP can allow it by path) turns
+  // that failure into a no-op: the dynamic import itself is emitted relative
+  // (`./chunk.js`) and loads the dependency through its own import graph.
+  return out.replace(/<\/head>/i, `<script src="${rewriteRef(`/${PRELOAD_SHIM}`, pageDir)}"></script></head>`);
 }
+
+/** the preload-failure shim, copied into every snapshot */
+export const PRELOAD_SHIM = '_share/preload.js';
+export const PRELOAD_SHIM_SOURCE = 'window.addEventListener("vite:preloadError",function(e){e.preventDefault()});\n';
 
 /**
  * Re-base the refs inside a COPIED stylesheet.
@@ -742,7 +749,7 @@ export function rewriteCssFile(css: string, cssDir: string): string {
 
 /**
  * Build (or reuse) the WIKI-free static site and cut a self-contained
- * single-page snapshot for `noteRoute`. Caller owns (and must remove)the
+ * single-page snapshot for `noteRoute`. The caller owns (and removes) the
  * returned temp dir.
  */
 export async function buildSnapshot(
@@ -811,6 +818,9 @@ export async function buildSnapshot(
   const rewritten = rewriteHtml(html, pageDir);
   assertClean(executableMarkup(rewritten), 'index.html');
   writeFileSync(join(snapDir, 'index.html'), rewritten);
+  mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });
+  writeFileSync(join(snapDir, PRELOAD_SHIM), PRELOAD_SHIM_SOURCE);
+  files.push(PRELOAD_SHIM);
   onProgress(`Snapshot ready (${files.length} assets)`);
   return { dir: snapDir, files };
 }

@@ -9,8 +9,9 @@
  * Both tables implement the same `Strings` interface, so a missing key in
  * either locale is a type error. Strings that interpolate data are functions.
  * Server responses (errors, Claude tool labels) arrive in English; the zh
- * table remaps the well-known tool names and passes everything else through.
+ * table remaps the well-known tool verbs and passes everything else through.
  */
+import type { WikiUser } from '../shared/types';
 
 export type UiLocale = 'en' | 'zh';
 
@@ -18,18 +19,41 @@ export const uiLocale: UiLocale = document.documentElement.lang.toLowerCase().st
   ? 'zh'
   : 'en';
 
-/** BCP 47 tag for Date#toLocaleString and friends. */
+/** BCP 47 tag for Intl formatting. */
 export const dateLocale = uiLocale === 'zh' ? 'zh-CN' : 'en-GB';
+
+/** Date display style: `datetime` = medium date + short time, `date` = medium date. */
+export type DateStyle = 'datetime' | 'date';
+
+const dateFormats: Record<DateStyle, Intl.DateTimeFormat> = {
+  datetime: new Intl.DateTimeFormat(dateLocale, { dateStyle: 'medium', timeStyle: 'short' }),
+  date: new Intl.DateTimeFormat(dateLocale, { dateStyle: 'medium' }),
+};
+
+/** The single locale-aware date formatter for every date the chrome shows. */
+export function formatDate(value: number | string | Date, style: DateStyle = 'datetime'): string {
+  return dateFormats[style].format(new Date(value));
+}
+
+/** A Claude tool label is `<verb> <path>` (path optional); only the verb is
+ *  translatable, the path is passed through verbatim. */
+function translateTool(label: string, verbs: Record<string, string>): string {
+  const space = label.indexOf(' ');
+  const verb = space < 0 ? label : label.slice(0, space);
+  const rest = space < 0 ? '' : label.slice(space);
+  return `${verbs[verb] ?? verb}${rest}`;
+}
 
 interface Strings {
   common: {
     requestFailed: string;
     /** Claude tool-activity labels stream from the server in English;
-     *  zh remaps the known names and passes unknown ones through. */
+     *  zh remaps the known verbs and passes the path through. */
     tool: (label: string) => string;
   };
   auth: {
     chipLabel: string;
+    accountPanel: string;
     signIn: string;
     panelTitle: string;
     googleButton: string;
@@ -38,15 +62,18 @@ interface Strings {
     samlMissingConfig: string;
     devLoginLabel: string;
     nickname: string;
+    emailPlaceholder: string;
     enter: string;
     or: string;
     signOut: string;
     signedIn: (name: string) => string;
     signedOut: string;
     signInFailed: string;
-    devSession: string;
+    /** message for a `?login_error=<code>` redirect from a provider flow */
+    loginError: (code: string) => string;
+    provider: Record<WikiUser['provider'], string>;
     noProviders: string;
-    role: (role: string | undefined) => string;
+    role: (role: string | null | undefined) => string;
     members: string;
   };
   identity: {
@@ -54,9 +81,12 @@ interface Strings {
     colEmail: string;
     colName: string;
     colRole: string;
+    colActions: string;
     namePlaceholder: string;
+    emailPlaceholder: string;
     add: string;
     remove: string;
+    removeLabel: (email: string) => string;
     confirmRemove: (email: string) => string;
     saved: string;
     saveFailed: string;
@@ -65,6 +95,8 @@ interface Strings {
     adminNote: (role: string) => string;
   };
   blocks: {
+    toolbar: string;
+    focusHint: string;
     edit: string;
     ai: string;
     history: string;
@@ -90,6 +122,7 @@ interface Strings {
   ai: {
     title: (start: number, end: number) => string;
     placeholder: (jsx: string | null) => string;
+    inputLabel: string;
     run: string;
     working: string;
     done: string;
@@ -101,6 +134,7 @@ interface Strings {
     dialogLabel: string;
     fabTitle: string;
     inputPlaceholder: string;
+    inputLabel: string;
     send: string;
     newChat: string;
     collapse: string;
@@ -128,6 +162,7 @@ interface Strings {
     sectionTitle: string;
     count: (n: number) => string;
     placeholder: string;
+    inputLabel: string;
     preview: string;
     keepEditing: string;
     post: string;
@@ -176,6 +211,16 @@ interface Strings {
   };
 }
 
+const EN_LOGIN_ERRORS: Record<string, string> = {
+  saml_config: 'SSO is not configured correctly on this site.',
+  saml_disabled: 'SSO sign-in is disabled on this site.',
+  saml_response: 'The SSO response was missing or unreadable.',
+  saml_invalid: 'The SSO response could not be verified.',
+  saml_error: 'SSO sign-in failed.',
+  wrong_domain: 'Your account is not in an allowed email domain.',
+  not_member: 'Your account is not a member of this site.',
+};
+
 const en: Strings = {
   common: {
     requestFailed: 'Request failed',
@@ -183,6 +228,7 @@ const en: Strings = {
   },
   auth: {
     chipLabel: 'Account',
+    accountPanel: 'Account',
     signIn: 'Sign in',
     panelTitle: 'Sign in',
     googleButton: 'Sign in with Google Workspace',
@@ -193,13 +239,19 @@ const en: Strings = {
       'Enabled, but the SSO URL / IdP entity id / certificate / baseUrl config is incomplete (see the docs)',
     devLoginLabel: 'Local test sign-in',
     nickname: 'Nickname',
+    emailPlaceholder: 'you@team.com',
     enter: 'Enter',
     or: 'or',
     signOut: 'Sign out',
     signedIn: (name) => `Signed in as ${name}`,
     signedOut: 'Signed out',
     signInFailed: 'Sign-in failed',
-    devSession: 'Local test session',
+    loginError: (code) => EN_LOGIN_ERRORS[code] ?? `Sign-in failed (${code})`,
+    provider: {
+      dev: 'Local test session',
+      google: 'Google Workspace',
+      'google-saml': 'Google Workspace SSO',
+    },
     noProviders: 'No sign-in method enabled (configure inkbrush.config.ts → auth)',
     role: (role) => `Role: ${role ?? '—'}`,
     members: 'Members',
@@ -209,9 +261,12 @@ const en: Strings = {
     colEmail: 'Email',
     colName: 'Name',
     colRole: 'Role',
+    colActions: 'Actions',
     namePlaceholder: 'Name',
+    emailPlaceholder: 'name@team.com',
     add: 'Add',
     remove: 'Remove',
+    removeLabel: (email) => `Remove ${email}`,
     confirmRemove: (email) => `Remove ${email}?`,
     saved: 'Members saved',
     saveFailed: 'Save failed',
@@ -220,6 +275,8 @@ const en: Strings = {
     adminNote: (role) => `At least one '${role}' is always kept (server-enforced)`,
   },
   blocks: {
+    toolbar: 'Block tools',
+    focusHint: 'Press Enter for block tools',
     edit: 'Edit this block (opens the source)',
     ai: 'Ask Claude to edit this block',
     history: 'Revision history / revert',
@@ -247,6 +304,7 @@ const en: Strings = {
     title: (start, end) => `Claude · edit block L${start}–${end}`,
     placeholder: (jsx) =>
       `Tell Claude what to change in this ${jsx ? `⟨${jsx}⟩ ` : ''}block…`,
+    inputLabel: 'Instruction for Claude',
     run: 'Ask Claude to edit',
     working: 'Claude is editing…',
     done: 'Claude finished editing — reloading…',
@@ -279,6 +337,7 @@ const en: Strings = {
     dialogLabel: 'Claude assistant',
     fabTitle: 'Ask Claude / AI actions',
     inputPlaceholder: 'Ask Claude about this note… (Enter to send)',
+    inputLabel: 'Message to Claude',
     send: 'Send',
     newChat: 'New conversation',
     collapse: 'Collapse',
@@ -313,6 +372,7 @@ const en: Strings = {
     sectionTitle: 'Comments',
     count: (n) => (n === 0 ? 'No comments yet' : n === 1 ? '1 comment' : `${n} comments`),
     placeholder: 'Write a comment… markdown and $…$ math supported',
+    inputLabel: 'Comment',
     preview: 'Preview',
     keepEditing: 'Keep editing',
     post: 'Post',
@@ -362,7 +422,7 @@ const en: Strings = {
   },
 };
 
-const ZH_TOOL_LABELS: Record<string, string> = {
+const ZH_TOOL_VERBS: Record<string, string> = {
   Read: '读取',
   Edit: '编辑',
   Write: '写入',
@@ -372,13 +432,24 @@ const ZH_TOOL_LABELS: Record<string, string> = {
   Task: '子任务',
 };
 
+const ZH_LOGIN_ERRORS: Record<string, string> = {
+  saml_config: '本站的 SSO 配置不正确。',
+  saml_disabled: '本站未启用 SSO 登录。',
+  saml_response: 'SSO 响应缺失或无法读取。',
+  saml_invalid: 'SSO 响应无法通过校验。',
+  saml_error: 'SSO 登录失败。',
+  wrong_domain: '你的账号不在允许的邮箱域名内。',
+  not_member: '你的账号不是本站成员。',
+};
+
 const zh: Strings = {
   common: {
     requestFailed: '请求失败',
-    tool: (label) => ZH_TOOL_LABELS[label] ?? label,
+    tool: (label) => translateTool(label, ZH_TOOL_VERBS),
   },
   auth: {
     chipLabel: '账号',
+    accountPanel: '账号',
     signIn: '登录',
     panelTitle: '登录',
     googleButton: '使用 Google Workspace 登录',
@@ -387,13 +458,19 @@ const zh: Strings = {
     samlMissingConfig: '已启用但配置不完整（缺 SSO URL / IdP entity id / 证书 / baseUrl，见文档）',
     devLoginLabel: '本地测试登录',
     nickname: '昵称',
+    emailPlaceholder: 'you@team.com',
     enter: '进入',
     or: '或',
     signOut: '退出登录',
     signedIn: (name) => `已登录：${name}`,
     signedOut: '已退出登录',
     signInFailed: '登录失败',
-    devSession: '本地测试会话',
+    loginError: (code) => ZH_LOGIN_ERRORS[code] ?? `登录失败（${code}）`,
+    provider: {
+      dev: '本地测试会话',
+      google: 'Google Workspace',
+      'google-saml': 'Google Workspace SSO',
+    },
     noProviders: '未启用任何登录方式（配置 inkbrush.config.ts → auth）',
     role: (role) => `角色：${role ?? '—'}`,
     members: '成员管理',
@@ -403,9 +480,12 @@ const zh: Strings = {
     colEmail: '邮箱',
     colName: '姓名',
     colRole: '角色',
+    colActions: '操作',
     namePlaceholder: '姓名',
+    emailPlaceholder: 'name@team.com',
     add: '添加',
     remove: '移除',
+    removeLabel: (email) => `移除 ${email}`,
     confirmRemove: (email) => `移除 ${email}？`,
     saved: '成员表已保存',
     saveFailed: '保存失败',
@@ -414,6 +494,8 @@ const zh: Strings = {
     adminNote: (role) => `服务端强制至少保留一名「${role}」`,
   },
   blocks: {
+    toolbar: '块工具',
+    focusHint: '按 Enter 打开块工具',
     edit: '编辑此块（点击展开源码）',
     ai: '让 Claude 修改此块',
     history: '本块修订历史 / 回滚',
@@ -439,6 +521,7 @@ const zh: Strings = {
   ai: {
     title: (start, end) => `Claude · 修改块 L${start}–${end}`,
     placeholder: (jsx) => `对这个${jsx ? `〈${jsx}〉` : ''}块提意见，Claude 会直接改…`,
+    inputLabel: '给 Claude 的修改要求',
     run: '让 Claude 修改',
     working: 'Claude 修改中…',
     done: 'Claude 已完成修改，页面即将刷新',
@@ -468,6 +551,7 @@ const zh: Strings = {
     dialogLabel: 'Claude 助手',
     fabTitle: '向 Claude 提问 / AI 操作',
     inputPlaceholder: '就这篇笔记向 Claude 提问… (Enter 发送)',
+    inputLabel: '发给 Claude 的消息',
     send: '发送',
     newChat: '新对话',
     collapse: '收起',
@@ -502,6 +586,7 @@ const zh: Strings = {
     sectionTitle: '讨论',
     count: (n) => (n === 0 ? '还没有评论' : `${n} 条`),
     placeholder: '写下评论… 支持 markdown 与 $…$ 数学',
+    inputLabel: '评论',
     preview: '预览',
     keepEditing: '继续编辑',
     post: '发表',

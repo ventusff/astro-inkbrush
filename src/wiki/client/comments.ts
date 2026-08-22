@@ -8,19 +8,13 @@ import { api } from './api';
 import { currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
 import { S } from './strings';
-import { h, toast } from './ui';
+import { h, time, toast } from './ui';
 
 function avatarOf(author: WikiComment['author']): HTMLElement {
   if (author.picture) {
     return h('img', { class: 'wiki-avatar', src: author.picture, alt: author.name, referrerpolicy: 'no-referrer' });
   }
   return h('span', { class: 'wiki-avatar wiki-avatar-fallback' }, [...author.name][0]?.toUpperCase() ?? '?');
-}
-
-function timeLabel(ts: number): string {
-  const date = new Date(ts);
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function mountComments(ctx: PageContext): void {
@@ -53,7 +47,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
   const countEl = h('span', { class: 'count' });
   const section = h(
     'section',
-    { class: 'wiki-comments' },
+    { class: 'wiki-comments', 'aria-label': S.comments.sectionTitle },
     h('div', { class: 'wiki-comments-title' }, S.comments.sectionTitle, countEl),
     list,
   );
@@ -68,16 +62,17 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
       avatarOf(comment.author),
       h(
         'div',
-        { style: { flex: '1', minWidth: '0' } },
+        { class: 'wiki-comment-main' },
         h(
           'div',
           { class: 'wiki-comment-meta' },
           h('span', { class: 'name' }, comment.author.name),
-          h('span', {}, timeLabel(comment.ts)),
+          time(comment.ts),
           mine
             ? h(
                 'button',
                 {
+                  type: 'button',
                   class: 'wiki-comment-del',
                   onclick: async () => {
                     if (!window.confirm(S.comments.confirmDelete)) return;
@@ -123,6 +118,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
           h(
             'button',
             {
+              type: 'button',
               onclick: () => {
                 document.querySelector<HTMLButtonElement>('.wiki-chip')?.click();
               },
@@ -136,30 +132,34 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
     const input = h('textarea', {
       class: 'wiki-textarea',
       placeholder: S.comments.placeholder,
+      'aria-label': S.comments.inputLabel,
       rows: '3',
     });
-    const preview = h('div', { class: 'wiki-comment-body', style: { display: 'none', padding: '8px 2px' } });
+    const preview = h('div', { class: 'wiki-comment-body wiki-comment-preview', hidden: true });
     const previewBtn = h(
       'button',
-      { class: 'wiki-btn', style: { width: 'auto', padding: '6px 12px' } },
+      { type: 'button', class: 'wiki-btn wiki-comment-previewbtn', 'aria-pressed': 'false' },
       S.comments.preview,
     );
-    const submitBtn = h('button', { class: 'wiki-btn wiki-btn-primary' }, S.comments.post);
+    const submitBtn = h('button', { type: 'button', class: 'wiki-btn wiki-btn-primary' }, S.comments.post);
     let previewing = false;
+    const note = (text: string): HTMLElement => h('em', { class: 'wiki-comment-note' }, text);
 
     previewBtn.addEventListener('click', async () => {
       previewing = !previewing;
       previewBtn.textContent = previewing ? S.comments.keepEditing : S.comments.preview;
-      input.style.display = previewing ? 'none' : '';
-      preview.style.display = previewing ? '' : 'none';
+      previewBtn.setAttribute('aria-pressed', String(previewing));
+      input.hidden = previewing;
+      preview.hidden = !previewing;
       if (previewing) {
-        preview.innerHTML = `<em style="color:var(--wiki-faint)">${S.comments.rendering}</em>`;
+        preview.replaceChildren(note(S.comments.rendering));
         try {
           const { html } = await api.post<{ html: string }>('/render', {
             markdown: input.value,
             sanitize: true,
           });
-          preview.innerHTML = html || `<em style="color:var(--wiki-faint)">${S.editor.empty}</em>`;
+          if (html) preview.innerHTML = html;
+          else preview.replaceChildren(note(S.editor.empty));
         } catch {
           preview.textContent = S.comments.previewFailed;
         }
@@ -169,7 +169,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
     submitBtn.addEventListener('click', async () => {
       const markdown = input.value.trim();
       if (!markdown) return;
-      submitBtn.setAttribute('disabled', '');
+      submitBtn.disabled = true;
       try {
         const { comment } = await api.post<{ comment: WikiComment }>(`/comments/${meta.id}`, { markdown });
         comments.push(comment);
@@ -180,7 +180,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
       } catch (err) {
         toast(err instanceof Error ? err.message : S.comments.postFailed, 'err');
       } finally {
-        submitBtn.removeAttribute('disabled');
+        submitBtn.disabled = false;
       }
     });
 

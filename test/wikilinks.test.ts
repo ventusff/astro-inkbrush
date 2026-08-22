@@ -68,6 +68,22 @@ test('the source note’s locale mirror wins over the bare id', () => {
   assert.equal((resolve('en/guide') as { id: string }).id, 'en/guide');
 });
 
+test('a locale table that lists the default locale with an empty prefix still finds mirrors', () => {
+  const resolve = buildWikilinkResolver({
+    notes: () => [
+      { id: 'guide', title: 'Guide', aliases: [] },
+      { id: 'zh/guide', title: '指南', aliases: [] },
+    ],
+    urlFor: (id) => `/${id}/`,
+    locales: [
+      { code: 'en', prefix: '' },
+      { code: 'zh', prefix: 'zh/' },
+    ],
+  });
+  assert.equal((resolve('guide', 'zh/other') as { id: string }).id, 'zh/guide');
+  assert.equal((resolve('guide', 'other') as { id: string }).id, 'guide');
+});
+
 test('an exact id beats an alias of the same spelling', () => {
   const resolve = resolver([
     { id: 'setup', title: 'Setup Page', aliases: [] },

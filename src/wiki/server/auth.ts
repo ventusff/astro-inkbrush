@@ -6,37 +6,39 @@
  *  - hmac (default): HMAC-signed JSON payload (WikiUser + expiry), signing
  *    secret generated into .wiki/secret — single-site deployments, zero setup;
  *  - jwt: jose HS256 JWT with minimal claims {email, name?, picture?,
- *    provider} — roles are NEVER in the token (looked up per request where
- *    needed). Secret comes from the AUTH_SECRET env var (required — startup
- *    error when missing), so multiple sites sharing the secret + a shared
- *    cookie Domain get site-wide SSO.
- * Cookie name / Domain / TTL come from `auth.session` (defaults keep the
- * historical shape: wiki_session, host-only, 30d hmac / 7d jwt); Secure is
- * set when the configured external baseUrl is https, or when the request
- * itself arrived over https (direct TLS or x-forwarded-proto) — covers
- * dev-login-only https deployments that never configure a baseUrl.
+ *    provider} — roles are never in the token (looked up per request where
+ *    needed). The secret is the AUTH_SECRET env var (startup error when
+ *    missing); sites sharing the secret and a cookie Domain share the session.
+ * Cookie name / Domain / TTL come from `auth.session` (defaults:
+ * wiki_session, host-only, 30d hmac / 7d jwt); Secure is set when the
+ * configured external baseUrl is https or the request arrived over https
+ * (direct TLS or x-forwarded-proto).
  *
- * Providers (toggled per-deployment in inkbrush.config.ts → auth):
- *  - dev:    quick login with any name/email — personal-intranet / local
- *            testing flavour (`auth.dev`, default true).
- *  - google: full OAuth2 authorization-code flow (Google Workspace). Opt-in
- *            via `auth.google: {…}`; the client id/secret stay in env
- *            (GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET — secrets never enter
- *            the config file). Membership is restricted via
- *            `auth.google.allowedDomains` (domains and/or full addresses).
- *            The id_token is verified through Google's tokeninfo endpoint
- *            (signature checked on Google's side).
+ * Providers (toggled per deployment in inkbrush.config.ts → auth):
+ *  - dev:    quick login with any name/email — personal machines and
+ *            private networks (`auth.dev`, default true).
+ *  - google: OAuth2 authorization-code flow with PKCE (Google Workspace).
+ *            Opt-in via `auth.google: {…}`; the client id/secret stay in env
+ *            (GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET). The authorization
+ *            request is bound to the browser: a signed, single-use state
+ *            and the PKCE verifier travel in a short-lived cookie, and the
+ *            callback is accepted only from the browser that started it.
+ *            Membership is restricted via `auth.google.allowedDomains`.
+ *            The id_token is verified through Google's tokeninfo endpoint.
+ *            Outside localhost the external base URL must be configured —
+ *            the redirect URI is never derived from the Host header.
  *  - googleSaml: SAML SSO against a Google Workspace custom SAML app —
  *            see ./saml.ts (routes in ./index.ts).
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 import { jwtVerify, SignJWT } from 'jose';
 
-import type { GoogleAuthState, WikiUser } from '../shared/types';
-import { wikiConfig } from './config';
-import { sessionSecret } from './store';
+import type { GoogleAuthState, WikiUser } from '../shared/types.ts';
+import { wikiConfig } from './config.ts';
+import { HttpError } from './index.ts';
+import { sessionSecret } from './store.ts';
 
 /* ---------------- signed cookie session ---------------- */
 
@@ -65,8 +67,7 @@ export function isSecureRequest(req: IncomingMessage): boolean {
   return (Array.isArray(proto) ? proto[0] : proto)?.split(',')[0]?.trim() === 'https';
 }
 
-/** shared attribute tail — plain http dev output stays byte-identical to the
- *  historical cookie (no Domain, no Secure) */
+/** shared attribute tail (Domain only when configured, Secure only over https) */
 function cookieAttrs(maxAgeS: number, req: IncomingMessage): string {
   const conf = sessionConf();
   let attrs = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}`;
@@ -81,6 +82,17 @@ function b64url(buf: Buffer): string {
 
 function sign(data: string): string {
   return createHmac('sha256', sessionSecret()).update(data).digest('base64url');
+}
+
+function macEquals(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function cookieValue(req: IncomingMessage, name: string): string | null {
+  const match = (req.headers.cookie ?? '').split(/;\s*/).find((c) => c.startsWith(`${name}=`));
+  return match ? match.slice(name.length + 1) : null;
 }
 
 /** jwt-mode signing key (AUTH_SECRET) — presence is validated at config
@@ -124,10 +136,8 @@ export function clearSessionCookie(req: IncomingMessage): string {
 
 export async function sessionUser(req: IncomingMessage): Promise<WikiUser | null> {
   const conf = sessionConf();
-  const cookies = req.headers.cookie ?? '';
-  const match = cookies.split(/;\s*/).find((c) => c.startsWith(`${conf.cookieName}=`));
-  if (!match) return null;
-  const value = match.slice(conf.cookieName.length + 1);
+  const value = cookieValue(req, conf.cookieName);
+  if (!value) return null;
 
   if (conf.format === 'jwt') {
     try {
@@ -154,11 +164,7 @@ export async function sessionUser(req: IncomingMessage): Promise<WikiUser | null
   const dot = value.lastIndexOf('.');
   if (dot < 0) return null;
   const payload = value.slice(0, dot);
-  const mac = value.slice(dot + 1);
-  const expected = sign(payload);
-  const a = Buffer.from(mac);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  if (!macEquals(value.slice(dot + 1), sign(payload))) return null;
   try {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString()) as SessionPayload;
     if (parsed.exp < Date.now()) return null;
@@ -168,18 +174,11 @@ export async function sessionUser(req: IncomingMessage): Promise<WikiUser | null
   }
 }
 
-/** login return target: relative paths are always allowed; absolute URLs only
- *  when their origin is whitelisted in auth.session.trustedOrigins
- *  (open-redirect guard)
- *
- *  The two guards below look paranoid — they are not, do NOT "simplify" them:
- *   - browsers normalise backslashes to slashes while parsing a URL, so
- *     `Location: /\evil.com` navigates to https://evil.com/ exactly like the
- *     protocol-relative `//evil.com` does — any slash-ish second character is
- *     an off-site jump, not a site-relative path;
- *   - browsers also strip control characters (TAB/CR/LF) from URLs, so a
- *     `/<TAB>/evil.com` sent through a header would collapse into `//evil.com`.
- */
+/** login return target: a site-relative path, or an absolute URL whose
+ *  origin is listed in auth.session.trustedOrigins; anything else is `/`.
+ *  A second character of `/` or `\` after the leading slash is an off-site
+ *  jump (browsers normalise `\` to `/`), and a control character anywhere
+ *  is stripped by browsers before navigation, so both are refused. */
 export function safeReturnUrl(raw: string | null | undefined): string {
   if (!raw) return '/';
   if (/[\u0000-\u001f\u007f]/.test(raw)) return '/';
@@ -215,21 +214,91 @@ export function googleState(): GoogleAuthState {
   return hasSecrets ? 'ready' : 'unconfigured';
 }
 
+/** the external origin the OAuth callback is registered under: the
+ *  configured baseUrl, or the request host on localhost only */
 function baseUrl(req: IncomingMessage): string {
   const google = wikiConfig().auth.google;
   if (google && google.baseUrl) return google.baseUrl;
-  const host = req.headers.host ?? 'localhost:4321';
-  return `http://${host}`;
+  const host = req.headers.host ?? '';
+  if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return `http://${host}`;
+  throw new HttpError(503, 'Google login needs auth.google.baseUrl (inkbrush.config.ts) outside localhost');
 }
 
 function redirectUri(req: IncomingMessage): string {
   return `${baseUrl(req)}/api/wiki/auth/google/callback`;
 }
 
+/* ---- the authorization request, bound to the browser that made it ----
+ * state = b64url({ nonce, returnTo }) + '.' + HMAC; the nonce and the PKCE
+ * verifier also sit in a short-lived cookie, so the callback is accepted
+ * only from the browser that started the flow, and only once. */
+
+const OAUTH_COOKIE = 'wiki_oauth';
+const OAUTH_TTL_S = 600;
+
+interface OAuthState {
+  nonce: string;
+  returnTo: string;
+}
+
+export interface OAuthStart {
+  url: string;
+  cookie: string;
+}
+
+/** the 302 target that starts the consent flow, plus the binding cookie */
+export function googleAuthStart(req: IncomingMessage, returnTo: string): OAuthStart {
+  const nonce = randomBytes(16).toString('base64url');
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const payload = b64url(Buffer.from(JSON.stringify({ nonce, returnTo } satisfies OAuthState)));
+  const state = `${payload}.${sign(payload)}`;
+  const params = new URLSearchParams({
+    client_id: process.env['GOOGLE_CLIENT_ID'] ?? '',
+    redirect_uri: redirectUri(req),
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    prompt: 'select_account',
+  });
+  // hint Google to show only workspace accounts of the first allowed domain
+  const google = wikiConfig().auth.google;
+  const domain = google === false ? undefined : google.allowedDomains.find((d) => !d.includes('@'));
+  if (domain) params.set('hd', domain);
+  const bound = b64url(Buffer.from(JSON.stringify({ nonce, verifier })));
+  return {
+    url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
+    cookie: `${OAUTH_COOKIE}=${bound}.${sign(bound)}; ${cookieAttrs(OAUTH_TTL_S, req)}`,
+  };
+}
+
+/** clears the binding cookie (the callback consumed it) */
+export function clearOAuthCookie(req: IncomingMessage): string {
+  return `${OAUTH_COOKIE}=; ${cookieAttrs(0, req)}`;
+}
+
+/** verify the callback's `state` against the binding cookie; returns the
+ *  return target and the PKCE verifier, or throws */
+export function googleAuthVerify(req: IncomingMessage, state: string | null): { returnTo: string; verifier: string } {
+  const bound = cookieValue(req, OAUTH_COOKIE);
+  if (!state || !bound) throw new Error('Sign-in was not started from this browser');
+  const [sp, sm] = state.split('.');
+  const [bp, bm] = bound.split('.');
+  if (!sp || !sm || !bp || !bm || !macEquals(sm, sign(sp)) || !macEquals(bm, sign(bp))) {
+    throw new Error('Sign-in state is invalid');
+  }
+  const parsedState = JSON.parse(Buffer.from(sp, 'base64url').toString()) as OAuthState;
+  const parsedBound = JSON.parse(Buffer.from(bp, 'base64url').toString()) as { nonce: string; verifier: string };
+  if (!parsedState.nonce || parsedState.nonce !== parsedBound.nonce) {
+    throw new Error('Sign-in state does not match this browser');
+  }
+  return { returnTo: safeReturnUrl(parsedState.returnTo), verifier: parsedBound.verifier };
+}
+
 /** allowlist check: auth.google.allowedDomains = ['acme.com', 'bob@gmail.com'].
- *  Fail-closed: an empty list admits NOBODY. (It used to admit any Google
- *  account — a fail-open login gate is an incident waiting to happen; to
- *  really admit everyone you must write ['*'] explicitly.) */
+ *  Fail-closed: an empty list admits nobody; ['*'] admits every Google account. */
 function emailAllowed(email: string, hd: string | undefined): boolean {
   const google = wikiConfig().auth.google;
   const rules = google === false ? [] : google.allowedDomains.map((s) => s.toLowerCase());
@@ -240,25 +309,8 @@ function emailAllowed(email: string, hd: string | undefined): boolean {
   return rules.some((rule) => rule === lower || rule === domain || rule === hd);
 }
 
-/** 302 target that starts the Google Workspace consent flow */
-export function googleAuthUrl(req: IncomingMessage, returnTo: string): string {
-  const params = new URLSearchParams({
-    client_id: process.env['GOOGLE_CLIENT_ID'] ?? '',
-    redirect_uri: redirectUri(req),
-    response_type: 'code',
-    scope: 'openid email profile',
-    state: returnTo,
-    prompt: 'select_account',
-  });
-  // hint Google to show only workspace accounts of the first allowed domain
-  const google = wikiConfig().auth.google;
-  const domain = google === false ? undefined : google.allowedDomains.find((d) => !d.includes('@'));
-  if (domain) params.set('hd', domain);
-  return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-}
-
 /** code → tokens → verified identity. Throws with a user-facing message. */
-export async function googleExchangeCode(req: IncomingMessage, code: string): Promise<WikiUser> {
+export async function googleExchangeCode(req: IncomingMessage, code: string, verifier: string): Promise<WikiUser> {
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -268,6 +320,7 @@ export async function googleExchangeCode(req: IncomingMessage, code: string): Pr
       client_secret: process.env['GOOGLE_CLIENT_SECRET'] ?? '',
       redirect_uri: redirectUri(req),
       grant_type: 'authorization_code',
+      code_verifier: verifier,
     }),
   });
   if (!tokenRes.ok) throw new Error(`Google token exchange failed (${tokenRes.status})`);

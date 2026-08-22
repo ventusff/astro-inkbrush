@@ -9,12 +9,12 @@
  * result (URL + password, shown ONCE — the server only stores the scrypt
  * hash); active share → URL + expiry + revoke.
  */
-import type { ShareListResponse, ShareRecord, ShareStreamEvent } from '../shared/types';
+import type { ShareCreateRequest, ShareListResponse, ShareRecord, ShareStreamEvent } from '../shared/types';
 import { api, ApiError, stream } from './api';
 import { currentUser, onAuthChange, shareAvailability } from './auth';
 import type { PageContext } from './index';
-import { dateLocale, S } from './strings';
-import { h, icon, popover, toast } from './ui';
+import { formatDate, S } from './strings';
+import { h, icon, popover, toast, uid } from './ui';
 
 /* ---------------- helpers ---------------- */
 
@@ -42,19 +42,20 @@ async function copyText(text: string, label: string): Promise<void> {
 }
 
 function copyRow(label: string, value: string): HTMLElement {
-  const input = h('input', { class: 'wiki-input wiki-share-mono', value, readonly: true });
+  const id = uid('share');
+  const input = h('input', { id, class: 'wiki-input wiki-share-mono', value, readonly: true });
   input.addEventListener('focus', () => input.select());
   return h(
     'div',
     { class: 'wiki-share-row' },
-    h('div', { class: 'wiki-form-label' }, label),
+    h('label', { class: 'wiki-form-label', for: id }, label),
     h(
       'div',
       { class: 'wiki-share-copy' },
       input,
       h(
         'button',
-        { class: 'wiki-btn wiki-share-copybtn', onclick: () => void copyText(value, label) },
+        { type: 'button', class: 'wiki-btn wiki-share-copybtn', onclick: () => void copyText(value, label) },
         S.share.copy,
       ),
     ),
@@ -63,7 +64,7 @@ function copyRow(label: string, value: string): HTMLElement {
 
 function expiryLabel(expiresAt: string | null): string {
   if (!expiresAt) return S.share.neverExpires;
-  return S.share.expiresOn(new Date(expiresAt).toLocaleDateString(dateLocale));
+  return S.share.expiresOn(formatDate(expiresAt, 'date'));
 }
 
 /* ---------------- popover panels ---------------- */
@@ -78,6 +79,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
   const revokeBtn = h(
     'button',
     {
+      type: 'button',
       class: 'wiki-btn wiki-share-revoke',
       onclick: async () => {
         revokeBtn.disabled = true;
@@ -109,7 +111,10 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
 }
 
 function createForm(ctx: PanelCtx): HTMLElement {
+  const passwordId = uid('share-password');
+  const expiryId = uid('share-expiry');
   const password = h('input', {
+    id: passwordId,
     class: 'wiki-input wiki-share-mono',
     value: genPassword(),
     autocomplete: 'off',
@@ -117,12 +122,12 @@ function createForm(ctx: PanelCtx): HTMLElement {
   });
   const expiry = h(
     'select',
-    { class: 'wiki-input wiki-share-expiry' },
+    { id: expiryId, class: 'wiki-input wiki-share-expiry' },
     h('option', { value: '7', selected: true }, S.share.days7),
     h('option', { value: '30' }, S.share.days30),
     h('option', { value: '' }, S.share.never),
   );
-  const status = h('div', { class: 'wiki-share-status' });
+  const status = h('div', { class: 'wiki-share-status', role: 'status', 'aria-live': 'polite' });
   const submit = h('button', { class: 'wiki-btn wiki-btn-primary', type: 'submit' }, S.share.create);
 
   const create = async (): Promise<void> => {
@@ -138,9 +143,8 @@ function createForm(ctx: PanelCtx): HTMLElement {
     status.textContent = S.share.building;
     try {
       let result: ShareRecord | null = null;
-      const body = {
+      const body: ShareCreateRequest = {
         note: ctx.noteId,
-        route: window.location.pathname,
         password: pass,
         expiresDays: expiry.value ? (Number(expiry.value) as 7 | 30) : null,
       };
@@ -179,8 +183,8 @@ function createForm(ctx: PanelCtx): HTMLElement {
       },
     },
     h('div', { class: 'wiki-share-hint' }, S.share.intro),
-    h('div', { class: 'wiki-share-row' }, h('div', { class: 'wiki-form-label' }, S.share.password), password),
-    h('div', { class: 'wiki-share-row' }, h('div', { class: 'wiki-form-label' }, S.share.expires), expiry),
+    h('div', { class: 'wiki-share-row' }, h('label', { class: 'wiki-form-label', for: passwordId }, S.share.password), password),
+    h('div', { class: 'wiki-share-row' }, h('label', { class: 'wiki-form-label', for: expiryId }, S.share.expires), expiry),
     submit,
     status,
   );
@@ -190,7 +194,7 @@ async function openSharePopover(anchor: HTMLElement, noteId: string): Promise<vo
   let busy = false;
   const content = h('div', { class: 'wiki-share-body' }, h('div', { class: 'wiki-share-hint' }, S.share.loading));
   const panel = h('div', {}, h('div', { class: 'wiki-panel-title' }, S.share.title), content);
-  popover(anchor, panel, { canDismiss: () => !busy });
+  popover(anchor, panel, { label: S.share.title, canDismiss: () => !busy });
   const ctx: PanelCtx = {
     noteId,
     render: (el) => content.replaceChildren(el),
@@ -227,8 +231,10 @@ export function mountShare(pageCtx: PageContext): void {
   const btn = h(
     'button',
     {
+      type: 'button',
       class: 'wiki-chip wiki-share-chip',
       'aria-label': S.share.title,
+      'aria-expanded': 'false',
       disabled: state !== 'ready',
       title: state === 'ready' ? S.share.chipReady : S.share.chipUnconfigured,
     },
@@ -242,7 +248,7 @@ export function mountShare(pageCtx: PageContext): void {
   const holder = h('span', { class: 'wiki-share-slot' }, btn);
   // signed-in users only — follow login/logout live
   const sync = (): void => {
-    holder.style.display = currentUser() ? '' : 'none';
+    holder.hidden = !currentUser();
   };
   sync();
   onAuthChange(sync);

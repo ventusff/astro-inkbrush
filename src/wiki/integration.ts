@@ -1,13 +1,15 @@
 /**
- * Wiki mode — an OPTIONAL Astro integration, active only when the dev server
- * is started with WIKI=1 (`npm run wiki`). The static build (`npm run build`)
- * never sees any of this: astro.config.ts adds the integration and the
- * rehype-wiki-blocks plugin conditionally, so the published site stays
- * byte-identical to the pure-static baseline.
+ * Wiki mode — an optional Astro integration for the dev server. The static
+ * build never sees any of it: the site adds the integration and the
+ * rehype-wiki-blocks plugin only when it runs as an editing host (WIKI=1),
+ * and the integration itself does nothing outside `astro dev`, so the
+ * published site is byte-identical to one that never installed it.
  *
  *  - injects the client UI bundle into every page (Vite-bundled TS)
  *  - mounts the /api/wiki middleware on the dev server (via ssrLoadModule,
  *    so server code hot-reloads too)
+ *  - hands the site's Markdown pipeline (`markdown` option) to the server,
+ *    so preview and save-time validation use the page's own plugins
  *  - calls the server-side init (project root + whatever the deployment's
  *    inkbrush.config.ts enables, e.g. the optional Obsidian inbox watcher)
  */
@@ -17,6 +19,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AstroIntegration } from 'astro';
+
+import type { SiteMarkdownHooks } from './server/site.ts';
+
+export interface InkbrushOptions {
+  /** the site's Markdown pipeline beyond the dialect: the remark/rehype
+   *  plugins its pages use and its note-id → URL rule. The editor preview,
+   *  the save-time validation and the AI gate run them too. */
+  markdown?: SiteMarkdownHooks;
+}
 
 /**
  * Locate this package's src/wiki directory. The integration injects its own
@@ -42,9 +53,10 @@ function viteId(abs: string): string {
   return `/@fs${abs}`;
 }
 
-export function inkbrush(): AstroIntegration {
+export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
   let root = process.cwd();
   let srcDir = '';
+  const serverOptions = { markdown: options.markdown };
   return {
     name: 'inkbrush',
     hooks: {
@@ -56,27 +68,19 @@ export function inkbrush(): AstroIntegration {
         root = fileURLToPath(config.root);
         srcDir = wikiSrcDir(root);
         injectScript('page', `import '${viteId(join(srcDir, 'client/index.ts'))}';`);
-        // allowing the deployment's Host header (vite allowedHosts) is a
-        // site-level concern — the site's own astro.config sets it; the CMS
-        // component stays out of it.
+        // the deployment's Host header (vite allowedHosts) is the site's own
+        // astro.config setting
         updateConfig({
-          // wiki mode is for editors, not site developers: Astro's dev
-          // toolbar (island audit and other dev instrumentation) is noise in
-          // an editing surface, so it's disabled. A plain `astro dev` without
-          // WIKI never loads this integration and keeps the toolbar.
+          // an editing surface: Astro's dev toolbar is off (a plain `astro
+          // dev` without WIKI never loads this integration and keeps it)
           devToolbar: { enabled: false },
           vite: {
-            // CodeMirror is only reached via a lazy import (editor.ts), so
-            // Vite's startup dep-scan misses it; without this, the first
-            // click on ✎ hits a 504 "outdated optimize dep" and the editor
-            // never opens. The right include spelling depends on the
-            // consumption layout: when the site root can resolve the bare
-            // name (npm file:/in-repo layouts) use it directly; under pnpm's
-            // strict layout CodeMirror exists only in this package's own
-            // node_modules, so the entry is addressed through the package
-            // that depends on it (`pkg > dep`). Vite silently drops include
-            // entries it cannot resolve, so picking the wrong form loses the
-            // pre-bundle without any error — hence the probe.
+            // CodeMirror is reached through a lazy import (editor.ts), which
+            // Vite's startup dependency scan does not see, so it is
+            // pre-bundled explicitly. The entry is the bare name when the site
+            // root resolves it (npm file: / in-repo layouts) and the
+            // `astro-inkbrush > dep` form under pnpm's strict layout, where
+            // the dependency exists only in this package's node_modules.
             optimizeDeps: {
               include: [
                 '@codemirror/autocomplete',
@@ -104,8 +108,8 @@ export function inkbrush(): AstroIntegration {
           server
             .ssrLoadModule(serverEntry)
             .then((mod) =>
-              (mod as { handleApi: (rq: typeof req, rs: typeof res, o: { root: string }) => Promise<void> })
-                .handleApi(req, res, { root }),
+              (mod as { handleApi: (rq: typeof req, rs: typeof res, o: { root: string; markdown?: SiteMarkdownHooks | undefined }) => Promise<void> })
+                .handleApi(req, res, { root, ...serverOptions }),
             )
             .catch((err: unknown) => {
               logger.error(`api error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
@@ -122,7 +126,7 @@ export function inkbrush(): AstroIntegration {
         // double-start across HMR reloads)
         server
           .ssrLoadModule(serverEntry)
-          .then((mod) => (mod as { initWiki: (root: string) => void }).initWiki(root))
+          .then((mod) => (mod as { initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined }) => void }).initWiki(root, serverOptions))
           .catch((err: unknown) => logger.error(`wiki init failed: ${String(err)}`));
       },
     },

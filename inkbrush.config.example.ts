@@ -47,15 +47,18 @@ export default defineInkbrushConfig({
     // },
   },
   // Identity registry (<dir>/users.json: email/name/role; omit = module off).
-  // When on, first SSO login auto-registers with defaultRole; admins
-  // (adminRole — the server always keeps at least one) manage members from
-  // the account panel; when users.json doesn't exist yet, the ADMIN_EMAILS
-  // env var seeds it.
+  // When on, only registered members may edit; admins (adminRole — the
+  // server always keeps at least one) manage members from the account
+  // panel, and the ADMIN_EMAILS env var seeds users.json when it does not
+  // exist yet. autoRegister (default true) lets a first SSO login from an
+  // allowed domain join with defaultRole; false makes the registry an
+  // allow-list that only admins extend.
   // identity: {
   //   dir: '.wiki/identity',
   //   roles: ['member', 'admin'],
   //   defaultRole: 'member',
   //   adminRole: 'admin',
+  //   autoRegister: true,
   // },
   inbox: {
     // Obsidian inbox watch directory (supports ~/); omit or leave empty = off
@@ -71,9 +74,17 @@ export default defineInkbrushConfig({
   // async git push after each autocommit (turn on for deployment machines;
   // default off)
   // autopush: true,
-  // which claude CLI the AI endpoints run (default bin: 'claude', model: the
-  // CLI's own default)
-  // claude: { bin: 'claude', model: 'claude-opus-4-8' },
+  // The AI endpoints. Every job runs in a throwaway copy that holds the
+  // note's directory; `companions` names further project-relative files or
+  // directories the job may read and change for that note (e.g. the demo
+  // module it mounts), and `rules` appends the site's own writing
+  // constraints to the dialect's in every prompt.
+  // claude: {
+  //   bin: 'claude',                 // default 'claude'
+  //   model: 'claude-opus-4-8',      // default: the CLI's own
+  //   companions: (note) => [`src/demos/${note.id}.ts`],
+  //   rules: ['Headings keep their {#anchor} attributes.'],
+  // },
   content: {
     // note content directory, relative to the site root
     // (default 'src/content/notes')

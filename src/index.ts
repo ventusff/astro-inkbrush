@@ -13,7 +13,8 @@
  *   3. an `inkbrush.config.ts` at the site root (template:
  *      inkbrush.config.example.ts).
  */
-export { defineInkbrushConfig } from './wiki/config';
-export type { GoogleAuthConfig, InkbrushConfig, InkbrushConfigInput } from './wiki/config';
-export { inkbrush } from './wiki/integration';
-export { rehypeWikiBlocks } from './lib/rehype-wiki-blocks';
+export { defineInkbrushConfig } from './wiki/config.ts';
+export type { GoogleAuthConfig, InkbrushConfig, InkbrushConfigInput } from './wiki/config.ts';
+export { inkbrush, type InkbrushOptions } from './wiki/integration.ts';
+export type { SiteMarkdownHooks } from './wiki/server/site.ts';
+export { rehypeWikiBlocks } from './lib/rehype-wiki-blocks.ts';

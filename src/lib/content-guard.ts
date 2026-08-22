@@ -1,8 +1,8 @@
 /**
  * remarkContentGuard — build-time gate: what you wrote is what the page shows.
  *
- * Markdown/MDX has a set of corners that never error, they just silently
- * deform — and each of these has shipped a broken page before:
+ * Markdown/MDX has corners that never error and silently deform instead;
+ * the guard turns each into a build failure:
  *   - emphasis markers that fail to pair: in `……报文。**同时` neither end
  *     satisfies CommonMark's flanking rules, so the `**` leaks to the reader
  *     verbatim;

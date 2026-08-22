@@ -15,8 +15,8 @@
  */
 import { type UnifiedProcessorOptions, unified } from '@astrojs/markdown-remark';
 
-import { type ContentGuardOptions, remarkContentGuard } from './content-guard';
-import { type MarkdownSyntax, markdownSyntax } from './markdown-syntax';
+import { type ContentGuardOptions, remarkContentGuard } from './content-guard.ts';
+import { type MarkdownSyntax, markdownSyntax } from './markdown-syntax.ts';
 
 export { type ContentGuardOptions, type MarkdownSyntax, markdownSyntax, remarkContentGuard };
 

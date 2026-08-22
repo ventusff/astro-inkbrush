@@ -1,4 +1,5 @@
-/** tiny DOM builder + shared popover primitives for the wiki chrome */
+/** tiny DOM builder + shared popover / toast / time primitives for the wiki chrome */
+import { type DateStyle, formatDate } from './strings';
 
 type Child = Node | string | null | undefined | false;
 
@@ -27,6 +28,19 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     el.append(child);
   }
   return el;
+}
+
+/** unique element id for label ↔ control binding */
+let idSeq = 0;
+export function uid(prefix: string): string {
+  idSeq += 1;
+  return `wiki-${prefix}-${idSeq}`;
+}
+
+/** `<time datetime>` rendered through the shared locale-aware formatter */
+export function time(value: number | string | Date, style: DateStyle = 'datetime'): HTMLTimeElement {
+  const date = new Date(value);
+  return h('time', { datetime: date.toISOString() }, formatDate(date, style));
 }
 
 /** svg icon factory (inline paths, 16px grid) */
@@ -62,10 +76,29 @@ export function icon(
   return svg;
 }
 
+/* ---------------- toasts ---------------- */
+
+/**
+ * Two persistent live regions (status: polite, alert: assertive) mounted once
+ * at the bottom center; every toast is appended into one of them so assistive
+ * technology announces it as a live-region addition.
+ */
+let toastRegions: { status: HTMLElement; alert: HTMLElement } | null = null;
+
+function regionFor(kind: 'ok' | 'err'): HTMLElement {
+  if (!toastRegions) {
+    const status = h('div', { class: 'wiki-toast-region', role: 'status', 'aria-live': 'polite' });
+    const alert = h('div', { class: 'wiki-toast-region', role: 'alert' });
+    document.body.append(h('div', { class: 'wiki-toasts' }, status, alert));
+    toastRegions = { status, alert };
+  }
+  return kind === 'err' ? toastRegions.alert : toastRegions.status;
+}
+
 /** ephemeral toast, bottom center */
 export function toast(message: string, kind: 'ok' | 'err' = 'ok'): void {
   const el = h('div', { class: `wiki-toast ${kind}` }, message);
-  document.body.append(el);
+  regionFor(kind).append(el);
   requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => {
     el.classList.remove('show');
@@ -73,20 +106,42 @@ export function toast(message: string, kind: 'ok' | 'err' = 'ok'): void {
   }, kind === 'err' ? 5200 : 2600);
 }
 
+/* ---------------- popover ---------------- */
+
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+export function firstFocusable(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>(FOCUSABLE);
+}
+
+export interface PopoverOptions {
+  /** accessible name of the dialog */
+  label: string;
+  /** the control that owns the popover (aria-expanded + focus restore); defaults to `anchor` */
+  trigger?: HTMLElement;
+  onClose?: () => void;
+  canDismiss?: () => boolean;
+}
+
 /**
- * one-at-a-time floating popover, dismissed on outside click / Esc.
- * `anchor` positions it (below-end alignment, clamped to viewport).
+ * One-at-a-time floating non-modal dialog, light-dismissed on outside
+ * pointerdown, on focus leaving it, and on Escape. `anchor` positions it
+ * (below-start alignment, clamped to the viewport). Focus moves to the first
+ * focusable child on open (the dialog itself when there is none) and returns
+ * to the trigger on close when it is still inside.
  */
 let openPopover: HTMLElement | null = null;
 let closeCurrent: (() => void) | null = null;
 
-export function popover(
-  anchor: HTMLElement,
-  content: HTMLElement,
-  opts?: { onClose?: () => void; canDismiss?: () => boolean },
-): () => void {
+export function popover(anchor: HTMLElement, content: HTMLElement, opts: PopoverOptions): () => void {
   dismissPopover();
-  const pop = h('div', { class: 'wiki-popover' }, content);
+  const trigger = opts.trigger ?? anchor;
+  const pop = h(
+    'div',
+    { class: 'wiki-popover', role: 'dialog', 'aria-label': opts.label, tabindex: '-1' },
+    content,
+  );
   document.body.append(pop);
   const rect = anchor.getBoundingClientRect();
   const top = rect.bottom + 8 + window.scrollY;
@@ -94,26 +149,41 @@ export function popover(
   const left = Math.min(rect.left + window.scrollX, window.scrollX + window.innerWidth - pop.offsetWidth - 12);
   pop.style.left = `${Math.max(8, left)}px`;
   requestAnimationFrame(() => pop.classList.add('show'));
+  trigger.setAttribute('aria-expanded', 'true');
+  (firstFocusable(pop) ?? pop).focus();
 
+  const mayDismiss = (): boolean => !opts.canDismiss || opts.canDismiss();
+  const isInside = (node: EventTarget | null): boolean =>
+    node instanceof Node && (pop.contains(node) || node === anchor || anchor.contains(node));
+
+  let closed = false;
   const close = (): void => {
+    if (closed) return;
+    closed = true;
     document.removeEventListener('pointerdown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
+    trigger.setAttribute('aria-expanded', 'false');
+    if (pop.contains(document.activeElement)) trigger.focus();
     pop.classList.remove('show');
     setTimeout(() => pop.remove(), 150);
     if (openPopover === pop) {
       openPopover = null;
       closeCurrent = null;
     }
-    opts?.onClose?.();
+    opts.onClose?.();
   };
   const onDown = (e: PointerEvent): void => {
-    if (opts?.canDismiss && !opts.canDismiss()) return;
-    if (!pop.contains(e.target as Node) && e.target !== anchor && !anchor.contains(e.target as Node)) close();
+    if (mayDismiss() && !isInside(e.target)) close();
   };
   const onKey = (e: KeyboardEvent): void => {
-    if (opts?.canDismiss && !opts.canDismiss()) return;
-    if (e.key === 'Escape') close();
+    if (e.key !== 'Escape' || !mayDismiss()) return;
+    e.preventDefault();
+    close();
   };
+  pop.addEventListener('focusout', (e) => {
+    // relatedTarget is null when the window itself loses focus: stay open
+    if (e.relatedTarget instanceof Node && mayDismiss() && !isInside(e.relatedTarget)) close();
+  });
   document.addEventListener('pointerdown', onDown, true);
   document.addEventListener('keydown', onKey, true);
   openPopover = pop;

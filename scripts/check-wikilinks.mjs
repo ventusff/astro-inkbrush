@@ -2,30 +2,40 @@
 /**
  * check-wikilinks — a [[wikilink]] consistency lint for content repos.
  *
- * The page pipeline deliberately never fails a build on a broken wikilink
- * (a miss renders span.wikilink-dead); strict checking belongs to lint —
- * this script. It reports:
+ * The page pipeline never fails a build on a broken wikilink (a miss
+ * renders span.wikilink-dead); strict checking is this script's job. It
+ * reports:
  *
  *   FAIL missing     the target resolves to no note
  *   FAIL ambiguous   an alias/brand/title matches more than one note
- *   WARN anchor      [[target#heading]] whose heading isn't found in the
- *                    target note (best-effort: h2–h4 text slugs + explicit
- *                    `{#id}` attributes)
+ *   WARN anchor      [[target#heading]] whose heading is not found in the
+ *                    target note (best effort: ATX heading text slugged
+ *                    with the anchor slugifier, plus explicit `{#id}`
+ *                    attributes)
  *   WARN unmatched   a stray unclosed `[[` left in prose (typically torn
  *                    apart by a table pipe or a linkReference)
- *   WARN crlf        the file contains CRLF line endings (frontmatter
- *                    parsing is LF-only, so titles/aliases silently degrade)
+ *   INFO allowed     a missing target the corpus keeps on purpose
+ *                    (--allow) — a note demonstrating the dead-link marker
  *
- * Why the engine ships this script: the regex, the masking, the resolution
- * order and the anchor slugger are imported straight from the package's own
- * wikilinks library — a checker that restates them will drift, and a
- * drifted checker is worse than none.
+ * The regex, the source masking (the dialect's parser — MDX grammar for
+ * .mdx — code, HTML, math, JSX tags and expressions are not prose), the
+ * resolver and the note scanner are the package's own wikilinks library —
+ * the same code the site's remarkWikilinks runs. What
+ * the site injects into that code is reproduced only with --config: its
+ * resolver (the note corpus, aliases, locale table, extra corpora) and its
+ * anchor slugifier. Without --config, resolution uses the scanned notes
+ * (plus --extra corpora) with the locale table from --locale-prefix, and
+ * anchors use the library's defaultSlugify — a site that injects its own
+ * slugify or a different locale table can differ from this lint exactly
+ * there.
  *
  * Usage (from the site or content repo root):
  *   node <engine>/scripts/check-wikilinks.mjs <content-dir> [flags]
  *
- *   --strict                 exit 1 when any FAIL was reported (WARNs never
- *                            affect the exit code)
+ *   --strict                 exit 1 when any FAIL (dead link: missing or
+ *                            ambiguous) was reported; WARNs never affect the
+ *                            exit code. Without --strict the exit code is 0
+ *                            and dead links are only listed.
  *   --locale-prefix <p/>     locale-mirror prefix (repeatable; replaces the
  *                            default `en/ de/` set when given) — a link
  *                            inside a mirrored note resolves to its own
@@ -34,74 +44,59 @@
  *                            are `<prefix>/<relative-path-minus-.md>`
  *                            (repeatable) — e.g. a card vault:
  *                            --extra src/content/vault/cards:cards
+ *   --config <path>          a JS/TS module exporting `wikilinks`: the
+ *                            options object the site passes to
+ *                            remarkWikilinks ({ resolve, slugifyAnchor,
+ *                            noteIdOf }). Its resolver and slugifier replace
+ *                            the built-in ones; --locale-prefix and --extra
+ *                            are then not accepted. Loaded with Node's
+ *                            native TypeScript support.
+ *   --allow <target>         a link target that may resolve to nothing
+ *                            (repeatable); reported as INFO, never a FAIL
+ *   --help                   print this usage
+ *
+ * Exit code: 0 clean (or FAILs without --strict), 1 FAILs under --strict,
+ * 2 usage error.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
-const {
-  WIKILINK_RE,
-  buildWikilinkResolver,
-  defaultSlugify,
-  extractWikilinks,
-  maskNonProse,
-  noteInfoFromSource,
-  scanNotes,
-} = await import(pathToFileURL(join(engineRoot, 'src/lib/wikilinks.ts')).href);
+const { buildWikilinkResolver, defaultSlugify, extractWikilinks, maskNonProse, noteInfoFromSource, scanNotes } =
+  await import(pathToFileURL(join(engineRoot, 'src/lib/wikilinks.ts')).href);
 
-/* ---------------- CLI ---------------- */
+/* ---------------- site config ---------------- */
 
-const args = process.argv.slice(2);
-const positional = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--locale-prefix' && args[i - 1] !== '--extra');
-if (positional.length !== 1) {
-  console.error('usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-prefix <p/>]... [--extra <dir>:<idPrefix>]...');
-  process.exit(2);
-}
-const root = resolve(positional[0]);
-const strict = args.includes('--strict');
-const many = (name) => args.flatMap((a, i) => (a === `--${name}` ? [args[i + 1]] : []));
-const localePrefixes = many('locale-prefix');
-const locales = (localePrefixes.length > 0 ? localePrefixes : ['en/', 'de/']).map((prefix) => ({
-  code: prefix.replace(/\/+$/, ''),
-  prefix,
-}));
-const extras = many('extra').map((spec) => {
-  const idx = spec.lastIndexOf(':');
-  if (idx <= 0) {
-    console.error(`--extra expects <dir>:<idPrefix>, got: ${spec}`);
-    process.exit(2);
+/** Load the site's `wikilinks` export (named, or a property of the default export): the remarkWikilinks options object */
+export async function loadSiteConfig(path) {
+  const mod = await import(pathToFileURL(resolve(path)).href);
+  const cfg = mod.default && typeof mod.default === 'object' ? mod.default : mod;
+  const wikilinks = cfg.wikilinks;
+  if (!wikilinks || typeof wikilinks.resolve !== 'function') {
+    throw new Error(`${path}: export "wikilinks" must be the remarkWikilinks options object ({ resolve, slugifyAnchor?, noteIdOf? })`);
   }
-  return { dir: resolve(spec.slice(0, idx)), prefix: spec.slice(idx + 1).replace(/\/+$/, '') };
-});
+  return wikilinks;
+}
 
 /* ---------------- corpus ---------------- */
 
-// The main corpus comes from the library's own scanner (identical skip rules
-// and frontmatter parsing as the site's resolver); texts are re-read by id
-// since the standard layout makes the path derivable.
-const noteText = new Map(); // id → source
-const pathOfNote = (id) => {
+/** the source path of a standard-layout note, or null */
+function pathOfNote(root, id) {
   for (const ext of ['mdx', 'md']) {
     const p = join(root, id, `index.${ext}`);
     try {
-      statSync(p);
-      return p;
+      if (statSync(p).isFile()) return p;
     } catch {
-      /* try next */
+      /* try the next extension */
     }
   }
   return null;
-};
-
-const notes = scanNotes(root);
-for (const n of notes) {
-  const p = pathOfNote(n.id);
-  if (p) noteText.set(n.id, readFileSync(p, 'utf8'));
 }
 
-for (const { dir, prefix } of extras) {
-  const walk = (d) => {
+/** an extra flat corpus: every `*.md` under `dir` (dot- and underscore-prefixed entries skipped) as `<prefix>/<slug>` */
+function* extraCorpus(dir, prefix) {
+  const walk = function* (d) {
     let names;
     try {
       names = readdirSync(d);
@@ -111,92 +106,231 @@ for (const { dir, prefix } of extras) {
     for (const name of names) {
       if (name.startsWith('.') || name.startsWith('_')) continue;
       const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p);
+      if (statSync(p).isDirectory()) yield* walk(p);
       else if (name.endsWith('.md')) {
         const slug = relative(dir, p).replaceAll('\\', '/').replace(/\.md$/, '');
-        const id = `${prefix}/${slug}`;
-        const source = readFileSync(p, 'utf8');
-        notes.push(noteInfoFromSource(id, source));
-        noteText.set(id, source);
+        yield { id: `${prefix}/${slug}`, path: p };
       }
     }
   };
-  walk(dir);
+  yield* walk(dir);
 }
 
-const resolveLink = buildWikilinkResolver({
-  notes: () => notes,
-  urlFor: (id) => `/${id}/`, // unused by the lint, required by the contract
-  locales,
-});
+/**
+ * Collect the notes to lint: the standard-layout corpus under `root` plus
+ * any extra corpora. Each entry carries its id, source path and text.
+ */
+export function collectCorpus(root, extras = []) {
+  const corpus = [];
+  for (const note of scanNotes(root)) {
+    const path = pathOfNote(root, note.id);
+    if (path) corpus.push({ ...note, path, text: readFileSync(path, 'utf8') });
+  }
+  for (const { dir, prefix } of extras) {
+    for (const { id, path } of extraCorpus(dir, prefix)) {
+      const text = readFileSync(path, 'utf8');
+      corpus.push({ ...noteInfoFromSource(id, text), path, text });
+    }
+  }
+  return corpus;
+}
 
-/* ---------------- anchor sets (best-effort) ---------------- */
+/* ---------------- anchors (best effort) ---------------- */
 
-const anchorCache = new Map();
-const anchorsOf = (id) => {
-  if (anchorCache.has(id)) return anchorCache.get(id);
+/** ids a [[note#anchor]] can target: ATX heading text slugged, plus explicit `{#id}` attributes */
+export function anchorsOf(text, slugify, mask = {}) {
   const set = new Set();
-  const text = noteText.get(id);
-  if (text) {
-    const masked = maskNonProse(text);
-    for (const m of masked.matchAll(/^#{2,4}\s+(.+)$/gm)) {
-      let heading = m[1].trim();
-      const explicit = /\{#([^}\s]+)[^}]*\}\s*$/.exec(heading);
-      if (explicit) {
-        set.add(explicit[1]);
-        heading = heading.replace(/`?\{[^}]*\}`?\s*$/, '').trim();
-      }
-      set.add(defaultSlugify(heading.replace(/[*_`]+/g, '')));
+  for (const m of maskNonProse(text, mask).matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm)) {
+    let heading = m[1].trim();
+    const explicit = /\{#([^}\s]+)[^}]*\}\s*$/.exec(heading);
+    if (explicit) {
+      set.add(explicit[1]);
+      heading = heading.replace(/`?\{[^}]*\}`?\s*$/, '').trim();
     }
+    set.add(slugify(heading.replace(/[*_`]+/g, '')));
   }
-  anchorCache.set(id, set);
   return set;
-};
+}
 
-/* ---------------- checks ---------------- */
+/* ---------------- the lint ---------------- */
 
-let fails = 0;
-let warns = 0;
-let total = 0;
+/**
+ * Lint a corpus. `options.site` is the site's remarkWikilinks options
+ * object (its resolver and slugifier win); otherwise `options.locales` and
+ * `options.extras` configure the built-in resolver. `options.allow` lists
+ * targets that may resolve to nothing. Returns counts and the report lines
+ * in discovery order.
+ */
+export function checkWikilinks(root, options = {}) {
+  const corpus = collectCorpus(root, options.extras ?? []);
+  const site = options.site;
+  const allow = new Set(options.allow ?? []);
+  const resolveLink =
+    site?.resolve ??
+    buildWikilinkResolver({
+      notes: () => corpus,
+      urlFor: (id) => `/${id}/`,
+      locales: options.locales,
+    });
+  const slugify = site?.slugifyAnchor ?? defaultSlugify;
+  const byId = new Map(corpus.map((n) => [n.id, n]));
+  const maskOptions = (n) => ({ mdx: n.path.endsWith('.mdx') });
+  const anchorCache = new Map();
+  const anchorsIn = (id) => {
+    let set = anchorCache.get(id);
+    if (!set) {
+      const target = byId.get(id);
+      set = target === undefined ? null : anchorsOf(target.text, slugify, maskOptions(target));
+      anchorCache.set(id, set);
+    }
+    return set;
+  };
 
-for (const n of notes) {
-  const text = noteText.get(n.id);
-  if (text === undefined) continue;
-
-  if (text.includes('\r')) {
-    console.warn(`WARN crlf      ${n.id}: CRLF line endings — frontmatter parsing is LF-only, titles/aliases degrade`);
+  const report = [];
+  let fails = 0;
+  let warns = 0;
+  let wikilinks = 0;
+  const fail = (kind, note, message) => {
+    fails += 1;
+    report.push({ level: 'FAIL', kind, note, message });
+  };
+  const warn = (kind, note, message) => {
     warns += 1;
-  }
+    report.push({ level: 'WARN', kind, note, message });
+  };
+  const info = (kind, note, message) => {
+    report.push({ level: 'INFO', kind, note, message });
+  };
 
-  const links = extractWikilinks(text);
-  total += links.length;
+  for (const n of corpus) {
+    const fromId = site?.noteIdOf?.(n.path) ?? n.id;
+    const links = extractWikilinks(n.text, maskOptions(n));
+    wikilinks += links.length;
 
-  for (const { target, anchor } of links) {
-    const res = resolveLink(target, n.id);
-    if (res.kind === 'missing') {
-      console.error(`FAIL missing   ${n.id}: [[${target}]]`);
-      fails += 1;
-    } else if (res.kind === 'ambiguous') {
-      console.error(`FAIL ambiguous ${n.id}: [[${target}]] → ${res.candidates.join(' / ')}`);
-      fails += 1;
-    } else if (anchor && !anchorsOf(res.id).has(defaultSlugify(anchor))) {
-      console.warn(`WARN anchor    ${n.id}: [[${target}#${anchor}]] (no such heading in ${res.id})`);
-      warns += 1;
+    for (const { target, anchor } of links) {
+      const res = resolveLink(target, fromId);
+      if (res.kind === 'missing') {
+        if (allow.has(target)) info('allowed', n.id, `[[${target}]]`);
+        else fail('missing', n.id, `[[${target}]]`);
+      } else if (res.kind === 'ambiguous') {
+        fail('ambiguous', n.id, `[[${target}]] → ${res.candidates.join(' / ')}`);
+      } else if (anchor) {
+        const anchors = anchorsIn(res.id);
+        if (anchors && !anchors.has(slugify(anchor))) {
+          warn('anchor', n.id, `[[${target}#${anchor}]] (no such heading in ${res.id})`);
+        }
+      }
+    }
+
+    // a stray unclosed [[: blank the rendered wikilinks and the [[1]](#ref)
+    // citation idiom out of the prose, then look for a leftover opener
+    const prose = maskNonProse(n.text, maskOptions(n)).split('');
+    for (const { offset, raw } of links) prose.fill(' ', offset, offset + raw.length);
+    const stripped = prose.join('').replace(/\[\[[^\][\n]*\]\]\([^)\n]*\)/g, (m) => ' '.repeat(m.length));
+    const orphan = /(?<!!)\[\[/.exec(stripped);
+    if (orphan) {
+      const line = stripped.slice(0, orphan.index).split('\n').length;
+      warn('unmatched', n.id, `stray unclosed [[ near line ${line}`);
     }
   }
 
-  // stray unclosed [[ — strip real wikilinks and the [[1]](#ref) citation
-  // idiom first, then look for a leftover opener
-  const masked = maskNonProse(text);
-  WIKILINK_RE.lastIndex = 0;
-  const stripped = masked.replace(WIKILINK_RE, '').replace(/\[\[[^\][\n]*\]\]\([^)\n]*\)/g, '');
-  const orphan = /(?<!!)\[\[/.exec(stripped);
-  if (orphan) {
-    const line = stripped.slice(0, orphan.index).split('\n').length;
-    console.warn(`WARN unmatched ${n.id}: stray unclosed [[ near line ${line}`);
-    warns += 1;
+  return { notes: corpus.length, wikilinks, fails, warns, report };
+}
+
+/* ---------------- CLI ---------------- */
+
+const USAGE = `usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-prefix <p/>]... [--extra <dir>:<idPrefix>]... [--config <path>] [--allow <target>]...
+
+  <content-dir>            the notes root (<id>/index.{md,mdx} layout)
+  --strict                 exit 1 when any FAIL (dead link: missing or
+                           ambiguous target) was reported; WARNs never affect
+                           the exit code. Without --strict dead links are
+                           listed and the exit code is 0.
+  --locale-prefix <p/>     locale-mirror prefix (repeatable; replaces the
+                           default en/ de/ set)
+  --extra <dir>:<prefix>   an extra flat corpus of *.md files with ids
+                           <prefix>/<relative-path-minus-.md> (repeatable)
+  --config <path>          JS/TS module exporting \`wikilinks\`: the options
+                           object the site passes to remarkWikilinks
+                           ({ resolve, slugifyAnchor, noteIdOf }); its
+                           resolver and slugifier replace the built-in ones,
+                           and --locale-prefix / --extra are not accepted
+  --allow <target>         a link target that may resolve to nothing
+                           (repeatable) — reported as INFO, never a FAIL
+  --help                   print this usage
+
+Reports FAIL missing / FAIL ambiguous (dead links), WARN anchor (no such
+heading in the target, best effort), WARN unmatched (stray unclosed [[),
+INFO allowed (a --allow target that resolves to nothing).
+The regex, masking, resolver and scanner are the package's own wikilinks
+library; the site's injected resolver and slugifier are used only with
+--config.`;
+
+export async function main(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(USAGE);
+    return 0;
+  }
+  const valued = new Set(['--locale-prefix', '--extra', '--config', '--allow']);
+  const flags = new Set(['--strict']);
+  const positional = argv.filter((a, i) => !a.startsWith('--') && !valued.has(argv[i - 1]));
+  const unknown = argv.filter((a) => a.startsWith('--') && !valued.has(a) && !flags.has(a));
+  if (positional.length !== 1 || unknown.length > 0) {
+    console.error(USAGE);
+    return 2;
+  }
+  const many = (name) => argv.flatMap((a, i) => (a === `--${name}` && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
+  const strict = argv.includes('--strict');
+  const localePrefixes = many('locale-prefix');
+  const extraSpecs = many('extra');
+  const configPath = many('config')[0];
+  const allow = many('allow');
+
+  let site;
+  if (configPath !== undefined) {
+    if (localePrefixes.length > 0 || extraSpecs.length > 0) {
+      console.error('--config supplies the site resolver; --locale-prefix and --extra are not accepted with it');
+      return 2;
+    }
+    try {
+      site = await loadSiteConfig(configPath);
+    } catch (err) {
+      console.error(`cannot load --config ${configPath}: ${err.message}`);
+      return 2;
+    }
+  }
+
+  const locales = (localePrefixes.length > 0 ? localePrefixes : ['en/', 'de/']).map((prefix) => ({
+    code: prefix.replace(/\/+$/, ''),
+    prefix,
+  }));
+  const extras = [];
+  for (const spec of extraSpecs) {
+    const idx = spec.lastIndexOf(':');
+    if (idx <= 0) {
+      console.error(`--extra expects <dir>:<idPrefix>, got: ${spec}`);
+      return 2;
+    }
+    extras.push({ dir: resolve(spec.slice(0, idx)), prefix: spec.slice(idx + 1).replace(/\/+$/, '') });
+  }
+
+  const result = checkWikilinks(resolve(positional[0]), { locales, extras, site, allow });
+  for (const { level, kind, note, message } of result.report) {
+    const line = `${level} ${kind.padEnd(9)} ${note}: ${message}`;
+    if (level === 'FAIL') console.error(line);
+    else if (level === 'WARN') console.warn(line);
+    else console.log(line);
+  }
+  console.log(`\nnotes=${result.notes} wikilinks=${result.wikilinks} fails=${result.fails} warns=${result.warns}`);
+  return strict && result.fails > 0 ? 1 : 0;
+}
+
+function isEntry() {
+  try {
+    return process.argv[1] !== undefined && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url;
+  } catch {
+    return false;
   }
 }
 
-console.log(`\nnotes=${notes.length} wikilinks=${total} fails=${fails} warns=${warns}`);
-process.exit(strict && fails > 0 ? 1 : 0);
+if (isEntry()) process.exit(await main(process.argv.slice(2)));

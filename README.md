@@ -22,37 +22,49 @@
 
 **Inkbrush** (笔 — the ink brush) adds an optional editing layer to any Astro
 site: hover a paragraph, click ✎, edit the Markdown source right there, save —
-the page hot-reloads and the change is a git commit. No database, no admin
-panel, no separate authoring app. Your content files stay the single source
-of truth; git stays the history.
+the page hot-reloads, and with `autocommit` on the change is a git commit. No
+database, no admin panel, no separate authoring app. Your content files stay
+the single source of truth; git stays the history.
 
 It is the sibling of [**astro-inkstone**](https://github.com/ventusff/astro-inkstone)
-(砚 — the ink stone), a paper-and-ink design layer. Inkbrush deliberately
-ships **no styling and no layout** — bring your own site, or pair it with
-Inkstone for the full look.
+(砚 — the ink stone), a paper-and-ink design layer. Inkbrush styles only its
+own editing chrome (through tokens it takes from your page) and ships no page
+styling and no layout — bring your own site, or pair it with Inkstone for
+the full look.
 
 ## Features
 
 - ✏️ **In-place block editing** — Wikipedia-style, per block. CodeMirror 6
-  with live server-rendered preview, `[[` autocompletion, optimistic
-  locking, and a whole-file MDX compile gate before anything is written.
-- 🕘 **Block-level revision history** — every save is journaled; browse a
-  block's history and revert any edit in one click.
-- 🤖 **AI assist** — rewrite a block, chat about the current note (the
-  assistant reads the source server-side), or generate a full translation of
-  a note into another locale — via the `claude` CLI, streaming progress
-  live, with a locked-down toolset.
+  with a live server-rendered preview that runs your site's own Markdown
+  plugins, `[[` autocompletion, optimistic locking (a block changed by
+  someone else is refused, never overwritten), and a whole-file build gate —
+  the dialect, the content guard, your plugins, MDX compilation — before
+  anything is written.
+- 🕘 **Block-level revision history** — every save is journaled with a
+  unique id; browse a block's history and revert a block edit in one click
+  (whole-file operations — imports, translations — are journaled for the
+  record and reverted through git).
+- 🤖 **AI assist** — rewrite a block, chat about the current note, or
+  generate a full translation of a note into another locale — via the
+  `claude` CLI, streaming progress live. Every job runs in a throwaway
+  workspace holding only the note (and the companion files your config
+  names), with file tools confined to it and no shell or network tools;
+  its result is validated like a manual save and carried back only then.
 - 💬 **Comments** — Markdown + math, server-sanitized, stored as flat
-  NDJSON files next to your content.
+  NDJSON files under `.wiki/data/` beside your project.
 - 📥 **Obsidian inbox** — watch a vault folder; new notes are converted
-  (embeds resolved and co-located, wikilinks remapped, highlights
-  preserved) and imported automatically.
+  (embeds copied beside the note and referenced relatively, wikilinks
+  resolved with the same parser the pages use, highlights preserved) and
+  imported automatically.
 - 🔗 **Wikilinks** — one `[[wikilink]]` implementation shared by the page
   pipeline, the editor preview and the importer: aliases, anchors, locale
   mirrors, and dead-link spans instead of broken builds.
-- 🔐 **Sign-in options** — instant dev login, Google OAuth, or Google
-  Workspace SAML SSO; HMAC-cookie or JWT sessions (cross-subdomain SSO);
-  an optional file-based member registry with roles.
+- 🔐 **Sign-in options** — instant dev login, Google OAuth (PKCE, a
+  browser-bound single-use state), or Google Workspace SAML SSO (every
+  response must answer a request this server issued); HMAC-cookie or JWT
+  sessions (cross-subdomain SSO); an optional file-based member registry —
+  when it is on, only current members can edit, and only admins can manage
+  it.
 - 📤 **Password-gated sharing** — snapshot a single note (with its full
   asset closure) into a static bundle and publish it through a tiny
   gateway API you can implement in an afternoon.
@@ -63,13 +75,13 @@ Inkstone for the full look.
   expressions swallowing your prose, single-line `$$x$$`, formulas KaTeX
   can't render, and more — each reported with file:line:column and a caret.
 - 🩺 **Check CLIs** — `check-content.mjs` (compile every source file with
-  the exact production dialect), `check-wikilinks.mjs` (dead or ambiguous
-  `[[wikilinks]]`, dubious anchors — with the library's own regex and
-  resolution rules, so it can never drift) and `check-dist.mjs` (broken
-  links, dangling anchors, locale doubling, nested `<a>`, KaTeX error
-  residue in built HTML).
-- 🪶 **Zero production footprint** — the CMS activates only in dev mode.
-  `astro build` output is byte-identical to a site that never installed it.
+  the dialect, the guard and — given `--config` — your site's plugins),
+  `check-wikilinks.mjs` (dead or ambiguous `[[wikilinks]]`, dubious
+  anchors — with the library's own parser and resolution rules) and
+  `check-dist.mjs` (broken links, dangling anchors, locale doubling, nested
+  `<a>`, KaTeX error residue, and any CMS injection in built HTML).
+- 🪶 **Zero production footprint** — the integration does nothing outside
+  `astro dev`, and `check-dist` fails a build that carries any of its bytes.
 
 ## How it works
 
@@ -81,10 +93,10 @@ authors   →  the same repo running `WIKI=1 astro dev` on an editing domain
 
 The editor is Astro's dev server with this integration active: an
 "edit-and-it's-live" surface needs a resident compiler, and the dev server
-is exactly that. Auth, sessions and roles make it safe to put behind a real
-domain; the reader-facing site never runs any of it. A ready-made two-service
-deployment skeleton (static reader + editing machine) ships in the sibling
-repo's [`deploy/`](https://github.com/ventusff/astro-inkstone/tree/main/deploy).
+is exactly that. Sessions, a membership registry and cross-site request
+checks make it fit for a real domain; the reader-facing site never runs any
+of it. A two-service deployment skeleton (static reader + editing machine)
+ships in [`deploy/`](deploy/README.md).
 
 ## Quick start
 
@@ -111,14 +123,19 @@ import { markdownProcessor } from 'astro-inkbrush/markdown';
 
 const WIKI_MODE = Boolean(process.env.WIKI);
 
+const remarkPlugins = [/* yours */];
+const rehypePlugins = [/* yours */];
+
 export default defineConfig({
   markdown: {
     processor: markdownProcessor({
-      remarkPlugins: [/* yours */],
-      rehypePlugins: [/* yours */, ...(WIKI_MODE ? [rehypeWikiBlocks] : [])],
+      remarkPlugins,
+      rehypePlugins: [...rehypePlugins, ...(WIKI_MODE ? [rehypeWikiBlocks] : [])],
     }),
   },
-  integrations: [...(WIKI_MODE ? [inkbrush()] : [])],
+  // the same plugins go to the CMS, so its preview and its save-time
+  // validation render a note the way your pages do
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins } })] : [])],
 });
 ```
 

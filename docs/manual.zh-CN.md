@@ -32,6 +32,16 @@ astro build           # 阅读模式——产物与从未装过本包的站点�
 开哪些功能(登录方式、Obsidian 收件箱、autocommit……)由站点根的
 `inkbrush.config.ts` 按机器决定,见[配置](#配置inkbrushconfigts)。
 
+CMS 对你的 Markdown 管线的了解来自集成调用本身。只写 `inkbrush()` 时它只用
+方言渲染;把站点自己的插件和「笔记 id → URL」规则传进去,编辑器预览、保存
+校验和 AI 关卡就会和你的页面渲染得一模一样:
+
+```ts
+integrations: [inkbrush({
+  markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` },
+})],
+```
+
 集成只在 `astro dev` 下运行;其他命令下只打一行警告、什么都不做。WIKI 模式
 还会关掉 Astro 的 dev 工具条(编辑者不需要开发仪表),但保留错误浮层——
 内容写坏时,它就是编辑者的报错界面。
@@ -57,25 +67,32 @@ astro build           # 阅读模式——产物与从未装过本包的站点�
 (可经 `claude.bin` / `claude.model` 配置)。三个入口,进度全部实时流式展示:
 
 - **改一个块**——悬停 ✦,选快捷指令(润色 / 更严谨 / 精简 / 修公式)或自己
-  写要求;Claude 直接编辑源文件。任务在服务端执行,关掉页面也照跑,和人工
-  编辑一样入修订账。超时 300 秒。
-- **就笔记提问**——右下角浮钮拉出对话面板;Claude 在服务端直接读源文件作答,
+  写要求;Claude 在笔记的工作副本里改这个块,结果和人工保存一样先过校验、
+  再入修订账。任务在服务端执行,关掉页面也照跑。超时 300 秒。
+- **就笔记提问**——右下角浮钮拉出对话面板;Claude 在工作副本里读源文件作答,
   数学照常渲染。追问延续同一场对话,刷新页面不丢。超时 300 秒。
 - **整篇翻译**——[语言表](#contentlocales)里每种还没有的语言各一个按钮。
   不是逐句直译:提示词让 Claude 以作者身份用目标语言重写整篇,并守死一串
   不变量(锚点、公式结构、代码逻辑、组件 props 不动;人读的文字都翻译——
   包括公式里的文字)。目标语言已存在时拒绝(409)。超时 30 分钟。
 
-所有任务的工具面都收紧:`Bash`、`WebSearch`、`WebFetch`、`NotebookEdit`
-永远禁用;编辑类任务给 `Read,Grep,Glob,Edit,Write`(自动接受编辑模式),
-问答只给只读的 `Read,Grep,Glob`;工作目录钉死在项目根。
+每个任务都在一份**临时工作副本**里跑:一个临时目录,只装这篇笔记所在目录的
+拷贝,外加 `claude.companions` 为这篇笔记点名的文件(比如它挂载的 demo 模块)。
+CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本内(编辑类任务
+`Read`、`Edit`、`Write`、`MultiEdit` 只对 `./**`;问答只有 `Read`),
+`Bash`、`Grep`、`Glob`、`WebSearch`、`WebFetch`、`NotebookEdit` 和子代理一律
+禁用。任务结束后把副本和项目做对比;每个改动过的 Markdown 文件都要过和
+人工保存相同的构建关(方言、守门、你的插件、MDX),过了才写进项目、入账、
+并在开了 `autocommit` 时提交。站点自己的写作规范通过 `claude.rules` 进入
+每一条提示词。
 
 ### 修订史与回滚(⟲)
 
 每次内容变更——人工、Claude、翻译、收件箱导入、回滚——都往账本里追加一条
-(谁、何时、哪些行、改前改后、经何途径)。⟲ 列出当前块的记录(按行号重叠或
-内容精确匹配找回),带可展开的改前/改后对照和一键回滚;要撤销的内容已被
-后续修改覆盖时拒绝(409),不瞎猜。
+带唯一 id 的记录(谁、何时、哪些行、改前改后、经何途径)。⟲ 列出当前块的
+记录(按行号重叠或内容精确匹配找回),带可展开的改前/改后对照和一键回滚;
+要撤销的内容已被后续修改覆盖时拒绝(409),不瞎猜。整文件的记录——导入、
+翻译——只留作审计,没有一键回滚:那是 git 的活。
 
 ### 评论区
 
@@ -138,11 +155,11 @@ export default defineInkbrushConfig({
     // googleSaml: { entryPoint, idpEntityId, certFile, allowedDomains?, baseUrl },
     // session: { format?, cookieName?, cookieDomain?, ttlDays?, trustedOrigins? },
   },
-  // identity: { dir: '.wiki/identity', roles?, defaultRole?, adminRole? },
+  // identity: { dir: '.wiki/identity', roles?, defaultRole?, adminRole?, autoRegister? },
   inbox: { dir: '~/vault/收件箱', ignore: ['daily/'] },   // 省略 dir = 不监听
   autocommit: false,
   autopush: false,
-  // claude: { bin: 'claude', model: '…' },
+  // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com' },
 });
@@ -160,6 +177,8 @@ export default defineInkbrushConfig({
 | `autocommit` | `false` | 每次保存后在内容仓自动 git commit(作者 = 登录用户) |
 | `autopush` | `false` | 每次 autocommit 后异步 git push——部署机开启 |
 | `claude.bin` / `claude.model` | `'claude'` / CLI 自身默认 | AI 端点用哪个 CLI / 哪个模型 |
+| `claude.companions` | 无 | `(note) => string[]`——笔记目录之外,任务还可以读写的项目相对路径(文件或目录) |
+| `claude.rules` | `[]` | 站点自己的写作规范,追加在方言规则之后进入每条提示词 |
 | `content.dir` | `'src/content/notes'` | 笔记内容根目录(相对站点根) |
 | `content.locales` | zh/en/de 表 | 笔记语言表——[见下](#contentlocales) |
 | `share` | 关 | 快照分享——[分享](#分享与网关契约)一节 |
@@ -289,9 +308,14 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 `identity: { dir }` 启用文件式注册表:`<dir>/users.json`,纯 JSON
 `[{ email, name, role }]`,可与同机的其他应用共享同一份。角色词汇表、SSO
 首登的默认角色、管理员角色名全部可配(`roles` / `defaultRole` /
-`adminRole`)。
+`adminRole`)。注册表开启期间,**所有需登录的路由都要求当前在册**——用户被
+从名单里删掉后,其会话的下一个请求就会被拒(403)。
 
-- `users.json` 还不存在时,用 `ADMIN_EMAILS` 环境变量(逗号分隔)播种管理员。
+- `users.json` 还不存在时,用 `ADMIN_EMAILS` 环境变量(逗号分隔)播种管理员;
+  一个管理员都没有时服务端拒绝启动注册表。
+- `autoRegister`(默认 `true`)允许白名单域名下的首次 SSO 登录以
+  `defaultRole` 入册;设为 `false` 则注册表变成只有管理员能扩的白名单——
+  陌生用户被送回 `?login_error=not_member`。
 - 管理员在账号弹层的 **Members** 面板增删成员、改角色;服务端校验词汇表,
   并强制至少保留一名管理员。
 - 写入是原子的(临时文件 + 改名);文件损坏时拒绝服务,绝不装作"注册表为空"。
@@ -368,17 +392,17 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `POST /auth/saml/callback` | 公开 | ACS;永不 500——失败一律 303 到 `/?login_error=<code>` |
 | `GET /auth/saml/metadata` | 公开 | SP 元数据 XML(证书未配也能输出) |
 | `POST /logout` | 公开 | 清除会话 cookie |
-| `GET /meta/<id>` | 公开 | 笔记元数据:文件、标题、`locales`(各语言存在与否)、demo 模块清单 |
+| `GET /meta/<id>` | 公开 | 笔记元数据:文件、标题、`locales`(各语言存在与否) |
 | `GET /notes` | 公开 | 轻量笔记清单(自动补全与链接解析用) |
 | `GET /block/<id>?start&end` | 需登录 | 读块源码 `{source, hash, start, end}`(400/416) |
 | `PUT /block/<id>` | 需登录 | 写块 `{start,end,hash,source}`(409 锁冲突 / 422 MDX 错误) |
 | `POST /render` | 需登录 | `{markdown, sanitize?, note?}` → HTML(默认消毒;受信路径解析双链) |
 | `GET /revisions/<id>` | 需登录 | 该笔记的修订记录(最近 100 条) |
-| `POST /revert/<id>` | 需登录 | `{ts}` → 回滚该条修订(404/400/409/422) |
+| `POST /revert/<id>` | 需登录 | `{id}` → 回滚该条块级修订(404/400/409/422;整文件记录 400) |
 | `POST /claude/block` | 需登录 | NDJSON 流;300 秒上限;关页面照跑 |
 | `POST /claude/ask` | 需登录 | NDJSON 流;300 秒上限;断连即杀;可续对话 |
 | `POST /claude/translate` | 需登录 | NDJSON 流;30 分钟上限;目标语言已存在时 409 |
-| `GET /inbox/status` | 公开 | `{enabled, dir, watching, seen, imported}` |
+| `GET /inbox/status` | 需登录 | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | 需登录 | `{path}` 补导;路径锁定在 `inbox.dir` 内 |
 | `GET /comments/<id>` | 公开 | 现存评论(删除已生效) |
 | `POST /comments/<id>` | 需登录 | 发评论(超一万字 413) |
@@ -389,8 +413,11 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享 |
 | `DELETE /share/<id>` | 需登录 | 撤销 |
 
-通用规则:请求体上限 1 MiB(超出 413);预期内的 4xx 返回 `{error}` JSON,
-不打服务端堆栈。
+通用规则:JSON 请求体必须以 `application/json` 发送、上限 1 MiB(否则
+415/413);改状态的请求若 `Origin`(或 `Referer`)指向本站和 `trustedOrigins`
+之外的站点,一律 403——浏览器总会带上它,所以 cookie 无法被别的网页盗用;
+预期内的 4xx 返回 `{error}` JSON,意外失败返回带参考 id 的 500,服务端日志里
+能按 id 找到。
 
 ## 架构与磁盘状态
 
@@ -400,7 +427,8 @@ astro.config.ts ──WIKI=1──▶ inkbrush() 集成   (src/wiki/integration.
    │                                              strings.ts = en/zh 字符串表)
    ├─ dev 中间件 /api/wiki/* → src/wiki/server/*   (ssrLoadModule——服务端代码
    │                                               也热更)
-   └─ initWiki(root) → 按配置启动可选项(收件箱监听器)
+   └─ initWiki(root, { markdown }) → 注册表检查、站点 Markdown 钩子、
+                                     收件箱监听器
 
 src/lib/        与管线无关的库:markdown-syntax(方言)、markdown(处理器
                 一行接入)、content-guard、rehype-wiki-blocks(块↔源码行号)、
@@ -423,10 +451,13 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
   share-dist/               快照用的 WIKI-free 构建缓存
 ```
 
-安全姿态:Claude 任务工具面收紧、工作目录钉死;评论 HTML 服务端消毒;块
-写入路径校验不得越出 `content.dir`,收件箱导入不得越出 `inbox.dir`;Google
-白名单默认拒绝;回跳地址有开放重定向防护;jwt 模式缺密钥拒绝启动;角色
-每请求现查;请求体有上限。
+安全姿态:Claude 任务在临时工作副本里跑,文件工具限制在副本内、没有 shell
+与网络工具,产出先过构建关再写入;评论 HTML 服务端消毒;笔记、附件、收件箱
+的每个路径都解析到真实位置,必须留在 `content.dir` / `inbox.dir` 之内;写入
+原子且进程内串行;OAuth 用 PKCE 加绑定浏览器的一次性 state,SAML 只接受
+对本服务所发请求的响应;域名白名单默认拒绝;回跳地址有开放重定向防护;jwt
+模式缺密钥拒绝启动;成员资格与角色每请求现查;来自外站 `Origin` 的
+改动请求一律拒绝;请求体有上限。
 
 ## 生产部署
 
@@ -439,9 +470,9 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
   server 的虚拟模块 URL 是根相对的,挂前缀必坏)、反代 TLS、
   `auth.dev: false` 换真实登录方式、内容检出放持久卷,`autocommit` +
   `autopush` 把每次保存送回内容仓,再由 CI 重建读者站。
-- 单个 dev server 进程从容服务个位数并发编辑者。(`src/wiki/server/*` 的
-  处理器是无框架的原生 req/res,理论上可以挂独立 Node server + 触发式重建
-  ——代价是失去即时预览,不推荐。)
+- 一个 dev server 进程服务一个编辑团队:对同一篇笔记的写入在进程内按文件
+  串行,同一块的并发保存会被 409 拒绝而不是覆盖;进程之间没有协调——每个
+  内容仓只跑一个实例。
 
 典型配法:
 
@@ -451,6 +482,6 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
 | 团队内网 wiki | `false` | Google OAuth 或 SAML | 视需要 |
 | 公网静态站 + 私有编辑机 | `false` | 视需要 | 视需要 |
 
-现成的双服务骨架(静态读者站 + 编辑机:Dockerfile、compose 示例、带
-clone-or-pull / 配置注入 / 陈旧锁清理的 entrypoint)在姊妹仓:
-[astro-inkstone 的 `deploy/`](https://github.com/ventusff/astro-inkstone/tree/main/deploy)。
+双服务骨架(静态读者站 + 编辑机:Dockerfile、compose 示例、一个负责克隆或
+更新检出、安装本机配置与凭据并启动服务的 entrypoint)在本仓的
+[`deploy/`](../deploy/README.md)。

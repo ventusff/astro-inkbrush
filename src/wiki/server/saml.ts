@@ -1,8 +1,10 @@
 /**
- * Google Workspace SAML SSO — the SP side. The
- * engine only plays Service Provider: it never signs requests and needs no
- * private key of its own; the IdP cert (from `auth.googleSaml.certFile`) is
- * used solely to verify assertion signatures.
+ * Google Workspace SAML SSO — the SP side. The engine only plays Service
+ * Provider: it never signs requests and needs no private key of its own; the
+ * IdP cert (from `auth.googleSaml.certFile`) verifies assertion signatures.
+ * Every response must answer a request this process issued (InResponseTo is
+ * validated against an in-memory cache and consumed), so an unsolicited or
+ * replayed response is refused.
  *
  * Config lives in inkbrush.config.ts → auth.googleSaml (env overridable:
  * WIKI_SAML_SSO_URL / WIKI_SAML_IDP_ENTITY_ID / WIKI_SAML_CERT_FILE /
@@ -17,8 +19,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { SAML, type Profile } from '@node-saml/node-saml';
 import { ValidateInResponseTo } from '@node-saml/node-saml/lib/types';
 
-import type { GoogleAuthState } from '../shared/types';
-import { wikiConfig } from './config';
+import type { GoogleAuthState } from '../shared/types.ts';
+import { wikiConfig } from './config.ts';
 
 /* —— cert normalization: three shapes must be accepted ——
  * 1) full multi-line PEM  2) bare base64 body  3) a whole `base64 -w0 cert.pem` blob */
@@ -81,12 +83,18 @@ export interface SamlEnv {
   configured: boolean;
 }
 
+let ready: SamlEnv | null = null;
+
 /**
- * Build the SAML SP. With configured=false it is only good for generating SP
- * metadata (constructed with a placeholder cert — SP metadata carries no IdP
- * information anyway).
+ * The SAML SP. One configured instance is kept for the process: its
+ * in-memory request-id cache is what ties a response to the request this
+ * process issued. With configured=false the instance is only good for
+ * generating SP metadata (a placeholder cert — SP metadata carries no IdP
+ * information) and is rebuilt on each call, so a certificate delivered
+ * later is picked up.
  */
 export function buildSaml(): SamlEnv {
+  if (ready) return ready;
   const conf = samlConf();
   if (conf === false) throw new Error('googleSaml auth is disabled (inkbrush.config.ts → auth.googleSaml)');
   const idpCert = loadIdpCert();
@@ -102,11 +110,14 @@ export function buildSaml(): SamlEnv {
     wantAssertionsSigned: true,
     wantAuthnResponseSigned: false,
     acceptedClockSkewMs: 5000,
-    // stateless deployment — InResponseTo is not validated
-    validateInResponseTo: ValidateInResponseTo.never,
+    // every response must answer a request this process issued, once
+    validateInResponseTo: ValidateInResponseTo.always,
+    requestIdExpirationPeriodMs: 10 * 60 * 1000,
     identifierFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
   });
-  return { saml, configured };
+  const env = { saml, configured };
+  if (configured) ready = env;
+  return env;
 }
 
 /** off = disabled in inkbrush.config.ts · ready = usable · unconfigured =

@@ -1,27 +1,26 @@
 /**
- * Deployment config resolution: defaults ← root inkbrush.config.ts ← env overrides.
+ * Deployment config resolution: defaults ← root inkbrush.config.ts ← env
+ * overrides.
  *
- * The root file is discovered via import.meta.glob, so its absence is not an
- * error (a glob with no matches is just an empty record). The historical
- * WIKI_* environment variables stay honoured as per-process overrides — handy
- * for one-off runs (`WIKI_INBOX_DIR=/tmp/x` in a test) — but the config file
- * is the durable source of truth for each deployment.
+ * The root file is discovered via import.meta.glob; its absence is valid
+ * (the defaults apply). The WIKI_* environment variables are per-process
+ * overrides of individual fields; the config file is each deployment's
+ * source of truth.
  *
- * Secrets are intentionally NOT part of the config object: GOOGLE_CLIENT_ID /
- * GOOGLE_CLIENT_SECRET are read where used (auth.ts), so a stray
- * console.log(wikiConfig()) can never leak them.
+ * Secrets are not part of the config object: GOOGLE_CLIENT_ID /
+ * GOOGLE_CLIENT_SECRET / AUTH_SECRET / SHARE_GATEWAY_TOKEN are read where
+ * used, so the resolved config can be logged.
  *
- * After editing inkbrush.config.ts: request-level settings (login providers,
- * autocommit, claude) take effect immediately via SSR module hot reload; the
- * inbox watcher is created at dev-server startup, so changing the watch dir
- * requires a dev-server restart.
+ * Request-level settings (login providers, autocommit, claude) take effect
+ * on SSR module reload after the file changes; the inbox watcher is created
+ * at dev-server startup, so a changed watch dir needs a restart.
  */
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
-import type { WikiConfig, WikiConfigInput } from '../config';
-import { resolveLocales } from '../shared/locales';
-import { projectRoot } from './store';
+import type { WikiConfig, WikiConfigInput } from '../config.ts';
+import { resolveLocales } from '../shared/locales.ts';
+import { projectRoot } from './store.ts';
 
 const configModules = import.meta.glob<{ default: WikiConfigInput }>('/inkbrush.config.ts', {
   eager: true,
@@ -87,8 +86,8 @@ export function wikiConfig(): WikiConfig {
           baseUrl: ((envStr('WIKI_BASE_URL') ?? samlInput.baseUrl) || '').replace(/\/$/, ''),
         };
 
-  // session cookie behaviour — defaults keep today's byte-identical shape
-  // (hmac / wiki_session / host-only / 30d); jwt mode hard-requires AUTH_SECRET
+  // session cookie behaviour (defaults: hmac / wiki_session / host-only /
+  // 30 days); jwt mode requires AUTH_SECRET
   const sessionInput = input.auth?.session ?? {};
   const formatRaw = envStr('WIKI_SESSION_FORMAT') ?? sessionInput.format ?? 'hmac';
   if (formatRaw !== 'hmac' && formatRaw !== 'jwt') {
@@ -128,7 +127,13 @@ export function wikiConfig(): WikiConfig {
         `identity.roles must include defaultRole '${defaultRole}' and adminRole '${adminRole}'`,
       );
     }
-    identity = { dir: expandDir(identityDirRaw.trim()), roles, defaultRole, adminRole };
+    identity = {
+      dir: expandDir(identityDirRaw.trim()),
+      roles,
+      defaultRole,
+      adminRole,
+      autoRegister: input.identity?.autoRegister ?? true,
+    };
   }
 
   // share module — like google/saml: enabling is a config-file decision, env
@@ -163,6 +168,8 @@ export function wikiConfig(): WikiConfig {
     claude: {
       bin: envStr('WIKI_CLAUDE_BIN') ?? input.claude?.bin ?? 'claude',
       model: envStr('WIKI_CLAUDE_MODEL') ?? input.claude?.model ?? null,
+      companions: input.claude?.companions ?? null,
+      rules: input.claude?.rules ?? [],
     },
     content: {
       dir: input.content?.dir ?? 'src/content/notes',

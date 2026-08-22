@@ -4,19 +4,20 @@
  * bundled service: anything that implements the small admin API
  * (`PUT/DELETE/GET /admin/s/<id>`, Bearer auth, tar.gz body on PUT) works.
  *
- * The engine only ever talks OUTBOUND to that admin API (`share.gatewayUrl` +
- * Bearer SHARE_GATEWAY_TOKEN); the password is scrypt-hashed on this side, so
- * the gateway never sees the plaintext. Feature off (config share:false /
- * omitted) ⇒ routes 404 and the client button never mounts — zero behaviour
- * change by default.
+ * The engine only ever talks outbound to that admin API (`share.gatewayUrl`
+ * + Bearer SHARE_GATEWAY_TOKEN); the password is scrypt-hashed on this side,
+ * so the gateway never sees the plaintext. The snapshotted route is the
+ * note's own route by the site's URL rule (`inkbrush({ markdown: { urlFor } })`,
+ * default `/<id>/`), so a share record always names the page it serves.
+ * Feature off (config share:false / omitted) ⇒ routes 404 and the client
+ * button never mounts.
  *
  * POST /share is an NDJSON stream: the underlying `astro build` can take
- * minutes cold, so progress lines flow while it runs (same streaming idiom as
- * the claude bridge).
+ * minutes cold, so progress lines flow while it runs.
  */
 import { randomBytes, scryptSync } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createReadStream, readdirSync, rmSync, statSync } from 'node:fs';
+import { Readable } from 'node:stream';
 import * as tar from 'tar';
 
 import type {
@@ -25,13 +26,17 @@ import type {
   ShareListResponse,
   ShareRecord,
   ShareStreamEvent,
-} from '../shared/types';
-import { wikiConfig } from './config';
-import type { Ctx, RouteRegistrar } from './index';
-import { fail, json, ndjsonStream, readBody } from './index';
-import { buildSnapshot } from './snapshot';
-import { noteMeta } from './source';
-import { projectRoot, readJson, wikiDataDir } from './store';
+} from '../shared/types.ts';
+import { wikiConfig } from './config.ts';
+import type { Ctx, RouteRegistrar } from './index.ts';
+import { fail, json, ndjsonStream, readBody } from './index.ts';
+import { noteUrl } from './site.ts';
+import { buildSnapshot } from './snapshot.ts';
+import { noteMeta } from './source.ts';
+import { projectRoot, readJson, wikiDataDir, withLock, writeJson } from './store.ts';
+
+/** a snapshot bundle above this size is refused before upload */
+const BUNDLE_LIMIT = 256 * 1024 * 1024;
 
 /* ---------------- availability ---------------- */
 
@@ -79,13 +84,13 @@ function readShares(): ShareRecord[] {
   return readJson<ShareRecord[]>(sharesFile(), []);
 }
 
-/** atomic full overwrite (tmp+rename, same idiom as identity users.json) */
-function writeShares(shares: ShareRecord[]): void {
-  const file = sharesFile();
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, JSON.stringify(shares, null, 2));
-  renameSync(tmp, file);
+/** read-modify-write of the share list under its lock */
+function updateShares(update: (shares: ShareRecord[]) => void): Promise<void> {
+  return withLock(sharesFile(), () => {
+    const shares = readShares();
+    update(shares);
+    writeJson(sharesFile(), shares);
+  });
 }
 
 function isActive(record: ShareRecord): boolean {
@@ -139,17 +144,6 @@ async function gatewayFetch(
   });
 }
 
-/* ---------------- validation ---------------- */
-
-/** the client reports location.pathname; accept only clean site-internal paths */
-function cleanRoute(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const route = raw.trim();
-  if (!/^\/[A-Za-z0-9\-._/]*$/.test(route)) return null;
-  if (route.includes('..') || route.includes('//')) return null;
-  return route;
-}
-
 /* ---------------- routes ---------------- */
 
 export function registerShareRoutes(on: RouteRegistrar): void {
@@ -162,18 +156,16 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (!conf) return;
       const body = await readBody<ShareCreateRequest>(req);
       const note = typeof body.note === 'string' ? body.note.trim() : '';
-      const route = cleanRoute(body.route);
       const password = typeof body.password === 'string' ? body.password : '';
       const expiresDays = body.expiresDays ?? null;
       if (!note || !noteMeta(note)) return fail(res, 404, 'Note not found');
-      if (!route) return fail(res, 400, 'route must be a clean site-internal path');
+      const route = noteUrl(note);
       if (password.length < 6) return fail(res, 400, 'Password must be at least 6 characters');
       if (expiresDays !== null && expiresDays !== 7 && expiresDays !== 30) {
         return fail(res, 400, 'expiresDays must be 7, 30 or null');
       }
 
-      // pre-flight the gateway BEFORE the (minutes-long) build, so an
-      // unreachable gateway is an honest 502 instead of a wasted build
+      // the gateway is checked before the (minutes-long) build
       try {
         const ping = await gatewayFetch(conf, '/admin/s', {}, 5000);
         if (ping.status === 401) {
@@ -199,8 +191,12 @@ export function registerShareRoutes(on: RouteRegistrar): void {
         snapDir = snapshot.dir;
         tgzPath = `${snapshot.dir}.tgz`;
         progress(`Packing snapshot (${snapshot.files.length + 1} files)…`);
-        // index.html at the tar ROOT — the gateway extracts into site/ as-is
+        // index.html at the tar root — the gateway extracts into site/ as-is
         await tar.c({ gzip: true, cwd: snapshot.dir, file: tgzPath, portable: true }, readdirSync(snapshot.dir));
+        const size = statSync(tgzPath).size;
+        if (size > BUNDLE_LIMIT) {
+          throw new Error(`snapshot bundle is ${Math.round(size / 1048576)} MiB, above the ${BUNDLE_LIMIT / 1048576} MiB limit`);
+        }
 
         const id = mintId();
         const expiresAt = expiresDays ? new Date(Date.now() + expiresDays * 86_400_000).toISOString() : null;
@@ -212,14 +208,17 @@ export function registerShareRoutes(on: RouteRegistrar): void {
             method: 'PUT',
             headers: {
               'content-type': 'application/gzip',
+              'content-length': String(size),
               'x-share-password': hashPassword(password),
               ...(expiresAt ? { 'x-share-expires': expiresAt } : {}),
-              // header values must be latin1 — encode CJK note ids
+              // header values are latin1 — a CJK note id travels percent-encoded
               'x-share-note': /^[\x20-\x7e]*$/.test(note) ? note : encodeURIComponent(note),
             },
-            body: new Uint8Array(readFileSync(tgzPath)),
-          },
-          120_000,
+            // streamed from disk: the bundle is never held in memory
+            body: Readable.toWeb(createReadStream(tgzPath)) as unknown as BodyInit,
+            duplex: 'half',
+          } as RequestInit,
+          600_000,
         );
         if (!put.ok) {
           throw new Error(`gateway upload failed (HTTP ${put.status}): ${(await put.text()).slice(0, 300)}`);
@@ -235,7 +234,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           expiresAt,
           revokedAt: null,
         };
-        writeShares([...readShares(), record]);
+        await updateShares((shares) => shares.push(record));
         stream.write({ kind: 'result', ok: true, share: record } satisfies ShareStreamEvent);
       } catch (err) {
         stream.write({
@@ -284,15 +283,10 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           `Share gateway unreachable (${conf.gatewayUrl}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      // re-read before persisting the revoke: the gateway call above can take
-      // up to 10s, during which another request may have written new shares —
-      // writing back the pre-call snapshot would silently erase them (TOCTOU)
-      const shares = readShares();
-      const current = shares.find((r) => r.id === record.id);
-      if (current && !current.revokedAt) {
-        current.revokedAt = new Date().toISOString();
-        writeShares(shares);
-      }
+      await updateShares((shares) => {
+        const current = shares.find((r) => r.id === record.id);
+        if (current && !current.revokedAt) current.revokedAt = new Date().toISOString();
+      });
       json(ctx.res, 200, { ok: true });
     },
     { auth: true },

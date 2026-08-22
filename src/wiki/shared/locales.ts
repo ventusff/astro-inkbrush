@@ -1,16 +1,11 @@
 /**
- * locales — the single registry of note languages.
- *
- * Historically source.ts / prompts.ts / lib/wikilinks.ts each kept their own
- * copy; adding a language meant touching three files and it was easy to miss
- * one. Now: the DEFAULT table lives here, and a deployment can replace it via
- * `content.locales` in inkbrush.config.ts (resolved by server/config.ts).
- *
- * Note: lib/wikilinks.ts is a zero-dependency standalone library (composition
- * belongs to the caller), so its DEFAULT_LOCALES is only an uninjected
- * fallback — keep it in sync when the default table changes.
+ * locales — the registry of note languages: the default table, and the
+ * resolution of a deployment's own table (`content.locales` in
+ * inkbrush.config.ts, resolved by server/config.ts). lib/wikilinks.ts is a
+ * standalone library and carries the same default table as its uninjected
+ * fallback; the two tables are kept identical.
  */
-import type { NoteLocale } from './types';
+import type { NoteLocale } from './types.ts';
 
 export interface LocaleDef {
   code: NoteLocale;
@@ -74,4 +69,3 @@ export function resolveLocales(input?: LocaleInput[] | undefined): readonly Loca
   return resolved;
 }
 
-export const localeDef = (code: NoteLocale): LocaleDef => LOCALES.find((l) => l.code === code)!;

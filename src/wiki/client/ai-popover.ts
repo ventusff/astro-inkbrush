@@ -11,16 +11,28 @@ import { rememberScroll } from './index';
 import { S } from './strings';
 import { h, icon, popover, toast } from './ui';
 
-export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLElement): void {
+/** `anchor` positions the popover; `trigger` is the button that owns it */
+export function openAiPopover(
+  ctx: PageContext,
+  block: BlockRef,
+  anchor: HTMLElement,
+  trigger: HTMLElement,
+): void {
   let running = false;
 
   const input = h('textarea', {
     class: 'wiki-textarea',
     placeholder: S.ai.placeholder(block.jsx),
+    'aria-label': S.ai.inputLabel,
     rows: '3',
   });
-  const runBtn = h('button', { class: 'wiki-btn wiki-btn-primary' }, icon('sparkle'), ` ${S.ai.run}`);
-  const log = h('div', { class: 'wiki-ai-log', style: { display: 'none' } });
+  const runBtn = h(
+    'button',
+    { type: 'button', class: 'wiki-btn wiki-btn-primary' },
+    icon('sparkle'),
+    ` ${S.ai.run}`,
+  );
+  const log = h('div', { class: 'wiki-ai-log', role: 'log', hidden: true });
   const quick = h(
     'div',
     { class: 'wiki-ai-quick' },
@@ -28,6 +40,7 @@ export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLEle
       h(
         'button',
         {
+          type: 'button',
           onclick: () => {
             input.value = q.instruction;
             input.focus();
@@ -38,27 +51,30 @@ export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLEle
     ),
   );
 
+  const title = S.ai.title(block.start, block.end);
   const body = h(
     'div',
     { class: 'wiki-ai-pop' },
-    h('div', { class: 'wiki-panel-title' }, S.ai.title(block.start, block.end)),
+    h('div', { class: 'wiki-panel-title' }, title),
     quick,
     input,
     log,
     runBtn,
   );
 
-  const close = popover(anchor, body, { canDismiss: () => !running });
+  // the popover closes via outside click / focus leaving / Esc once no job is running
+  popover(anchor, body, { label: title, trigger, canDismiss: () => !running });
 
   const run = async (): Promise<void> => {
     const instruction = input.value.trim();
     if (!instruction || running) return;
     running = true;
-    input.style.display = 'none';
-    quick.style.display = 'none';
-    log.style.display = '';
+    input.hidden = true;
+    quick.hidden = true;
+    log.hidden = false;
+    log.setAttribute('aria-busy', 'true');
     runBtn.replaceChildren(h('span', { class: 'wiki-working' }, S.ai.working));
-    runBtn.setAttribute('disabled', '');
+    runBtn.disabled = true;
 
     let textEl: HTMLElement | null = null;
     const appendTool = (label: string): void => {
@@ -74,6 +90,10 @@ export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLEle
       textEl.textContent += text;
       log.scrollTop = log.scrollHeight;
     };
+    const finish = (): void => {
+      running = false;
+      log.setAttribute('aria-busy', 'false');
+    };
 
     try {
       for await (const event of stream('/claude/block', {
@@ -85,12 +105,12 @@ export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLEle
         if (event.kind === 'tool') appendTool(event.label);
         else if (event.kind === 'text') appendText(event.text);
         else if (event.kind === 'error') {
-          running = false;
+          finish();
           log.append(h('span', { class: 'err' }, event.message));
           runBtn.remove();
           return;
         } else if (event.kind === 'result') {
-          running = false;
+          finish();
           if (event.ok) {
             rememberScroll();
             toast(S.ai.done);
@@ -102,13 +122,12 @@ export function openAiPopover(ctx: PageContext, block: BlockRef, anchor: HTMLEle
           return;
         }
       }
-      running = false;
+      finish();
     } catch (err) {
-      running = false;
+      finish();
       log.append(h('span', { class: 'err' }, err instanceof Error ? err.message : S.common.requestFailed));
     }
   };
-  void close; // popover closes via outside click / Esc once the job isn't running
 
   runBtn.addEventListener('click', () => void run());
   input.addEventListener('keydown', (e) => {

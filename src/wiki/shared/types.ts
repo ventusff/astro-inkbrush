@@ -81,8 +81,6 @@ export interface NoteMeta {
   lang: NoteLocale;
   /** every supported locale of this note (existing → link, missing → translate) */
   locales: NoteLocaleInfo[];
-  /** demo module specifiers referenced by this page ("getting-started/dice") */
-  demos: string[];
 }
 
 /** GET /api/wiki/notes list entry ([[ autocomplete / wikilink resolution) */
@@ -150,7 +148,6 @@ export interface ShareRecord {
  *  so the client reports it and the server validates it */
 export interface ShareCreateRequest {
   note: string;
-  route: string;
   password: string;
   /** 7 · 30 · null/omitted = never */
   expiresDays?: 7 | 30 | null;
@@ -168,6 +165,8 @@ export interface ShareListResponse {
 }
 
 export interface RevisionRecord {
+  /** unique id; the revert endpoint addresses a record by it */
+  id: string;
   ts: number;
   user: string;
   note: string;

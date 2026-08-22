@@ -20,10 +20,11 @@ const BASE = (process.env.DEMO_BASE || '/').replace(/\/+$/, '') || '';
 // resolution domain (which notes exist) and the routing (where a note lives).
 // remarkWikilinks is a unified plugin: mount it as a [plugin, options] pair.
 const CONTENT_DIR = new URL('./src/content/notes', import.meta.url).pathname;
+const urlFor = (id) => `${BASE}/notes/${id}/`;
 const wikilinkOptions = {
   resolve: buildWikilinkResolver({
     notes: cachedScan(CONTENT_DIR),
-    urlFor: (id) => `${BASE}/notes/${id}/`,
+    urlFor,
     locales: [
       { code: 'en', prefix: '' },
       { code: 'zh', prefix: 'zh/' },
@@ -38,18 +39,23 @@ const wikilinkOptions = {
     console.warn(`[wikilinks] ${kind}: [[${target}]] ← ${file ?? '(unknown)'}`),
 };
 
+// The site's own plugins beyond the dialect. They are mounted in the page
+// pipeline below and handed to the CMS, so the editor preview, the save-time
+// validation and the AI gate render a note exactly as the page does.
+const remarkPlugins = [[remarkWikilinks, wikilinkOptions]];
+const rehypePlugins = [];
+
 export default defineConfig({
   site: SITE,
   base: BASE || '/',
   trailingSlash: 'ignore',
-  integrations: [...(engine ? [engine.inkbrush()] : [])],
+  integrations: [...(engine ? [engine.inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor } })] : [])],
   markdown: {
     // The engine's Markdown dialect (GFM with single-tilde off, CJK-friendly
-    // emphasis) plus the content guard, then the site's own plugins. What the
-    // editor accepts and what the page renders are one grammar by construction.
+    // emphasis) plus the content guard, then the site's own plugins.
     processor: markdownProcessor({
-      remarkPlugins: [[remarkWikilinks, wikilinkOptions]],
-      rehypePlugins: [...(engine ? [engine.rehypeWikiBlocks] : [])],
+      remarkPlugins,
+      rehypePlugins: [...rehypePlugins, ...(engine ? [engine.rehypeWikiBlocks] : [])],
     }),
   },
 });

@@ -10,7 +10,7 @@
     "postbuild": "node ../scripts/check-dist.mjs dist --base ${DEMO_BASE:-/}",
     "preview": "astro preview",
     "wiki": "WIKI=1 astro dev",
-    "check": "node ../scripts/check-content.mjs src/content/notes"
+    "check": "node ../scripts/check-content.mjs src/content/notes --math && node ../scripts/check-wikilinks.mjs src/content/notes --locale-prefix zh/ --strict --allow compost-heap"
   },
   "engines": {
     "node": ">=22.12.0"

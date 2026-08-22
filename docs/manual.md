@@ -37,6 +37,17 @@ Which features are on (sign-in providers, the Obsidian inbox, autocommit…)
 is decided per machine by `inkbrush.config.ts` at the site root — see
 [Configuration](#configuration-inkbrushconfigts).
 
+What the CMS knows about your Markdown pipeline comes from the integration
+call itself. `inkbrush()` alone renders with the dialect; pass your own
+plugins and your note-id → URL rule so the editor preview, the save-time
+validation and the AI gate render a note exactly the way your pages do:
+
+```ts
+integrations: [inkbrush({
+  markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` },
+})],
+```
+
 The integration only runs under `astro dev`; in any other command it logs a
 warning and does nothing. In WIKI mode it also turns off Astro's dev toolbar
 (editors don't need island-audit instrumentation) while keeping the error
@@ -70,12 +81,13 @@ machine running the dev server (configurable via `claude.bin` /
 
 - **Edit a block** — hover ✦, pick a quick intent (polish / more rigorous /
   condense / fix formulas) or write your own instruction; Claude edits the
-  source file directly. The job survives a closed tab and is journaled like
-  any other edit. Timeout: 300 s.
-- **Ask about the note** — the floating chat panel; Claude reads the note's
-  source server-side and answers with math-rendered output. Follow-ups
-  resume the same conversation; the transcript survives page reloads.
+  block in a working copy of the note, and the result is validated and
+  journaled like any manual save. The job survives a closed tab.
   Timeout: 300 s.
+- **Ask about the note** — the floating chat panel; Claude reads the note's
+  source in a working copy and answers with math-rendered output.
+  Follow-ups resume the same conversation; the transcript survives page
+  reloads. Timeout: 300 s.
 - **Translate the note** — one button per missing locale (from your
   [locale table](#contentlocales)). Not literal translation: the prompt
   casts Claude as the author rewriting the piece in the target language,
@@ -83,19 +95,29 @@ machine running the dev server (configurable via `claude.bin` /
   props preserved; human-facing text translated — including text inside
   formulas). Refuses (409) if the target already exists. Timeout: 30 min.
 
-Every job runs with a locked-down toolset: `Bash`, `WebSearch`, `WebFetch`
-and `NotebookEdit` are always disallowed; editing jobs get
-`Read,Grep,Glob,Edit,Write` under accept-edits mode, ask jobs get read-only
-`Read,Grep,Glob`; the working directory is pinned to the project root.
+Every job runs in a **throwaway workspace**: a temporary directory holding
+a copy of the note's directory plus whatever `claude.companions` names for
+that note (the demo module it mounts, say). The CLI's working directory is
+that copy, its file tools are confined to it by permission rules (`Read`,
+`Edit`, `Write`, `MultiEdit` on `./**` for edit jobs; `Read` only for ask
+jobs), and `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `NotebookEdit`
+and sub-agents are denied outright. When the job ends, the copy is diffed
+against the project; every changed Markdown file must pass the same build
+gate as a manual save (the dialect, the guard, your plugins, MDX), and only
+then are the changes written, journaled and — with `autocommit` —
+committed. Your site's own conventions reach every prompt through
+`claude.rules`.
 
 ### Revision history & revert (⟲)
 
 Every content change — manual, Claude, translation, inbox import, revert —
-appends a record to the journal (who, when, which lines, before/after,
-via what). The ⟲ handle lists the current block's records (matched by line
-overlap or exact content) with collapsible diffs and one-click revert; a
-revert whose "before" text no longer matches the file (later edits covered
-it) is refused (409) instead of guessing.
+appends a record with a unique id to the journal (who, when, which lines,
+before/after, via what). The ⟲ handle lists the current block's records
+(matched by line overlap or exact content) with collapsible diffs and
+one-click revert; a revert whose "before" text no longer matches the file
+(later edits covered it) is refused (409) instead of guessing. Whole-file
+records — imports, translations — are kept for the audit trail but have no
+one-click revert: that is a git operation.
 
 ### Comments
 
@@ -172,11 +194,11 @@ export default defineInkbrushConfig({
     // googleSaml: { entryPoint, idpEntityId, certFile, allowedDomains?, baseUrl },
     // session: { format?, cookieName?, cookieDomain?, ttlDays?, trustedOrigins? },
   },
-  // identity: { dir: '.wiki/identity', roles?, defaultRole?, adminRole? },
+  // identity: { dir: '.wiki/identity', roles?, defaultRole?, adminRole?, autoRegister? },
   inbox: { dir: '~/vault/inbox', ignore: ['daily/'] },   // omit dir = watcher off
   autocommit: false,
   autopush: false,
-  // claude: { bin: 'claude', model: '…' },
+  // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com' },
 });
@@ -194,6 +216,8 @@ export default defineInkbrushConfig({
 | `autocommit` | `false` | git commit in the content repo after every save (author = the signed-in user) |
 | `autopush` | `false` | async git push after each autocommit — turn on for deployment machines |
 | `claude.bin` / `claude.model` | `'claude'` / CLI default | Which CLI binary / `--model` the AI endpoints run |
+| `claude.companions` | none | `(note) => string[]` — project-relative files or directories a job may read and change beside the note's directory |
+| `claude.rules` | `[]` | The site's own writing constraints, appended to the dialect's in every prompt |
 | `content.dir` | `'src/content/notes'` | Note content root, relative to the site root |
 | `content.locales` | zh/en/de table | The note language table — [below](#contentlocales) |
 | `share` | off | Snapshot sharing — [sharing](#sharing--the-gateway-contract) |
@@ -341,10 +365,17 @@ characters never do, and off-site origins must be in `trustedOrigins`.
 plain JSON `[{ email, name, role }]`, shareable on disk with other apps on
 the same machine. The role vocabulary, the default role for first-time SSO
 sign-ins, and the admin role name are all configurable (`roles` /
-`defaultRole` / `adminRole`).
+`defaultRole` / `adminRole`). While the registry is on, **every signed-in
+route requires current membership** — a session whose user was removed
+from the list is refused (403) on its next request.
 
 - When `users.json` doesn't exist yet, admins are seeded from the
-  `ADMIN_EMAILS` env var (comma-separated).
+  `ADMIN_EMAILS` env var (comma-separated); the server refuses to start the
+  registry without at least one admin.
+- `autoRegister` (default `true`) lets a first SSO login from an allowed
+  domain join with `defaultRole`; `false` turns the registry into an
+  allow-list that only admins extend — unknown users are sent back with
+  `?login_error=not_member`.
 - Admins manage members from the account popover's **Members** panel; the
   server validates the vocabulary and enforces that at least one admin
   always remains.
@@ -434,17 +465,17 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `POST /auth/saml/callback` | public | ACS; never 500s — failures 303 to `/?login_error=<code>` |
 | `GET /auth/saml/metadata` | public | SP metadata XML (works before the cert is configured) |
 | `POST /logout` | public | Clears the session cookie |
-| `GET /meta/<id>` | public | Note metadata: file, title, `locales` (exists/current per language), demo module list |
+| `GET /meta/<id>` | public | Note metadata: file, title, `locales` (exists/current per language) |
 | `GET /notes` | public | Lightweight note list (autocomplete + link resolution) |
 | `GET /block/<id>?start&end` | signed-in | Block source `{source, hash, start, end}` (400/416) |
 | `PUT /block/<id>` | signed-in | Save `{start,end,hash,source}` (409 lock conflict / 422 MDX error) |
 | `POST /render` | signed-in | `{markdown, sanitize?, note?}` → HTML (sanitizing by default; trusted path resolves wikilinks) |
 | `GET /revisions/<id>` | signed-in | Journal records for the note (most recent 100) |
-| `POST /revert/<id>` | signed-in | `{ts}` → revert that revision (404/400/409/422) |
+| `POST /revert/<id>` | signed-in | `{id}` → revert that block revision (404/400/409/422; whole-file records 400) |
 | `POST /claude/block` | signed-in | NDJSON stream; 300 s cap; survives client disconnect |
 | `POST /claude/ask` | signed-in | NDJSON stream; 300 s cap; killed on disconnect; resumable |
 | `POST /claude/translate` | signed-in | NDJSON stream; 30 min cap; 409 if the target locale exists |
-| `GET /inbox/status` | public | `{enabled, dir, watching, seen, imported}` |
+| `GET /inbox/status` | signed-in | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | signed-in | `{path}` backfill; path confined to `inbox.dir` |
 | `GET /comments/<id>` | public | Live comments (deletions applied) |
 | `POST /comments/<id>` | signed-in | New comment (413 over 10,000 chars) |
@@ -455,8 +486,12 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `GET /share?note=<id>` | signed-in | Active shares for a note |
 | `DELETE /share/<id>` | signed-in | Revoke |
 
-Cross-cutting: request bodies are capped at 1 MiB (413 beyond); intentional
-4xx errors return `{error}` JSON without a server-side stack trace.
+Cross-cutting: JSON bodies must be sent as `application/json` and are capped
+at 1 MiB (415/413 otherwise); a state-changing request whose `Origin` (or
+`Referer`) names another site than this one or a `trustedOrigins` entry is
+refused (403) — browsers always send one, so a cookie cannot be replayed
+from a foreign page; intentional 4xx errors return `{error}` JSON, and
+unexpected failures a 500 with a reference id that the server log carries.
 
 ## Architecture & state on disk
 
@@ -466,7 +501,8 @@ astro.config.ts ──WIKI=1──▶ inkbrush() integration   (src/wiki/integra
    │                                              strings.ts = the en/zh string table)
    ├─ dev middleware /api/wiki/* → src/wiki/server/*   (ssrLoadModule — server code
    │                                                    hot-reloads too)
-   └─ initWiki(root) → optional startup pieces (the inbox watcher)
+   └─ initWiki(root, { markdown }) → the identity registry check, the site's
+                                     Markdown hooks, the inbox watcher
 
 src/lib/        pipeline-agnostic libraries: markdown-syntax (the dialect),
                 markdown (processor drop-in), content-guard, rehype-wiki-blocks
@@ -491,12 +527,17 @@ journal adds per-block audit granularity on top. All CMS state lives under
   share-dist/               cached WIKI-free build for snapshots
 ```
 
-Security posture: Claude jobs run with a locked-down toolset and a pinned
-working directory; comment HTML is sanitized server-side; block writes are
-path-validated against `content.dir` and inbox imports against `inbox.dir`;
-the Google allowlist is fail-closed; return URLs are open-redirect-guarded;
-jwt mode refuses to start without its secret; roles are re-read per request;
-request bodies are capped.
+Security posture: Claude jobs run in a throwaway workspace with file tools
+confined to it and no shell or network tools, and their output passes the
+build gate before it is written; comment HTML is sanitized server-side;
+every note, asset and inbox path is resolved to its real location and must
+stay inside `content.dir` / `inbox.dir`; writes are atomic and serialized
+in-process; OAuth uses PKCE with a browser-bound single-use state, SAML
+accepts only responses to requests this server issued; the domain
+allowlists are fail-closed; return URLs are open-redirect-guarded; jwt mode
+refuses to start without its secret; membership and roles are re-read per
+request; a mutation from a foreign `Origin` is refused; request bodies are
+capped.
 
 ## Production deployment
 
@@ -513,10 +554,10 @@ so the editing machine runs one, as a product, while readers never touch it:
   reverse proxy, `auth.dev: false` with a real provider, the content
   checkout on a persistent volume, and `autocommit` + `autopush` shipping
   every save back to the content repo, where CI rebuilds the reader site.
-- A single dev-server process comfortably serves a handful of concurrent
-  editors. (The `src/wiki/server/*` handlers are framework-free Node
-  req/res, so a standalone server + triggered rebuilds is possible in
-  principle — at the cost of instant preview; not recommended.)
+- One dev-server process serves one editing team: writes to a note are
+  serialized per file inside the process, a concurrent save of the same
+  block is refused with 409 instead of overwritten, and there is no
+  cross-process coordination — run one instance per content repository.
 
 Typical setups:
 
@@ -526,7 +567,7 @@ Typical setups:
 | Team intranet wiki | `false` | Google OAuth or SAML | as needed |
 | Public static site + private editing origin | `false` | as needed | as needed |
 
-A ready-made two-service skeleton (static reader + editing machine:
-Dockerfiles, compose examples, an entrypoint with clone-or-pull, config
-injection and stale-lock cleanup) ships in the sibling repo:
-[astro-inkstone `deploy/`](https://github.com/ventusff/astro-inkstone/tree/main/deploy).
+A two-service skeleton (static reader + editing machine: Dockerfiles,
+compose examples, an entrypoint that clones or updates the checkout, installs
+the machine's config and credentials and starts the server) ships in
+[`deploy/`](../deploy/README.md).

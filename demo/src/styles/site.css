@@ -12,6 +12,16 @@
   --accent: #22665c;
   --code-bg: #f2f1ed;
   --measure: 44rem;
+
+  /* Host-token contract: the CMS chrome reads these --color-* names and
+   * takes on the site's palette; they alias the demo's own tokens above. */
+  --color-bg: var(--bg);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-code-bg: var(--code-bg);
 }
 
 * {

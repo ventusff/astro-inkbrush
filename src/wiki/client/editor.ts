@@ -24,7 +24,7 @@ let activeCleanup: (() => void) | null = null;
 
 const cmTheme = EditorView.theme({
   '&': { fontSize: '13.5px' },
-  '.cm-content': { padding: '12px 4px', caretColor: 'var(--wiki-accent, #b6552e)' },
+  '.cm-content': { padding: '12px 4px', caretColor: 'var(--wiki-accent)' },
   '.cm-line': { padding: '0 12px' },
 });
 
@@ -51,18 +51,19 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   }
 
   const previewBody = h('div', { class: 'wiki-editor-preview' });
-  const errorBox = h('div', { class: 'wiki-editor-error', style: { display: 'none' } });
-  const saveBtn = h('button', { class: 'wiki-btn wiki-btn-primary' }, S.editor.save);
-  const cancelBtn = h('button', { class: 'wiki-btn' }, S.editor.cancel);
+  const errorBox = h('div', { class: 'wiki-editor-error', role: 'alert', hidden: true });
+  const saveBtn = h('button', { type: 'button', class: 'wiki-btn wiki-btn-primary' }, S.editor.save);
+  const cancelBtn = h('button', { type: 'button', class: 'wiki-btn' }, S.editor.cancel);
   const cmHost = h('div', { class: 'wiki-editor-cm' });
+  const title = S.editor.title(block.jsx);
 
   const shell = h(
     'div',
-    { class: 'wiki-editor' },
+    { class: 'wiki-editor', role: 'region', 'aria-label': title },
     h(
       'div',
       { class: 'wiki-editor-head' },
-      h('span', {}, S.editor.title(block.jsx)),
+      h('span', {}, title),
       h('span', { class: 'spacer' }),
       h('span', {}, `${ctx.meta.file} · L${block.start}–${block.end}`),
     ),
@@ -79,35 +80,52 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   );
 
   /* ---- live preview (server-rendered, debounced) ---- */
+  // Every edit advances the generation and cancels the pending debounce and
+  // the in-flight render, so only the newest source can reach the preview.
   let previewTimer: ReturnType<typeof setTimeout> | null = null;
-  let previewSeq = 0;
+  let previewGeneration = 0;
+  let previewRequest: AbortController | null = null;
+  const cancelPreview = (): void => {
+    previewGeneration += 1;
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = null;
+    previewRequest?.abort();
+    previewRequest = null;
+  };
   const refreshPreview = (source: string): void => {
+    cancelPreview();
+    const generation = previewGeneration;
     if (hasJsx(source)) {
       previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
       return;
     }
-    if (previewTimer) clearTimeout(previewTimer);
     previewTimer = setTimeout(async () => {
-      const seq = ++previewSeq;
+      const request = new AbortController();
+      previewRequest = request;
       try {
         // Previewing the author's own note source: any raw HTML in it is the
         // author's. The server sanitizes by default, so request raw explicitly
-        // to keep the preview identical to the real render.
-        const { html } = await api.post<{ html: string }>('/render', {
-          markdown: source,
-          sanitize: false,
-        });
-        if (seq !== previewSeq) return;
+        // to keep the preview identical to the real render. `note` resolves
+        // wikilinks relative to this note's locale.
+        const { html } = await api.post<{ html: string }>(
+          '/render',
+          { markdown: source, sanitize: false, note: ctx.meta.id },
+          { signal: request.signal },
+        );
+        if (generation !== previewGeneration) return;
         if (html.trim()) previewBody.innerHTML = html;
         else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.empty));
       } catch {
-        /* preview is best-effort */
+        /* aborted or failed: the preview is best-effort */
+      } finally {
+        if (previewRequest === request) previewRequest = null;
       }
     }, 350);
   };
 
   /* ---- editor ---- */
   const close = (): void => {
+    cancelPreview();
     view.destroy();
     shell.remove();
     block.el.style.removeProperty('display');
@@ -118,9 +136,9 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   const save = (): boolean => {
     void (async () => {
       const source = view.state.doc.toString();
-      saveBtn.setAttribute('disabled', '');
+      saveBtn.disabled = true;
       saveBtn.textContent = S.editor.validating;
-      errorBox.style.display = 'none';
+      errorBox.hidden = true;
       try {
         await api.put(`/block/${ctx.meta.id}`, {
           start: initial.start,
@@ -134,11 +152,11 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         // astro content HMR reloads the page; belt-and-braces fallback:
         setTimeout(() => window.location.reload(), 1500);
       } catch (err) {
-        saveBtn.removeAttribute('disabled');
+        saveBtn.disabled = false;
         saveBtn.textContent = S.editor.save;
         const message = err instanceof ApiError ? err.message : S.editor.saveFailed;
         errorBox.textContent = message;
-        errorBox.style.display = '';
+        errorBox.hidden = false;
         if (err instanceof ApiError && err.status === 409) toast(message, 'err');
       }
     })();
@@ -160,6 +178,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
       wikilinkCompletion(),
       EditorView.lineWrapping,
       cmTheme,
+      EditorView.contentAttributes.of({ 'aria-label': title }),
       placeholder(S.editor.placeholder),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) refreshPreview(update.state.doc.toString());

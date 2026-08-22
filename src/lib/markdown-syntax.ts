@@ -1,27 +1,19 @@
 /**
- * markdownSyntax — the Markdown dialect this CMS commits to (the
- * parser-rule layer), shared by all three consumers: the site's pages, the
- * block-save validation, and the editor preview.
+ * markdownSyntax — the Markdown dialect this CMS commits to (the parser-rule
+ * layer), shared by its three consumers: the site's pages, the save-time
+ * validation and the editor preview. One definition, so a block that
+ * validates at save time parses the same way on the page.
  *
- * Why it is written down in exactly one place: a block that passes validation
- * at save time must render the same way on the page — and "the same way"
- * depends on which parser rules are on. Copy the plugin list into every
- * site's astro.config and sooner or later one site misses a rule. (The CJK
- * rules are the classic case: without them, `**` next to CJK punctuation
- * renders as bare asterisks.)
- *
- * - GFM (tables, task lists, footnotes, autolinks, strikethrough), but a
- *   single `~` is NOT strikethrough: technical prose is full of "~2 minutes" /
- *   "~15 items", and with single-tilde enabled everything between two such
- *   approximations gets struck through — in MDX it breaks parsing outright;
+ * - GFM (tables, task lists, footnotes, autolinks, strikethrough), with a
+ *   single `~` left literal: "~2 minutes" and "~15 items" are approximations,
+ *   not a strikethrough span;
  * - CJK-friendly emphasis and strikethrough: markers hugging CJK punctuation
- *   (`**报文。**同时`) still pair up.
+ *   (`**报文。**同时`) pair up.
  *
- * Parser extensions only, no transformers — so position in a plugin list is
- * irrelevant. Guarding against leaked markers is a transformer
- * (remarkContentGuard) and mounting it is the caller's call: page builds
- * mount it, the editor preview doesn't (a half-typed asterisk is not an
- * incident).
+ * Parser extensions only, no transformers, so position in a plugin list is
+ * irrelevant. The content guard (remarkContentGuard) is a transformer and is
+ * mounted by the caller: page builds and save-time validation mount it, the
+ * editor preview does not.
  */
 import type { RemarkPlugin } from '@astrojs/markdown-remark';
 import remarkCjkFriendly from 'remark-cjk-friendly';

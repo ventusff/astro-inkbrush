@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head>
+  <meta charset="utf-8"><title>bad</title>
+  <script>fetch('/api/wiki/notes')</script>
+</head>
+<body>
+  <a href="/missing/">missing page</a>
+  <a href="/about/#nope">missing anchor on target</a>
+  <a href="#nope">missing anchor on this page</a>
+  <a href="/about/#%E0%A4%A">undecodable fragment</a>
+  <a href="/%E0%A4%A/">undecodable path</a>
+  <a href="/about/">outer <a href="/about/">nested</a></a>
+  <span class="katex-error">x</span>
+  <img srcset="/missing-1x.png 1x, /about/ 2x" alt="">
+  <div style="background: url(missing.png)"></div>
+  <p data-wiki-src="3-4">stamped</p>
+  <div>

@@ -2,35 +2,54 @@
  * /api/wiki/* — connect-style middleware entry, loaded through
  * `server.ssrLoadModule` by the wiki integration (so it gets HMR in dev).
  *
- * Tiny hand-rolled router: no framework, ~all handlers are small async
- * functions over Node's raw req/res. Streaming endpoints (claude) write
- * NDJSON chunks to the response directly.
+ * A small router over Node's raw req/res; streaming endpoints (claude)
+ * write NDJSON chunks to the response directly.
+ *
+ * Request contract:
+ *  - a route's `auth` gate: false = public; true = a signed-in user who,
+ *    when the identity registry is on, is a current member; 'admin' = a
+ *    member holding the admin role (404 while the registry is off);
+ *  - a mutating request (anything but GET/HEAD) that carries a session
+ *    cookie must come from this site: its Origin (or Referer) must be the
+ *    request's own origin or a configured trusted origin, and a JSON body
+ *    must be declared as application/json;
+ *  - malformed input (bad percent-encoding, a body that is not JSON, a body
+ *    over the limit) is a 4xx; an unexpected failure is logged with a
+ *    request id and answered with a generic 500 carrying that id.
  */
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { MeResponse, WikiUser } from '../shared/types';
+import type { MeResponse, WikiUser } from '../shared/types.ts';
 import {
+  clearOAuthCookie,
   clearSessionCookie,
   createSessionCookie,
   devLoginEnabled,
-  googleAuthUrl,
+  googleAuthStart,
+  googleAuthVerify,
   googleExchangeCode,
   googleState,
+  isSecureRequest,
   safeReturnUrl,
   sessionUser,
-} from './auth';
-import { wikiConfig } from './config';
+} from './auth.ts';
+import { wikiConfig } from './config.ts';
 import {
   addUserIfAbsent as addIdentityUserIfAbsent,
+  ensureRegistry,
   findUser as findIdentityUser,
   identityConfig,
-} from './identity';
-import { buildSaml, displayNameFromProfile, googleSamlState, samlEmailAllowed } from './saml';
-import { shareState } from './share';
-import { setProjectRoot } from './store';
+} from './identity.ts';
+import { buildSaml, displayNameFromProfile, googleSamlState, samlEmailAllowed } from './saml.ts';
+import { shareState } from './share.ts';
+import { setSiteHooks, type SiteMarkdownHooks } from './site.ts';
+import { setProjectRoot } from './store.ts';
 
 export interface ApiOptions {
   root: string;
+  /** the site's Markdown pipeline, from `inkbrush({ markdown })` */
+  markdown?: SiteMarkdownHooks | undefined;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -70,6 +89,15 @@ function on(
   });
 }
 
+/** percent-decoding that answers 400 instead of throwing on a bad sequence */
+function decodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    throw new HttpError(400, `malformed path segment: ${seg}`);
+  }
+}
+
 function matchRoute(method: string, path: string): { route: Route; params: Record<string, string> } | null {
   const segs = path.split('/').filter(Boolean);
   outer: for (const route of routes) {
@@ -79,12 +107,12 @@ function matchRoute(method: string, path: string): { route: Route; params: Recor
       const part = route.parts[i]!;
       if (part.startsWith('*')) {
         if (i >= segs.length) continue outer;
-        params[part.slice(1)] = segs.slice(i).map(decodeURIComponent).join('/');
+        params[part.slice(1)] = segs.slice(i).map(decodeSegment).join('/');
         return { route, params };
       }
       const seg = segs[i];
       if (seg === undefined) continue outer;
-      if (part.startsWith(':')) params[part.slice(1)] = decodeURIComponent(seg);
+      if (part.startsWith(':')) params[part.slice(1)] = decodeSegment(seg);
       else if (part !== seg) continue outer;
     }
     if (segs.length !== route.parts.length) continue;
@@ -115,19 +143,19 @@ export class HttpError extends Error {
   }
 }
 
-/** request body ceiling — /auth/dev and the SAML ACS are public, so an
- *  unbounded reader is a free memory-exhaustion primitive. Every current
- *  endpoint posts small JSON (biggest: a note's markdown), 1 MiB is generous. */
+/** request body ceiling; every endpoint posts small JSON (a note's markdown at most) */
 export const BODY_LIMIT = 1024 * 1024;
 
-/** buffer the request body with a hard ceiling; over the limit ⇒ 413.
- *  The stream is only paused (never destroyed) on overflow: destroying an
- *  IncomingMessage tears down the socket, and the 413 would never be sent. */
+/** buffer the request body with a hard ceiling; over the limit ⇒ 413, and
+ *  the rest of the body is drained so the response can still be sent and
+ *  the connection closed cleanly */
 async function readCapped(req: IncomingMessage, limit = BODY_LIMIT): Promise<string> {
   const declared = Number(req.headers['content-length']);
-  const tooBig = (): HttpError =>
-    new HttpError(413, `Request body too large (max ${limit} bytes)`);
-  if (Number.isFinite(declared) && declared > limit) throw tooBig();
+  const tooBig = (): HttpError => new HttpError(413, `Request body too large (max ${limit} bytes)`);
+  if (Number.isFinite(declared) && declared > limit) {
+    req.resume();
+    throw tooBig();
+  }
   return await new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -137,7 +165,8 @@ async function readCapped(req: IncomingMessage, limit = BODY_LIMIT): Promise<str
       size += chunk.length;
       if (size > limit) {
         settled = true;
-        req.pause();
+        chunks.length = 0;
+        req.resume();
         reject(tooBig());
         return;
       }
@@ -156,10 +185,17 @@ async function readCapped(req: IncomingMessage, limit = BODY_LIMIT): Promise<str
   });
 }
 
+/** a JSON body: declared as application/json, parsed, or a 400 */
 export async function readBody<T>(req: IncomingMessage): Promise<T> {
+  const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
   const text = await readCapped(req);
   if (!text) return {} as T;
-  return JSON.parse(text) as T;
+  if (type !== 'application/json') throw new HttpError(415, 'JSON bodies must be sent as application/json');
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new HttpError(400, 'Request body is not valid JSON');
+  }
 }
 
 /** application/x-www-form-urlencoded reader (SAML ACS posts) */
@@ -225,29 +261,40 @@ on('GET', '/auth/google', ({ req, res, query }) => {
   if (state === 'unconfigured') {
     return fail(res, 503, 'Google login is enabled but GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET is missing from the environment');
   }
-  res.statusCode = 302;
-  // same sanitising as the SAML login route — the return target is echoed back
-  // to us as `state` and turned into a Location header at the callback
-  res.setHeader('location', googleAuthUrl(req, safeReturnUrl(query.get('return'))));
-  res.end();
+  const start = googleAuthStart(req, safeReturnUrl(query.get('return')));
+  res.setHeader('set-cookie', start.cookie);
+  redirect(res, 302, start.url);
 });
 
 on('GET', '/auth/google/callback', async ({ req, res, query }) => {
   const code = query.get('code');
   if (!code) return fail(res, 400, 'missing code');
   try {
-    const user = await googleExchangeCode(req, code);
-    res.setHeader('set-cookie', await createSessionCookie(user, req));
-    res.statusCode = 302;
-    // `state` round-trips through the IdP ⇒ attacker-controlled: same
-    // whitelist as the SAML callback (a bare startsWith('/') would wave
-    // //evil.com through)
-    res.setHeader('location', safeReturnUrl(query.get('state')));
-    res.end();
+    const { returnTo, verifier } = googleAuthVerify(req, query.get('state'));
+    const user = await googleExchangeCode(req, code, verifier);
+    await provision(user);
+    res.setHeader('set-cookie', [await createSessionCookie(user, req), clearOAuthCookie(req)]);
+    redirect(res, 302, returnTo);
   } catch (err) {
+    res.setHeader('set-cookie', clearOAuthCookie(req));
     fail(res, 403, err instanceof Error ? err.message : 'Google sign-in failed');
   }
 });
+
+/** first SSO login registers the user (identity.autoRegister); the
+ *  registry's name for a known user wins over the provider's */
+async function provision(user: WikiUser): Promise<void> {
+  const identity = identityConfig();
+  if (!identity) return;
+  if (identity.autoRegister) {
+    const record = await addIdentityUserIfAbsent(user.email, user.name);
+    if (record.name.trim()) user.name = record.name;
+  } else {
+    const record = findIdentityUser(user.email);
+    if (!record) throw new Error(`${user.email} is not a member of this site`);
+    if (record.name.trim()) user.name = record.name;
+  }
+}
 
 /* —— Google Workspace SAML SSO (SP-initiated; see ./saml.ts) —— */
 
@@ -312,14 +359,12 @@ on('POST', '/auth/saml/callback', async ({ req, res }) => {
     // email-domain allowlist, enforced server-side
     if (!samlEmailAllowed(email)) return errorRedirect('wrong_domain');
 
-    // when the identity module is on: first login auto-registers with
-    // defaultRole (an existing registry name wins over the SAML profile name)
-    if (identityConfig()) {
-      const record = addIdentityUserIfAbsent(email, name);
-      if (record.name.trim()) name = record.name;
-    }
-
     const user: WikiUser = { name, email, provider: 'google-saml' };
+    try {
+      await provision(user);
+    } catch {
+      return errorRedirect('not_member');
+    }
     res.setHeader('set-cookie', await createSessionCookie(user, req));
     redirect(res, 303, safeReturnUrl(relayState));
   } catch (err) {
@@ -348,12 +393,12 @@ on('POST', '/logout', ({ req, res }) => {
 
 /* ---------------- feature routes (registered by modules) ---------------- */
 
-import { registerClaudeRoutes } from './claude';
-import { registerCommentRoutes } from './comments';
-import { registerIdentityRoutes } from './identity';
-import { registerInboxRoutes, startInboxWatcher } from './obsidian';
-import { registerShareRoutes } from './share';
-import { registerSourceRoutes } from './source';
+import { registerClaudeRoutes } from './claude.ts';
+import { registerCommentRoutes } from './comments.ts';
+import { registerIdentityRoutes } from './identity.ts';
+import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
+import { registerShareRoutes } from './share.ts';
+import { registerSourceRoutes } from './source.ts';
 
 registerSourceRoutes(on);
 registerClaudeRoutes(on);
@@ -368,15 +413,34 @@ export type RouteRegistrar = typeof on;
 
 /**
  * one-time server-side init, called by the integration at astro:server:setup:
- * pins the project root, then starts whatever the deployment config enables
- * (currently just the optional Obsidian inbox watcher).
+ * pins the project root and the site hooks, resolves the config (so a
+ * misconfiguration fails at startup, not on the first request), verifies the
+ * identity registry is usable, then starts what the deployment enables.
  */
-export function initWiki(root: string): void {
+export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): void {
   setProjectRoot(root);
-  // resolve the config eagerly so misconfiguration (e.g. session.format 'jwt'
-  // without AUTH_SECRET) fails loudly at startup, not on the first request
+  setSiteHooks(opts.markdown);
   wikiConfig();
+  ensureRegistry();
   startInboxWatcher();
+}
+
+/** the request's own origin, as the browser would send it */
+function requestOrigin(req: IncomingMessage): string {
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host = (req.headers['x-forwarded-host'] ?? req.headers.host ?? '') as string;
+  return `${proto}://${host.split(',')[0]!.trim()}`;
+}
+
+/** a cookie-authenticated mutation must originate from this site (or a
+ *  trusted origin); a request with no Origin/Referer is not a browser form post */
+function crossSite(req: IncomingMessage): boolean {
+  const method = req.method ?? 'GET';
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+  const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : null);
+  if (!origin) return false;
+  const allowed = new Set([requestOrigin(req), ...wikiConfig().auth.session.trustedOrigins]);
+  return !allowed.has(origin);
 }
 
 export async function handleApi(
@@ -385,24 +449,22 @@ export async function handleApi(
   opts: ApiOptions,
 ): Promise<void> {
   setProjectRoot(opts.root);
+  setSiteHooks(opts.markdown);
   const url = new URL(req.url ?? '/', 'http://local');
   const path = url.pathname.replace(/^\/api\/wiki/, '') || '/';
-  const matched = matchRoute(req.method ?? 'GET', path);
-  if (!matched) return fail(res, 404, `no route: ${req.method} ${path}`);
-  // the auth gate lives INSIDE the try: it touches the session and the identity
-  // registry, both of which may throw (corrupt users.json ⇒ loud refusal)
   try {
+    const matched = matchRoute(req.method ?? 'GET', path);
+    if (!matched) return fail(res, 404, `no route: ${req.method} ${path}`);
+    if (crossSite(req)) return fail(res, 403, 'Cross-site request refused');
     const user = await sessionUser(req);
+    const identity = identityConfig();
     if (matched.route.auth === 'admin') {
-      // admin surface only exists when the identity module is on
-      if (!identityConfig()) return fail(res, 404, `no route: ${req.method} ${path}`);
+      if (!identity) return fail(res, 404, `no route: ${req.method} ${path}`);
       if (!user) return fail(res, 401, 'Sign in required');
-      const record = findIdentityUser(user.email);
-      if (record?.role !== identityConfig()?.adminRole) {
-        return fail(res, 403, 'Admin only');
-      }
-    } else if (matched.route.auth && !user) {
-      return fail(res, 401, 'Sign in required');
+      if (findIdentityUser(user.email)?.role !== identity.adminRole) return fail(res, 403, 'Admin only');
+    } else if (matched.route.auth) {
+      if (!user) return fail(res, 401, 'Sign in required');
+      if (identity && !findIdentityUser(user.email)) return fail(res, 403, 'Not a member of this site');
     }
     await matched.route.handler({ req, res, params: matched.params, query: url.searchParams, user });
   } catch (err) {
@@ -412,8 +474,9 @@ export async function handleApi(
       else res.end();
       return;
     }
-    console.error('[wiki api]', err);
-    if (!res.headersSent) fail(res, 500, err instanceof Error ? err.message : 'internal error');
+    const id = randomUUID().slice(0, 8);
+    console.error(`[wiki api] ${req.method} ${path} → 500 (${id})`, err);
+    if (!res.headersSent) fail(res, 500, `Internal error (${id})`);
     else res.end();
   }
 }

@@ -1,30 +1,34 @@
 /**
- * Optional identity registry — a file-based users.json (no database, ever).
+ * Optional identity registry — a file-based users.json (no database).
  * Off unless inkbrush.config.ts sets `identity: { dir }`. The file format is
- * plain JSON: `[{ "email", "name", "role" }]`, so several apps on one
- * machine can share a single registry on disk.
+ * plain JSON, `[{ "email", "name", "role" }]`, so several apps on one
+ * machine can share one registry on disk.
+ *
+ * With the registry on, membership is authorization: every signed-in
+ * request must belong to a current member (the router enforces this), and
+ * admin routes to a member holding the admin role. Roles never enter the
+ * session token — every check re-reads users.json, so a change or a removal
+ * takes effect on the next request.
  *
  * Invariants (server-enforced):
  *  - roles are validated against the configured vocabulary (identity.roles);
- *  - at least one user with the adminRole must always remain;
- *  - writes are atomic (tmp + rename). All fs ops are synchronous, so a
- *    read-modify-write never interleaves within one process.
+ *  - at least one user with the adminRole must always exist — a registry
+ *    cannot be created without one (ADMIN_EMAILS seeds the first admins
+ *    when users.json is missing; an empty seed is a startup error);
+ *  - writes are atomic, and a read-modify-write holds the file's lock.
  *
- * Seeding: when users.json is missing, the ADMIN_EMAILS env var (comma
- * separated) seeds the first admin(s). SSO first-login auto-provisions new
- * users with defaultRole (addUserIfAbsent — called from the SAML callback).
- *
- * Roles never enter the session token: every check re-reads users.json, so
- * role changes / removals take effect immediately.
+ * SSO first login registers the user with defaultRole when
+ * `identity.autoRegister` is on (default); otherwise unknown users are
+ * refused at login.
  */
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { IdentityUser, IdentityUsersResponse } from '../shared/types';
-import { wikiConfig } from './config';
-import type { RouteRegistrar } from './index';
-import { fail, json, readBody } from './index';
+import type { IdentityUser, IdentityUsersResponse } from '../shared/types.ts';
+import { wikiConfig } from './config.ts';
+import type { RouteRegistrar } from './index.ts';
+import { fail, json, readBody } from './index.ts';
+import { withLock, writeFileAtomic } from './store.ts';
 
 type IdentityConf = NonNullable<ReturnType<typeof wikiConfig>['identity']>;
 
@@ -40,36 +44,37 @@ function usersFile(conf: IdentityConf): string {
   return join(conf.dir, 'users.json');
 }
 
-function writeUsersAtomic(conf: IdentityConf, users: IdentityUser[]): void {
-  mkdirSync(conf.dir, { recursive: true });
-  const file = usersFile(conf);
-  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(tmp, JSON.stringify(users, null, 2));
-  renameSync(tmp, file);
+function writeUsers(conf: IdentityConf, users: IdentityUser[]): void {
+  writeFileAtomic(usersFile(conf), JSON.stringify(users, null, 2));
 }
 
-/** first run: seed users.json from ADMIN_EMAILS (only when the file is
- *  missing; an empty list still writes the file) */
+/** first run: seed users.json from ADMIN_EMAILS; a missing file with no
+ *  seed is an error, never an empty registry */
 function ensureSeeded(conf: IdentityConf): void {
   if (existsSync(usersFile(conf))) return;
   const admins = (process.env['ADMIN_EMAILS'] ?? '')
     .split(',')
     .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  writeUsersAtomic(
+    .filter((e) => e.includes('@'));
+  if (admins.length === 0) {
+    throw new Error(
+      `identity registry: ${usersFile(conf)} does not exist and ADMIN_EMAILS names no administrator — set ADMIN_EMAILS to seed the first admin`,
+    );
+  }
+  writeUsers(
     conf,
     admins.map((email) => ({ email, name: email.split('@')[0] ?? email, role: conf.adminRole })),
   );
 }
 
-/**
- * Read the registry. A damaged users.json must NEVER degrade into "empty
- * registry": the next SSO login would then auto-provision one user and
- * writeUsersAtomic would rewrite the file down to that single entry — the whole
- * team's roles silently gone. So parse failures throw; only a genuinely missing
- * file is empty, and that case is handled by ensureSeeded above (which creates
- * it). Repair path: fix users.json on disk (or restore it from git/backup).
- */
+/** startup check: the registry (when on) exists or can be seeded, and parses */
+export function ensureRegistry(): void {
+  const conf = identityConfig();
+  if (conf) readUsers(conf);
+}
+
+/** the registry; a file that exists but does not parse is an error, never
+ *  an empty list (the next write would erase every member) */
 function readUsers(conf: IdentityConf): IdentityUser[] {
   ensureSeeded(conf);
   const file = usersFile(conf);
@@ -77,14 +82,9 @@ function readUsers(conf: IdentityConf): IdentityUser[] {
   try {
     parsed = JSON.parse(readFileSync(file, 'utf8'));
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    console.error(`[wiki identity] users.json unreadable/unparsable — refusing to continue with an empty registry: ${file} — ${reason}`);
-    throw new Error(`identity registry unreadable (${file}): ${reason}`);
+    throw new Error(`identity registry unreadable (${file}): ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!Array.isArray(parsed)) {
-    console.error(`[wiki identity] users.json is not an array — refusing to continue with an empty registry: ${file}`);
-    throw new Error(`identity registry is not an array (${file})`);
-  }
+  if (!Array.isArray(parsed)) throw new Error(`identity registry is not an array (${file})`);
   return parsed as IdentityUser[];
 }
 
@@ -135,28 +135,32 @@ function validateUsers(conf: IdentityConf, input: unknown): IdentityUser[] {
 }
 
 /** full overwrite of the registry (vocabulary + at-least-one-admin enforced server-side) */
-export function saveUsers(input: unknown): IdentityUser[] {
+export function saveUsers(input: unknown): Promise<IdentityUser[]> {
   const conf = identityConfig();
   if (!conf) throw new Error('identity module is off');
-  ensureSeeded(conf);
-  const users = validateUsers(conf, input);
-  writeUsersAtomic(conf, users);
-  return users;
+  return withLock(usersFile(conf), () => {
+    ensureSeeded(conf);
+    const users = validateUsers(conf, input);
+    writeUsers(conf, users);
+    return users;
+  });
 }
 
-/** first SSO login: new users auto-register with defaultRole; existing users
- *  are returned unchanged */
-export function addUserIfAbsent(email: string, name: string): IdentityUser {
+/** first SSO login: an unknown user is registered with defaultRole; a known
+ *  one is returned unchanged */
+export function addUserIfAbsent(email: string, name: string): Promise<IdentityUser> {
   const conf = identityConfig();
   if (!conf) throw new Error('identity module is off');
-  const users = readUsers(conf);
-  const lower = email.toLowerCase();
-  const found = users.find((u) => u.email.toLowerCase() === lower);
-  if (found) return found;
-  const user: IdentityUser = { email: lower, name, role: conf.defaultRole };
-  users.push(user);
-  writeUsersAtomic(conf, users);
-  return user;
+  return withLock(usersFile(conf), () => {
+    const users = readUsers(conf);
+    const lower = email.toLowerCase();
+    const found = users.find((u) => u.email.toLowerCase() === lower);
+    if (found) return found;
+    const user: IdentityUser = { email: lower, name, role: conf.defaultRole };
+    users.push(user);
+    writeUsers(conf, users);
+    return user;
+  });
 }
 
 /* ---------------- routes ---------------- */
@@ -184,7 +188,7 @@ export function registerIdentityRoutes(on: RouteRegistrar): void {
     async ({ req, res }) => {
       const { users } = await readBody<{ users?: unknown }>(req);
       try {
-        json(res, 200, { users: saveUsers(users) });
+        json(res, 200, { users: await saveUsers(users) });
       } catch (err) {
         if (err instanceof IdentityValidationError) return fail(res, 400, err.message);
         throw err;

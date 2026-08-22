@@ -1,43 +1,57 @@
 /**
- * Bridge to the claude-cli running on the host machine.
+ * Bridge to the claude CLI on the host machine.
  *
- * Every job = one `claude -p … --output-format stream-json` child process in
- * the repo root, its event stream mapped to the wiki's NDJSON protocol
- * (ClaudeStreamEvent) and piped to the browser over a chunked fetch response.
+ * Every job is one `claude -p … --output-format stream-json` child process,
+ * its event stream mapped to the wiki's NDJSON protocol (ClaudeStreamEvent)
+ * and piped to the browser over a chunked response.
  *
- *  - block edit / translate: claude gets Edit/Write tools (acceptEdits) but
- *    never Bash; jobs keep running server-side even if the browser tab goes
- *    away, and the resulting file change is journaled as a revision.
- *  - ask: read-only toolset, killed when the client disconnects, session_id
- *    captured so the chat panel can --resume follow-ups.
+ * Isolation: a job never runs in the project. It runs in a throwaway
+ * workspace (./workspace.ts) that holds only the note's directory and the
+ * companions the site's config names, its file tools are confined to that
+ * directory by permission rules (Read/Edit/Write on `./**` only, no Bash, no
+ * Grep/Glob, no network tools), and what it changed is carried back into
+ * the project only after every changed note validates — then journaled and
+ * autocommitted. A failed job, an invalid result or a change outside the
+ * scope leaves the project untouched and is reported to the browser as an
+ * error.
  *
- * Jobs are serialized per note (in-memory queue) so two edits can't race.
+ *  - block edit / translate: keep running server-side if the browser tab
+ *    goes away; the result is applied when the job ends.
+ *  - ask: read-only, killed when the client disconnects; the session id is
+ *    captured so the chat panel can `--resume` follow-ups.
+ *
+ * Jobs are serialized per note (in-memory queue) so two edits cannot race.
  */
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import type { ClaudeStreamEvent } from '../shared/types';
-import { wikiConfig } from './config';
-import type { RouteRegistrar } from './index';
-import { fail, ndjsonStream, readBody } from './index';
-import { askPrompt, blockEditPrompt, translatePrompt } from './prompts';
-import { autocommit, journalRevision, noteFile, noteMeta } from './source';
-import { projectRoot } from './store';
+import type { ClaudeStreamEvent } from '../shared/types.ts';
+import { wikiConfig } from './config.ts';
+import type { RouteRegistrar } from './index.ts';
+import { fail, ndjsonStream, readBody } from './index.ts';
+import { askPrompt, blockEditPrompt, translatePrompt } from './prompts.ts';
+import { autocommit, journalRevision, noteDir, noteFile, noteMeta, validateSource } from './source.ts';
+import { projectRoot } from './store.ts';
+import { createWorkspace, type Workspace, type WorkspaceChange } from './workspace.ts';
 
 /* ---------------- per-note job queue ---------------- */
 
-const queues = new Map<string, Promise<void>>();
+const queues = new Map<string, Promise<unknown>>();
 
-function enqueue(noteId: string, job: () => Promise<void>): Promise<void> {
+function enqueue<T>(noteId: string, job: () => Promise<T>): Promise<T> {
   const prev = queues.get(noteId) ?? Promise.resolve();
   const next = prev.then(job, job);
   queues.set(noteId, next);
-  // drop the entry once the queue drains (the Map used to only grow — every
-  // note ever touched kept a settled Promise until process exit)
-  next.finally(() => {
-    if (queues.get(noteId) === next) queues.delete(noteId);
-  });
+  // the entry is dropped once the queue drains
+  next.then(
+    () => {
+      if (queues.get(noteId) === next) queues.delete(noteId);
+    },
+    () => {
+      if (queues.get(noteId) === next) queues.delete(noteId);
+    },
+  );
   return next;
 }
 
@@ -59,18 +73,18 @@ interface StreamJsonLine {
   };
 }
 
-/** activity-log label for one tool call, e.g. "Read guides/intro/index.mdx"
- *  (paths shortened to repo-relative; the client renders the label verbatim) */
-function toolLabel(name: string, input: Record<string, unknown> | undefined): string {
+/** activity-log label for one tool call: "Read guides/intro/index.mdx" */
+function toolLabel(name: string, input: Record<string, unknown> | undefined, cwd: string): string {
   const path = typeof input?.['file_path'] === 'string' ? (input['file_path'] as string) : '';
-  const rootPrefix = projectRoot().replace(/\/$/, '');
-  const short = path.startsWith(rootPrefix) ? path.slice(rootPrefix.length + 1) : path;
+  const short = path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path;
   return `${name} ${short}`.trim();
 }
 
 export interface ClaudeJobOptions {
   prompt: string;
   mode: 'edit' | 'readonly';
+  /** the job's working directory: the workspace */
+  cwd: string;
   resume?: string | undefined;
   timeoutMs: number;
   /** kill the child when the HTTP client disconnects */
@@ -79,7 +93,17 @@ export interface ClaudeJobOptions {
   clientClosed: AbortSignal;
 }
 
-export function runClaudeJob(opts: ClaudeJobOptions): Promise<void> {
+export type ClaudeJobResult =
+  | { ok: true; summary: string; sessionId: string | null }
+  | { ok: false; error: string; sessionId: string | null };
+
+/** file-tool permission rules, confined to the working directory */
+const READ_RULES = ['Read(./**)'];
+const EDIT_RULES = ['Read(./**)', 'Edit(./**)', 'Write(./**)', 'MultiEdit(./**)'];
+const DENIED_TOOLS = 'Bash,Grep,Glob,WebSearch,WebFetch,NotebookEdit,Agent,Task';
+
+/** Run one job; never rejects — every failure is a result with `ok: false`. */
+export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
   return new Promise((resolvePromise) => {
     const { bin, model } = wikiConfig().claude;
     const args = [
@@ -90,49 +114,76 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<void> {
       '--verbose',
       '--include-partial-messages',
       '--disallowedTools',
-      'Bash,WebSearch,WebFetch,NotebookEdit',
-      ...(opts.mode === 'edit'
-        ? ['--allowedTools', 'Read,Grep,Glob,Edit,Write', '--permission-mode', 'acceptEdits']
-        : ['--allowedTools', 'Read,Grep,Glob']),
+      DENIED_TOOLS,
+      '--allowedTools',
+      (opts.mode === 'edit' ? EDIT_RULES : READ_RULES).join(','),
       ...(opts.resume ? ['--resume', opts.resume] : []),
       ...(model ? ['--model', model] : []),
     ];
-    // strip the nested-session marker so the child behaves like a fresh CLI
+    // the child is a fresh CLI, not a nested session
     const env = { ...process.env };
     delete env['CLAUDECODE'];
     delete env['CLAUDE_CODE_ENTRYPOINT'];
 
-    const child = spawn(bin, args, { cwd: projectRoot(), env, stdio: ['ignore', 'pipe', 'pipe'] });
-
     let sessionId: string | null = null;
     let finished = false;
     let stderrTail = '';
-    const finish = (event?: ClaudeStreamEvent): void => {
+    const finish = (result: ClaudeJobResult): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      if (event) opts.onEvent(event);
-      resolvePromise();
+      resolvePromise(result);
     };
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(bin, args, { cwd: opts.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      resolvePromise({ ok: false, error: `Could not start the claude CLI: ${(err as Error).message}`, sessionId: null });
+      return;
+    }
 
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      finish({ kind: 'error', message: `Job timed out (${Math.round(opts.timeoutMs / 1000)}s) and was terminated` });
+      finish({ ok: false, error: `Job timed out (${Math.round(opts.timeoutMs / 1000)}s) and was terminated`, sessionId });
     }, opts.timeoutMs);
 
     if (opts.killOnDisconnect) {
       opts.clientClosed.addEventListener('abort', () => {
         child.kill('SIGTERM');
-        finish();
+        finish({ ok: false, error: 'Client disconnected', sessionId });
       });
     }
 
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr!.on('data', (chunk: Buffer) => {
       stderrTail = (stderrTail + chunk.toString()).slice(-2000);
     });
 
+    const handleLine = (line: StreamJsonLine): void => {
+      if (finished) return;
+      if (line.type === 'system' && line.subtype === 'init' && line.session_id) {
+        sessionId = line.session_id;
+        opts.onEvent({ kind: 'init', sessionId });
+      } else if (line.type === 'stream_event') {
+        const delta = line.event?.delta;
+        if (line.event?.type === 'content_block_delta' && delta?.type === 'text_delta' && delta.text) {
+          opts.onEvent({ kind: 'text', text: delta.text });
+        }
+      } else if (line.type === 'assistant') {
+        for (const block of line.message?.content ?? []) {
+          if (block.type === 'tool_use' && block.name) {
+            opts.onEvent({ kind: 'tool', label: toolLabel(block.name, block.input, opts.cwd) });
+          }
+        }
+      } else if (line.type === 'result') {
+        const id = line.session_id ?? sessionId;
+        if (line.is_error) finish({ ok: false, error: line.result || 'The job reported an error', sessionId: id });
+        else finish({ ok: true, summary: line.result ?? '', sessionId: id });
+      }
+    };
+
     let buffer = '';
-    child.stdout.on('data', (chunk: Buffer) => {
+    child.stdout!.on('data', (chunk: Buffer) => {
       buffer += chunk.toString();
       let nl: number;
       while ((nl = buffer.indexOf('\n')) >= 0) {
@@ -149,54 +200,50 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<void> {
       }
     });
 
-    const handleLine = (line: StreamJsonLine): void => {
-      if (finished) return;
-      if (line.type === 'system' && line.subtype === 'init' && line.session_id) {
-        sessionId = line.session_id;
-        opts.onEvent({ kind: 'init', sessionId });
-      } else if (line.type === 'stream_event') {
-        const delta = line.event?.delta;
-        if (line.event?.type === 'content_block_delta' && delta?.type === 'text_delta' && delta.text) {
-          opts.onEvent({ kind: 'text', text: delta.text });
-        }
-      } else if (line.type === 'assistant') {
-        for (const block of line.message?.content ?? []) {
-          if (block.type === 'tool_use' && block.name) {
-            opts.onEvent({ kind: 'tool', label: toolLabel(block.name, block.input) });
-          }
-        }
-      } else if (line.type === 'result') {
-        finish({
-          kind: 'result',
-          ok: !line.is_error,
-          summary: line.result ?? '',
-          sessionId: line.session_id ?? sessionId,
-        });
-      }
-    };
-
     child.on('error', (err) => {
-      finish({ kind: 'error', message: `Could not start the claude CLI: ${err.message} (set WIKI_CLAUDE_BIN to point at it)` });
+      finish({
+        ok: false,
+        error: `Could not start the claude CLI: ${err.message} (set WIKI_CLAUDE_BIN to point at it)`,
+        sessionId,
+      });
     });
     child.on('close', (code) => {
-      if (!finished) {
-        finish({
-          kind: 'error',
-          message: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
-        });
-      }
+      finish({
+        ok: false,
+        error: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
+        sessionId,
+      });
     });
   });
 }
 
-/* ---------------- revision journaling for edit jobs ---------------- */
+/* ---------------- scope, validation, journaling ---------------- */
 
-function snapshot(relFile: string): string {
-  try {
-    return readFileSync(join(projectRoot(), relFile), 'utf8');
-  } catch {
-    return '';
+/** project-relative paths an edit job may read and change for `noteId` */
+function jobScope(noteId: string, extraDirs: string[] = []): string[] {
+  const located = noteFile(noteId);
+  const scope = new Set<string>(extraDirs);
+  if (located) {
+    scope.add(dirname(located.rel));
+    const companions = wikiConfig().claude.companions;
+    if (companions) {
+      const source = readFileSync(located.file, 'utf8');
+      for (const rel of companions({ id: noteId, file: located.rel, dir: dirname(located.rel), source })) {
+        scope.add(rel.replace(/\/+$/, ''));
+      }
+    }
   }
+  return [...scope];
+}
+
+/** every changed note must build; returns the first problem or null */
+async function validateChanges(changes: WorkspaceChange[]): Promise<string | null> {
+  for (const change of changes) {
+    if (change.content === null || !/\.(md|mdx)$/.test(change.rel)) continue;
+    const problem = await validateSource(change.rel, change.content);
+    if (problem) return `${change.rel}: ${problem}`;
+  }
+  return null;
 }
 
 /** journal only the changed line span (common prefix/suffix trimmed) */
@@ -227,6 +274,74 @@ function journalFileDiff(
   });
 }
 
+/**
+ * Run an edit job in a workspace of `scope`, then validate, apply, journal
+ * and commit its changes. Every outcome is reported on the stream.
+ */
+async function runEditJob(opts: {
+  noteId: string;
+  scope: string[];
+  prompt: string;
+  timeoutMs: number;
+  stream: { write: (e: ClaudeStreamEvent) => void };
+  clientClosed: AbortSignal;
+  user: { email: string; name: string };
+  via: 'claude' | 'translate';
+  commitMessage: string;
+  /** the note the journal entry is about, and its project-relative file */
+  journalNote: string;
+  journalFile: string;
+}): Promise<void> {
+  const { stream } = opts;
+  let ws: Workspace;
+  try {
+    ws = createWorkspace(opts.scope);
+  } catch (err) {
+    stream.write({ kind: 'error', message: `Could not prepare the workspace: ${(err as Error).message}` });
+    return;
+  }
+  try {
+    const result = await runClaudeJob({
+      prompt: opts.prompt,
+      mode: 'edit',
+      cwd: ws.dir,
+      timeoutMs: opts.timeoutMs,
+      killOnDisconnect: false,
+      onEvent: (event) => stream.write(event),
+      clientClosed: opts.clientClosed,
+    });
+    if (!result.ok) {
+      stream.write({ kind: 'error', message: `${result.error} — nothing was changed` });
+      return;
+    }
+    const changes = ws.changes();
+    if (changes.length === 0) {
+      stream.write({ kind: 'result', ok: true, summary: result.summary || 'No change was needed.', sessionId: result.sessionId });
+      return;
+    }
+    const problem = await validateChanges(changes);
+    if (problem) {
+      stream.write({ kind: 'error', message: `The result would not build — nothing was changed: ${problem}` });
+      return;
+    }
+    const journaled = changes.find((c) => c.rel === opts.journalFile);
+    const journalAbs = join(projectRoot(), opts.journalFile);
+    const before = journaled && existsSync(journalAbs) ? readFileSync(journalAbs, 'utf8') : '';
+    ws.apply(changes);
+    if (journaled && journaled.content !== null) {
+      journalFileDiff(opts.journalNote, before, journaled.content, opts.user.email, opts.via);
+    }
+    await autocommit(
+      [...new Set(changes.map((c) => dirname(c.rel)))],
+      opts.commitMessage,
+      opts.user.name,
+    );
+    stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
+  } finally {
+    ws.destroy();
+  }
+}
+
 /* ---------------- routes ---------------- */
 
 export function registerClaudeRoutes(on: RouteRegistrar): void {
@@ -243,24 +358,27 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const located = noteFile(id);
       if (!meta || !located) return fail(res, 404, 'Note not found');
       const lines = readFileSync(located.file, 'utf8').split('\n');
+      if (start! < 1 || end! < start! || end! > lines.length) return fail(res, 416, 'line range outside the file');
       const source = lines.slice(start! - 1, end).join('\n');
+      const scope = jobScope(id);
       const stream = ndjsonStream(res);
       const abort = new AbortController();
       res.on('close', () => abort.abort());
-      await enqueue(id, async () => {
-        const before = snapshot(meta.file);
-        await runClaudeJob({
-          prompt: blockEditPrompt({ meta, start: start!, end: end!, source, instruction: instruction! }),
-          mode: 'edit',
+      await enqueue(id, () =>
+        runEditJob({
+          noteId: id,
+          scope,
+          prompt: blockEditPrompt({ meta, start: start!, end: end!, source, instruction: instruction!, companions: scope.filter((s) => s !== dirname(located.rel)) }),
           timeoutMs: 300_000,
-          killOnDisconnect: false,
-          onEvent: (event) => stream.write(event),
+          stream,
           clientClosed: abort.signal,
-        });
-        journalFileDiff(id, before, snapshot(meta.file), user!.email, 'claude');
-        // whole note dir: claude may also touch co-located demo .ts files
-        await autocommit(dirname(meta.file), `wiki: ${id} L${start}-${end} claude block edit`, user!.name);
-      });
+          user: user!,
+          via: 'claude',
+          commitMessage: `wiki: ${id} L${start}-${end} claude block edit`,
+          journalNote: id,
+          journalFile: located.rel,
+        }),
+      );
       stream.close();
     },
     { auth: true },
@@ -269,7 +387,7 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
   on(
     'POST',
     '/claude/ask',
-    async ({ req, res, user: _user }) => {
+    async ({ req, res }) => {
       const body = await readBody<{ id?: string; message?: string; sessionId?: string }>(req);
       const { id, message, sessionId } = body;
       if (!id || !message?.trim()) return fail(res, 400, 'missing id/message');
@@ -280,16 +398,24 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       res.on('close', () => abort.abort());
       // follow-ups on a resumed session skip the scaffold prompt
       const prompt = sessionId ? message! : askPrompt({ meta, message: message! });
-      await runClaudeJob({
-        prompt,
-        mode: 'readonly',
-        resume: sessionId,
-        timeoutMs: 300_000,
-        killOnDisconnect: true,
-        onEvent: (event) => stream.write(event),
-        clientClosed: abort.signal,
-      });
-      stream.close();
+      const ws = createWorkspace(jobScope(id));
+      try {
+        const result = await runClaudeJob({
+          prompt,
+          mode: 'readonly',
+          cwd: ws.dir,
+          resume: sessionId,
+          timeoutMs: 300_000,
+          killOnDisconnect: true,
+          onEvent: (event) => stream.write(event),
+          clientClosed: abort.signal,
+        });
+        if (result.ok) stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
+        else stream.write({ kind: 'error', message: result.error });
+      } finally {
+        ws.destroy();
+        stream.close();
+      }
     },
     { auth: true },
   );
@@ -302,7 +428,8 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const { id } = body;
       if (!id) return fail(res, 400, 'missing id');
       const meta = noteMeta(id);
-      if (!meta) return fail(res, 404, 'Note not found');
+      const located = noteFile(id);
+      if (!meta || !located) return fail(res, 404, 'Note not found');
       // default target: the default (unprefixed) locale — or, when the note
       // is already in it, the first other locale of the table
       const locales = wikiConfig().content.locales;
@@ -313,47 +440,33 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const target = meta.locales.find((l) => l.code === targetLang);
       if (!target) return fail(res, 400, `Unsupported target language: ${targetLang}`);
       if (target.exists) return fail(res, 409, `That language version already exists: ${target.id}`);
-      const targetId = target.id;
+      const targetDirAbs = noteDir(target.id);
+      if (!targetDirAbs) return fail(res, 400, `Invalid target id: ${target.id}`);
+      const targetDirRel = join(wikiConfig().content.dir, target.id);
+      const scope = jobScope(id, [targetDirRel]);
       const stream = ndjsonStream(res);
       const abort = new AbortController();
       res.on('close', () => abort.abort());
-      await enqueue(id, async () => {
-        await runClaudeJob({
-          prompt: translatePrompt({ meta, targetId, targetLang }),
-          mode: 'edit',
+      await enqueue(id, () =>
+        runEditJob({
+          noteId: id,
+          scope,
+          prompt: translatePrompt({
+            meta,
+            targetId: target.id,
+            targetLang,
+            companions: scope.filter((s) => s !== dirname(located.rel) && s !== targetDirRel),
+          }),
           timeoutMs: 1_800_000,
-          killOnDisconnect: false,
-          onEvent: (event) => stream.write(event),
+          stream,
           clientClosed: abort.signal,
-        });
-        const targetMeta = noteMeta(targetId);
-        if (targetMeta) {
-          journalFileDiff(targetId, '', snapshot(targetMeta.file), user!.email, 'translate');
-          // target dir (new note) + source dir (translate also fills the demo
-          // .ts ctx.t dictionaries co-located with the base note)
-          await autocommit(
-            [dirname(targetMeta.file), dirname(meta.file)],
-            `wiki: ${targetId} AI translation (from ${id})`,
-            user!.name,
-          );
-          // post-write syntax gate: a broken translation must be flagged loudly
-          if (targetMeta.file.endsWith('.mdx')) {
-            const { validateMdx } = await import('./source');
-            const error = await validateMdx(snapshot(targetMeta.file));
-            if (error) {
-              stream.write({
-                kind: 'error',
-                message: `Translation written to ${targetMeta.file}, but MDX compilation failed: ${error}`,
-              } satisfies ClaudeStreamEvent);
-            }
-          }
-        } else {
-          stream.write({
-            kind: 'error',
-            message: `Job finished but the target file was not created (${targetId})`,
-          } satisfies ClaudeStreamEvent);
-        }
-      });
+          user: user!,
+          via: 'translate',
+          commitMessage: `wiki: ${target.id} AI translation (from ${id})`,
+          journalNote: target.id,
+          journalFile: `${targetDirRel}/index.${located.rel.endsWith('.md') ? 'md' : 'mdx'}`,
+        }),
+      );
       stream.close();
     },
     { auth: true },

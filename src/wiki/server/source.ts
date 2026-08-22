@@ -1,27 +1,37 @@
 /**
- * Note source access: id → file resolution, line-range block read/patch with
- * optimistic locking, whole-file MDX compile validation before any write, and
- * the append-only revisions journal (.wiki/data/revisions.ndjson).
+ * Note source access: id → file resolution inside the content root, line-range
+ * block read/patch with optimistic locking, whole-file validation before any
+ * write, and the append-only revisions journal (.wiki/data/revisions.ndjson).
  *
- * Edit history is two complementary layers (user decision): the journal =
- * fine-grained per-block audit log; git in the CONTENT repo = durable
- * versioning/backup. inkbrush.config.ts `autocommit` makes a git commit per save
- * (author = the logged-in user), `autopush` pushes asynchronously after each.
+ * Write contract: every write of a note runs under the file's lock, re-reads
+ * the file, re-checks the block hash against the current bytes, validates the
+ * whole resulting file the way the site builds it (the dialect, the content
+ * guard, the site's own remark plugins; MDX files are compiled) and replaces
+ * the file atomically. A failed validation writes nothing.
+ *
+ * Edit history is two layers: the journal is the fine-grained per-block
+ * audit log (each record has a unique id); git in the content repo is the
+ * durable versioning — `autocommit` commits each save with the signed-in
+ * user as author, `autopush` pushes asynchronously after each commit.
  */
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { scanNotes } from '../../lib/wikilinks';
-import { wikiConfig } from './config';
-import type { LocaleDef } from '../shared/locales';
-import type { BlockSource, NoteLocale, NoteMeta, RevisionRecord } from '../shared/types';
-import type { RouteRegistrar } from './index';
-import { fail, json, readBody } from './index';
-import { renderMarkdown } from './markdown';
-import { appendNdjson, projectRoot, readNdjson, wikiDataDir } from './store';
+import type { LocaleDef } from '../shared/locales.ts';
+import type { BlockSource, NoteLocale, NoteMeta, RevisionRecord } from '../shared/types.ts';
+import { cachedScan } from '../../lib/wikilinks.ts';
+import { wikiConfig } from './config.ts';
+import type { RouteRegistrar } from './index.ts';
+import { fail, HttpError, json, readBody } from './index.ts';
+import { renderMarkdown } from './markdown.ts';
+import { containedPath } from './paths.ts';
+import { appendNdjson, projectRoot, readNdjson, wikiDataDir, withLock, writeFileAtomic } from './store.ts';
+import { validateSource } from './validate.ts';
+
+export { validateSource };
 
 const execFileP = promisify(execFile);
 
@@ -32,28 +42,41 @@ function notesBase(): string {
   return wikiConfig().content.dir;
 }
 
-/** resolve a note id ("guides/getting-started", "en/getting-started", "inbox/…") to its source file */
+/** absolute content root */
+export function contentRoot(): string {
+  return resolve(projectRoot(), notesBase());
+}
+
+/** a note id: path segments of word characters, dots, dashes and CJK */
+const NOTE_ID = /^[\w一-鿿][\w.\-一-鿿]*(\/[\w一-鿿][\w.\-一-鿿]*)*$/;
+
+/** resolve a note id ("guides/getting-started", "en/getting-started", "inbox/…")
+ *  to its source file inside the content root; null when absent or outside */
 export function noteFile(id: string): { file: string; rel: string } | null {
-  if (!/^[\w][\w.\-一-鿿/]*$/.test(id) || id.includes('..')) return null;
+  if (!NOTE_ID.test(id)) return null;
   for (const ext of ['mdx', 'md']) {
     const rel = `${notesBase()}/${id}/index.${ext}`;
-    const file = resolve(projectRoot(), rel);
-    if (!file.startsWith(resolve(projectRoot(), notesBase()))) return null;
-    if (existsSync(file)) return { file, rel };
+    const file = containedPath(contentRoot(), resolve(projectRoot(), rel));
+    if (file && existsSync(file)) return { file, rel };
   }
   return null;
 }
 
+/** the directory a new note would live in, inside the content root; null when outside */
+export function noteDir(id: string): string | null {
+  if (!NOTE_ID.test(id)) return null;
+  return containedPath(contentRoot(), resolve(projectRoot(), notesBase(), id));
+}
+
 function frontmatterField(source: string, field: string): string | null {
-  const fm = /^---\n([\s\S]*?)\n---/.exec(source);
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
   if (!fm) return null;
   const line = new RegExp(`^${field}:\\s*(.+)$`, 'm').exec(fm[1]!);
   if (!line) return null;
   return line[1]!.trim().replace(/^['"]|['"]$/g, '');
 }
 
-/** the deployment's locale table — inkbrush.config.ts → content.locales
- *  (default table in shared/locales.ts) */
+/** the deployment's locale table — inkbrush.config.ts → content.locales */
 function noteLocales(): readonly LocaleDef[] {
   return wikiConfig().content.locales;
 }
@@ -82,7 +105,6 @@ export function noteMeta(id: string): NoteMeta | null {
   const source = readFileSync(located.file, 'utf8');
   const lang = localeOfId(id);
   const base = baseIdOf(id);
-  const demos = [...source.matchAll(/demo=["']([^"']+)["']/g)].map((m) => m[1]!);
   const locales = noteLocales().map((l) => {
     const lid = `${l.prefix}${base}`;
     return {
@@ -99,7 +121,6 @@ export function noteMeta(id: string): NoteMeta | null {
     title: frontmatterField(source, 'title') ?? id,
     lang,
     locales,
-    demos: [...new Set(demos)],
   };
 }
 
@@ -116,41 +137,40 @@ function readBlock(file: string, start: number, end: number): BlockSource | null
   return { source, hash: sliceHash(source), start, end };
 }
 
-/**
- * Compile the whole MDX file the way the site will (same dialect, same content
- * guard) — returns an error message or null. A block that passes here
- * renders on the page; one that would break the build is refused at save time.
- */
-export async function validateMdx(source: string): Promise<string | null> {
-  const [{ compile }, remarkMath, { markdownSyntax }, { remarkContentGuard }] =
-    await Promise.all([
-      import('@mdx-js/mdx'),
-      import('remark-math').then((m) => m.default),
-      import('../../lib/markdown-syntax'),
-      import('../../lib/content-guard'),
-    ]);
-  // strip frontmatter the way Astro does before MDX sees the file
-  const body = source.replace(/^---\n[\s\S]*?\n---/, (m) => m.replace(/[^\n]+/g, ''));
-  try {
-    await compile(body, {
-      remarkPlugins: [...markdownSyntax(), remarkContentGuard, remarkMath],
-    });
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
+/* ---------------- revisions ---------------- */
+
+const revisionsFile = (): string => join(wikiDataDir(), 'revisions.ndjson');
+
+export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRecord {
+  const full: RevisionRecord = { id: randomUUID(), ...record };
+  appendNdjson(revisionsFile(), full);
+  return full;
 }
 
-export function journalRevision(record: RevisionRecord): void {
-  appendNdjson(join(wikiDataDir(), 'revisions.ndjson'), record);
+/**
+ * Replace the file's content under its lock: `produce` computes the next
+ * content from the file as it is at write time (and refuses with an error
+ * when a block no longer matches, → 409), the result is validated (→ 422
+ * when it would not build), then written atomically.
+ */
+export async function writeNote(
+  file: string,
+  produce: (current: string) => { next: string; error?: string | undefined },
+): Promise<void> {
+  await withLock(file, async () => {
+    const current = readFileSync(file, 'utf8');
+    const { next, error } = produce(current);
+    if (error) throw new HttpError(409, error);
+    const problem = await validateSource(file, next);
+    if (problem) throw new HttpError(422, `The note would not build — not saved: ${problem}`);
+    writeFileAtomic(file, next);
+  });
 }
 
 /**
  * Per-save git commit (+ optional async push), executed INSIDE the content
- * repo: src/content/notes is its own repo (submodule), so committing these
- * paths from the project root fails with "Pathspec … is in submodule".
- * Accepts project-relative files or directories; commits only those paths,
- * silently skipping when nothing actually changed (e.g. a no-op claude job).
+ * repo. Accepts project-relative files or directories; commits only those
+ * paths, and makes no commit when nothing changed.
  */
 export async function autocommit(
   relPaths: string | string[],
@@ -159,10 +179,10 @@ export async function autocommit(
 ): Promise<void> {
   const cfg = wikiConfig();
   if (!cfg.autocommit) return;
-  const contentRoot = resolve(projectRoot(), notesBase());
+  const root = contentRoot();
   const rels: string[] = [];
   for (const p of Array.isArray(relPaths) ? relPaths : [relPaths]) {
-    const rel = relative(contentRoot, resolve(projectRoot(), p));
+    const rel = relative(root, resolve(projectRoot(), p));
     if (rel.startsWith('..')) {
       console.error(`[wiki autocommit] path is outside the content repo, skipping: ${p}`);
       continue;
@@ -171,23 +191,19 @@ export async function autocommit(
   }
   if (rels.length === 0) return;
   try {
-    await execFileP('git', ['add', '-A', '--', ...rels], { cwd: contentRoot });
-    const { stdout } = await execFileP('git', ['status', '--porcelain', '--', ...rels], {
-      cwd: contentRoot,
+    await execFileP('git', ['add', '-A', '--', ...rels], { cwd: root });
+    const { stdout } = await execFileP('git', ['status', '--porcelain', '--', ...rels], { cwd: root });
+    if (!stdout.trim()) return;
+    await execFileP('git', ['commit', '-m', message, '--author', `${user} <wiki@local>`, '--', ...rels], {
+      cwd: root,
     });
-    if (!stdout.trim()) return; // nothing changed — no empty commit
-    await execFileP(
-      'git',
-      ['commit', '-m', message, '--author', `${user} <wiki@local>`, '--', ...rels],
-      { cwd: contentRoot },
-    );
   } catch (err) {
     console.error('[wiki autocommit]', err);
     return;
   }
   if (cfg.autopush) {
-    // fire-and-forget: the save must not wait on (or fail with) the network
-    execFileP('git', ['push'], { cwd: contentRoot }).catch((err: unknown) => {
+    // the save never waits on the network
+    execFileP('git', ['push'], { cwd: root }).catch((err: unknown) => {
       console.error('[wiki autopush]', err);
     });
   }
@@ -230,30 +246,28 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
       if (!located) return fail(res, 404, 'Note not found');
       const body = await readBody<{ start: number; end: number; hash: string; source: string }>(req);
       const { start, end, hash, source } = body;
-      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof source !== 'string') {
-        return fail(res, 400, 'missing start/end/source');
+      if (!Number.isInteger(start) || !Number.isInteger(end) || typeof source !== 'string' || typeof hash !== 'string') {
+        return fail(res, 400, 'missing start/end/hash/source');
       }
-      const current = readBlock(located.file, start, end);
-      if (!current) return fail(res, 416, 'line range outside the file');
-      if (current.hash !== hash) {
-        return fail(res, 409, 'This block was modified by someone else — refresh and retry');
-      }
-      const lines = readFileSync(located.file, 'utf8').split('\n');
-      const next = [...lines.slice(0, start - 1), ...source.split('\n'), ...lines.slice(end)].join(
-        '\n',
-      );
-      if (located.file.endsWith('.mdx')) {
-        const error = await validateMdx(next);
-        if (error) return fail(res, 422, `MDX syntax error — not saved: ${error}`);
-      }
-      writeFileSync(located.file, next);
+      let before = '';
+      await writeNote(located.file, (current) => {
+        const lines = current.split('\n');
+        if (start < 1 || end < start || end > lines.length) {
+          return { next: current, error: 'line range outside the file' };
+        }
+        before = lines.slice(start - 1, end).join('\n');
+        if (sliceHash(before) !== hash) {
+          return { next: current, error: 'This block was modified by someone else — refresh and retry' };
+        }
+        return { next: [...lines.slice(0, start - 1), ...source.split('\n'), ...lines.slice(end)].join('\n') };
+      });
       journalRevision({
         ts: Date.now(),
         user: user!.email,
         note: id,
         lines: `${start}-${end}`,
         via: 'manual',
-        before: current.source,
+        before,
         after: source,
       });
       await autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name);
@@ -262,9 +276,9 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     { auth: true },
   );
 
-  // the render oracle only serves the editing surface (preview / chat panel,
-  // both behind login). sanitize defaults to TRUE — callers that want raw
-  // HTML must say so explicitly (e.g. the editor previewing trusted repo content)
+  // the render oracle serves the editing surface only (preview / chat panel,
+  // both behind login). sanitize defaults to true — the editor previewing
+  // trusted repo content says so explicitly
   on(
     'POST',
     '/render',
@@ -285,11 +299,11 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     { auth: true },
   );
 
-  // lightweight note list for [[ autocomplete / wikilink resolution
-  // (inbox included — everything is linkable)
+  // note list for [[ autocomplete / wikilink resolution (inbox included —
+  // everything is linkable); the scan is cached for a short window
+  const notes = cachedScan(contentRoot());
   on('GET', '/notes', ({ res }) => {
-    const dir = resolve(projectRoot(), notesBase());
-    json(res, 200, { notes: scanNotes(dir) });
+    json(res, 200, { notes: notes() });
   });
 
   // revision history (with full before/after source) is editor-only
@@ -297,15 +311,15 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     'GET',
     '/revisions/*id',
     ({ res, params }) => {
-      const all = readNdjson<RevisionRecord>(join(wikiDataDir(), 'revisions.ndjson'));
+      const all = readNdjson<RevisionRecord>(revisionsFile());
       json(res, 200, { revisions: all.filter((r) => r.note === params['id']).slice(-100) });
     },
     { auth: true },
   );
 
-  // one-click revert of a journaled revision: exact-match replace of the
-  // revision's `after` span with its `before`. Content drifted since then
-  // (no exact match / ambiguous match) → 409, edit by hand instead.
+  // one-click revert of a journaled block revision: exact-match replace of
+  // the revision's `after` span with its `before`; content that drifted
+  // since (no match, or more than one) is refused with 409
   on(
     'POST',
     '/revert/*id',
@@ -313,45 +327,33 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
       const id = params['id']!;
       const located = noteFile(id);
       if (!located) return fail(res, 404, 'Note not found');
-      const { ts } = await readBody<{ ts?: number }>(req);
-      if (!Number.isFinite(ts)) return fail(res, 400, 'missing ts');
-      const all = readNdjson<RevisionRecord>(join(wikiDataDir(), 'revisions.ndjson'));
-      const rec = all.find((r) => r.note === id && r.ts === ts);
+      const { id: revisionId } = await readBody<{ id?: string }>(req);
+      if (typeof revisionId !== 'string' || !revisionId) return fail(res, 400, 'missing revision id');
+      const rec = readNdjson<RevisionRecord>(revisionsFile()).find((r) => r.note === id && r.id === revisionId);
       if (!rec) return fail(res, 404, 'Revision record not found');
       if (rec.lines === '*') return fail(res, 400, 'Whole-file operations cannot be reverted in one click');
       if (rec.before === rec.after) return fail(res, 400, 'This revision has no content change');
 
-      const fileLines = readFileSync(located.file, 'utf8').split('\n');
-      const target = rec.after.split('\n');
-      const matches: number[] = [];
-      for (let i = 0; i + target.length <= fileLines.length; i++) {
-        let same = true;
-        for (let j = 0; j < target.length; j++) {
-          if (fileLines[i + j] !== target[j]) {
-            same = false;
-            break;
-          }
-        }
-        if (same) matches.push(i);
-      }
-      if (matches.length === 0) {
-        return fail(res, 409, 'Later edits overwrote this revision — revert by hand instead');
-      }
-      if (matches.length > 1) {
-        return fail(res, 409, 'The target content appears more than once — revert by hand instead');
-      }
-      const at = matches[0]!;
+      let at = -1;
       const beforeLines = rec.before.split('\n');
-      const next = [
-        ...fileLines.slice(0, at),
-        ...beforeLines,
-        ...fileLines.slice(at + target.length),
-      ].join('\n');
-      if (located.file.endsWith('.mdx')) {
-        const error = await validateMdx(next);
-        if (error) return fail(res, 422, `MDX would not compile after the revert — not applied: ${error}`);
-      }
-      writeFileSync(located.file, next);
+      await writeNote(located.file, (current) => {
+        const fileLines = current.split('\n');
+        const target = rec.after.split('\n');
+        const matches: number[] = [];
+        for (let i = 0; i + target.length <= fileLines.length; i++) {
+          if (target.every((line, j) => fileLines[i + j] === line)) matches.push(i);
+        }
+        if (matches.length === 0) {
+          return { next: current, error: 'Later edits overwrote this revision — revert by hand instead' };
+        }
+        if (matches.length > 1) {
+          return { next: current, error: 'The target content appears more than once — revert by hand instead' };
+        }
+        at = matches[0]!;
+        return {
+          next: [...fileLines.slice(0, at), ...beforeLines, ...fileLines.slice(at + target.length)].join('\n'),
+        };
+      });
       journalRevision({
         ts: Date.now(),
         user: user!.email,
@@ -363,7 +365,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
       });
       await autocommit(
         located.rel,
-        `wiki: ${id} revert ${rec.via} revision @${new Date(rec.ts).toISOString()}`,
+        `wiki: ${id} revert ${rec.via} revision ${rec.id}`,
         user!.name,
       );
       json(res, 200, { ok: true });

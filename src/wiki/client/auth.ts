@@ -55,6 +55,7 @@ function signedOutPanel(rerender: () => void): HTMLElement {
       : h(
           'button',
           {
+            type: 'button',
             class: 'wiki-btn wiki-btn-google',
             disabled: google !== 'ready',
             title: google === 'ready' ? '' : S.auth.googleMissingEnv,
@@ -75,6 +76,7 @@ function signedOutPanel(rerender: () => void): HTMLElement {
       : h(
           'button',
           {
+            type: 'button',
             class: 'wiki-btn wiki-btn-google',
             disabled: saml !== 'ready',
             title: saml === 'ready' ? '' : S.auth.samlMissingConfig,
@@ -87,8 +89,19 @@ function signedOutPanel(rerender: () => void): HTMLElement {
           saml === 'ready' ? null : h('span', { class: 'wiki-badge-soft' }, S.auth.notConfigured),
         );
 
-  const name = h('input', { class: 'wiki-input', placeholder: S.auth.nickname, autocomplete: 'nickname' });
-  const email = h('input', { class: 'wiki-input', placeholder: 'you@team.com', type: 'email' });
+  const name = h('input', {
+    class: 'wiki-input',
+    placeholder: S.auth.nickname,
+    'aria-label': S.auth.nickname,
+    autocomplete: 'nickname',
+  });
+  const email = h('input', {
+    class: 'wiki-input',
+    type: 'email',
+    placeholder: S.auth.emailPlaceholder,
+    'aria-label': S.auth.emailPlaceholder,
+    autocomplete: 'email',
+  });
   const submit = async (): Promise<void> => {
     try {
       const { user } = await api.post<{ user: WikiUser }>('/auth/dev', {
@@ -136,12 +149,6 @@ function signedOutPanel(rerender: () => void): HTMLElement {
   );
 }
 
-function providerLabel(provider: WikiUser['provider']): string {
-  if (provider === 'google') return 'Google Workspace';
-  if (provider === 'google-saml') return 'Google Workspace SSO';
-  return S.auth.devSession;
-}
-
 function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement): HTMLElement {
   return h(
     'div',
@@ -152,7 +159,7 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
       avatar(user),
       h('div', {}, h('div', { class: 'wiki-auth-name' }, user.name), h('div', { class: 'wiki-auth-email' }, user.email)),
     ),
-    h('div', { class: 'wiki-auth-provider' }, providerLabel(user.provider)),
+    h('div', { class: 'wiki-auth-provider' }, S.auth.provider[user.provider]),
     // identity module on → show the registry role (unregistered = —)
     me.siteRole !== undefined
       ? h('div', { class: 'wiki-auth-role' }, S.auth.role(me.role))
@@ -161,6 +168,7 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
       ? h(
           'button',
           {
+            type: 'button',
             class: 'wiki-btn',
             onclick: async () => {
               const { openMembersPanel } = await import('./identity');
@@ -173,6 +181,7 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
     h(
       'button',
       {
+        type: 'button',
         class: 'wiki-btn',
         onclick: async () => {
           await api.post('/logout');
@@ -188,13 +197,30 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
   );
 }
 
+/** A provider flow that fails redirects to `?login_error=<code>`: surface the
+ *  message once and drop the parameter from the address bar. */
+function reportLoginError(): void {
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get('login_error');
+  if (!code) return;
+  url.searchParams.delete('login_error');
+  window.history.replaceState(window.history.state, '', url);
+  toast(S.auth.loginError(code), 'err');
+}
+
 export async function mountAuthChip(): Promise<void> {
+  reportLoginError();
   try {
     me = await api.get<MeResponse>('/me');
   } catch {
     return; // API down — stay invisible
   }
-  const chip = h('button', { class: 'wiki-chip', 'aria-label': S.auth.chipLabel });
+  const chip = h('button', {
+    type: 'button',
+    class: 'wiki-chip',
+    'aria-label': S.auth.chipLabel,
+    'aria-expanded': 'false',
+  });
   const render = (): void => {
     chip.replaceChildren(
       ...(me.user
@@ -205,7 +231,9 @@ export async function mountAuthChip(): Promise<void> {
   render();
   chip.addEventListener('click', () => {
     const rerender = (): void => render();
-    popover(chip, me.user ? signedInPanel(me.user, rerender, chip) : signedOutPanel(rerender));
+    popover(chip, me.user ? signedInPanel(me.user, rerender, chip) : signedOutPanel(rerender), {
+      label: me.user ? S.auth.accountPanel : S.auth.panelTitle,
+    });
   });
   const slotHost = document.querySelector('[data-inkbrush-slot="account"]');
   if (slotHost) {

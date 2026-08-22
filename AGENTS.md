@@ -31,9 +31,12 @@ npm test
 
 ## The site-integration contract (changes here affect every consumer)
 
-- `inkbrush()` integration: injects the client, mounts the `/api/wiki/*`
-  middleware, runs server init. Dev-mode only; it must inject **nothing**
-  outside WIKI mode — byte-identical builds are the hard line.
+- `inkbrush({ markdown })` integration: injects the client, mounts the
+  `/api/wiki/*` middleware, runs server init. `markdown` carries the site's
+  own remark/rehype plugins and its note-id → URL rule, so the editor
+  preview, the save-time validation and the AI gate render a note the way
+  the page does. Dev-mode only; it must inject **nothing** outside WIKI
+  mode — byte-identical builds are the hard line.
 - `rehypeWikiBlocks`: sites add it (WIKI mode only) to their pipeline for
   block ↔ source-line mapping.
 - `astro-inkbrush/markdown` → `markdownProcessor({ remarkPlugins,
@@ -41,12 +44,15 @@ npm test
   (disables Astro's own GFM and re-mounts the dialect ahead of site
   plugins).
 - `astro-inkbrush/wikilinks`: the single `[[wikilink]]` implementation
-  (transform factory + resolver), pipeline-agnostic, shared by site
-  rendering, editor preview and the inbox importer.
+  (transform factory + resolver + the prose extractor built on the
+  dialect's parser), pipeline-agnostic, shared by site rendering, editor
+  preview, backlink indexes and the inbox importer. Pass `{ mdx: true }`
+  when the source is MDX, or JSX-wrapped prose is masked as HTML.
 - `scripts/check-content.mjs` / `scripts/check-wikilinks.mjs` /
   `scripts/check-dist.mjs`: standalone check CLIs that import the dialect
-  and link rules from the package root — zero drift from the site's plugin
-  set by construction.
+  and link rules from the package root. Given `--config`, the first two
+  also mount the site's own plugins and resolver; without it they check
+  the dialect and the guard only, and say so.
 - `<meta name="inkbrush-note" content="<note id>">`: a note page declares
   its identity; the client never parses URLs. Optional
   `inkbrush-note-url` template for locale jumps.
@@ -65,6 +71,12 @@ npm test
 
 ## Hard rules
 
+- Every path the server touches — notes, assets, inbox files, AI job
+  changes — is resolved through `server/paths.ts` and must stay inside its
+  root; every write goes through `store.ts` (atomic, under the in-process
+  lock). AI jobs never work in the project: they run in a
+  `workspace.ts` copy and their changes pass `validate.ts` first.
+
 - Naming boundary: **inkbrush** is the component name (package,
   integration, config, meta tags, slots); **wiki** is the feature name
   (`WIKI=1`, `WIKI_*` env, `/api/wiki`, `.wiki/` state, UI copy). Keep
@@ -82,6 +94,16 @@ npm test
 
 ## Doc map
 
-`README.md` (positioning + integration contract) · `docs/manual.md` /
-`docs/manual.zh-CN.md` (deployment-facing feature manual) ·
-`inkbrush.config.example.ts` (annotated config template)
+`README.md` / `README.zh-CN.md` (positioning + integration contract) ·
+`docs/manual.md` / `docs/manual.zh-CN.md` (deployment-facing feature
+manual) · `inkbrush.config.example.ts` (annotated config template) ·
+`deploy/README.md` (the two-service deployment skeleton)
+
+## How to verify
+
+```bash
+npm test                                  # unit tests (node:test, native TS)
+npm run typecheck                         # tsc --noEmit
+cd demo && npm run build                  # reading-mode build; postbuild runs check-dist
+npm run check                             # check-content + check-wikilinks over the notes
+```

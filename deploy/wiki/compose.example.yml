@@ -1,0 +1,46 @@
+# Compose (production): the editing machine — a permanent `WIKI=1 astro dev`
+# container running the astro-inkbrush CMS, on its own subdomain.
+#
+# The subdomain is not cosmetic: the CMS mounts its API at the server root
+# (/api/wiki/*), independent of SITE_BASE, and a dev server's module URLs are
+# root-relative — an editing host never shares the reader host's path space.
+# The reader-facing site is the static build (deploy/static).
+services:
+  site-wiki:
+    build:
+      context: ../..
+      dockerfile: deploy/wiki/Dockerfile
+    restart: unless-stopped
+    environment:
+      REPO_URL: ${REPO_URL:?your site repo, e.g. git@github.com:you/your-site.git}
+      REPO_BRANCH: ${REPO_BRANCH:-main}
+      CONTENT_DIR: ${CONTENT_DIR:-src/content}
+      ENGINE_PATH: ${ENGINE_PATH:-vendor/astro-inkbrush}
+      WIKI: '1'
+      SITE_BASE: ${SITE_BASE:-/}
+      SITE_HOST: ${SITE_HOST:?e.g. edit.your-site.com}
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${SITE_HOST:?}
+      GIT_COMMITTER_NAME: ${GIT_COMMITTER_NAME:-wiki-editor}
+      GIT_COMMITTER_EMAIL: ${GIT_COMMITTER_EMAIL:-wiki@example.com}
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # The CMS config, the bot SSH key and the IdP certificate arrive
+      # base64-encoded in the service environment; the entrypoint writes them
+      # to disk readable by the service user only.
+      INKBRUSH_CONFIG_B64: ${INKBRUSH_CONFIG_B64:?the machine's inkbrush.config.ts, base64}
+      BOT_SSH_KEY_B64: ${BOT_SSH_KEY_B64:?the bot account's private key, base64}
+      SAML_IDP_CERT_B64: ${SAML_IDP_CERT_B64:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    expose:
+      - '4321'
+    networks:
+      - proxy
+    volumes:
+      - site_repo:/repo
+networks:
+  # attach to your reverse-proxy network
+  proxy:
+    external: true
+volumes:
+  site_repo:

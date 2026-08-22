@@ -11,11 +11,22 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+export interface RequestOptions {
+  /** aborts the underlying fetch (the promise rejects with the abort error) */
+  signal?: AbortSignal | undefined;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts?: RequestOptions,
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: body !== undefined ? { 'content-type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : null,
+    ...(opts?.signal ? { signal: opts.signal } : {}),
   });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`);
@@ -23,10 +34,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
-  post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
-  put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
-  delete: <T>(path: string) => request<T>('DELETE', path),
+  get: <T>(path: string, opts?: RequestOptions) => request<T>('GET', path, undefined, opts),
+  post: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('POST', path, body, opts),
+  put: <T>(path: string, body?: unknown, opts?: RequestOptions) => request<T>('PUT', path, body, opts),
+  delete: <T>(path: string, opts?: RequestOptions) => request<T>('DELETE', path, undefined, opts),
 };
 
 /**

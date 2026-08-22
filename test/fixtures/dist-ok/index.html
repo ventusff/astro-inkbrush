@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ok</title>
+  <link rel="stylesheet" href="/_astro/app.css">
+  <link rel="preload" as="image" imagesrcset="/img/pixel.png 1x, /img/pixel.png 2x">
+  <style>.hero { background: url("/img/pixel.png") }</style>
+  <script type="module">const a = `href="${base}/never-built/"`; document.querySelector('a[href="/missing-in-script/"]');</script>
+</head>
+<body>
+  <main id="main">
+    <a href="/about/">about</a>
+    <a href="/about/#team">team</a>
+    <a href="#main">self</a>
+    <a href="#top">top</a>
+    <a href="about/index.html?v=1#team" ping="/about/ /go/">relative</a>
+    <a href="https://example.com/x">external</a>
+    <a href="mailto:x@example.com">mail</a>
+    <a href="//cdn.example.com/y">protocol-relative</a>
+    <a href="/api/anything">runtime endpoint</a>
+    <img src="/img/pixel.png" srcset="data:image/gif;base64,R0lGODlhAQABAAAAACw= 1x, /img/pixel.png 2x, /img/pixel.png," alt="" sizes="(max-width: 600px) 100vw, 50vw">
+    <video poster="/img/pixel.png" src="/img/pixel.png"></video>
+    <object data="/img/pixel.png"></object>
+    <form action="/about/"><button formaction="/about/">go</button></form>
+    <blockquote cite="/about/">quoted</blockquote>
+    <div style="background: url('/img/pixel.png')"></div>
+    <p>Escaped markup is prose: &lt;img src="/not-a-file.png"&gt; and <code>&lt;a href="/nope/"&gt;</code></p>
+    <template><a href="/about/">in a template</a></template>
+    <noscript><img src="/img/pixel.png" alt=""></noscript>
+    <svg><use href="#icon"></use><symbol id="icon"></symbol></svg>
+    <a href="/go/#somewhere">redirect stub, fragment not inspected</a>
+  </main>
+</body>
+</html>

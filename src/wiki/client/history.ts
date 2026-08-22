@@ -3,18 +3,19 @@
  * entries whose recorded line range overlaps the hovered block, each with a
  * collapsible before/after diff and a one-click revert.
  *
- * Revert is server-side (POST /revert): exact-match replace of the revision's
- * `after` span with its `before` — 409 when the content has since diverged.
- * A successful revert is journaled (via:'revert'), autocommitted, and the
- * page reloads through the same HMR/scroll-restore path as a manual save.
+ * Revert is server-side (POST /revert with the revision's id): exact-match
+ * replace of the revision's `after` span with its `before` — 409 when the
+ * content has since diverged. A successful revert is journaled
+ * (via:'revert'), autocommitted, and the page reloads through the same
+ * HMR/scroll-restore path as a manual save.
  */
 import type { RevisionRecord } from '../shared/types';
 import { api } from './api';
 import { currentUser } from './auth';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
-import { dateLocale, S } from './strings';
-import { h, popover, toast } from './ui';
+import { S } from './strings';
+import { h, popover, time, toast } from './ui';
 
 /** recorded span overlaps the block's current span (heuristic: lines drift
  *  as the file is edited, but block-wise edits keep ranges close enough) */
@@ -38,10 +39,10 @@ function contentHit(rec: RevisionRecord, source: string | null): boolean {
 }
 
 function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
-  const when = new Date(rec.ts).toLocaleString(dateLocale, { hour12: false });
   const revertBtn = h(
     'button',
     {
+      type: 'button',
       class: 'wiki-btn wiki-history-revert',
       title: S.history.revertTitle,
       onclick: async () => {
@@ -49,13 +50,13 @@ function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
           toast(S.history.signInToRevert, 'err');
           return;
         }
-        revertBtn.setAttribute('disabled', 'true');
+        revertBtn.disabled = true;
         try {
-          await api.post(`/revert/${ctx.meta.id}`, { ts: rec.ts });
+          await api.post(`/revert/${ctx.meta.id}`, { id: rec.id });
           toast(S.history.reverted);
           setTimeout(() => window.location.reload(), 1200);
         } catch (err) {
-          revertBtn.removeAttribute('disabled');
+          revertBtn.disabled = false;
           toast(err instanceof Error ? err.message : S.history.revertFailed, 'err');
         }
       },
@@ -64,12 +65,12 @@ function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
   );
   return h(
     'div',
-    { class: 'wiki-history-entry' },
+    { class: 'wiki-history-entry', dataset: { revisionId: rec.id } },
     h(
       'div',
       { class: 'wiki-history-meta' },
       h('span', { class: 'wiki-badge-soft' }, S.history.via[rec.via] ?? rec.via),
-      h('span', { class: 'wiki-history-who' }, `${rec.user} · ${when} · L${rec.lines}`),
+      h('span', { class: 'wiki-history-who' }, `${rec.user} · `, time(rec.ts), ` · L${rec.lines}`),
     ),
     h(
       'details',
@@ -82,7 +83,13 @@ function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
   );
 }
 
-export async function openHistory(ctx: PageContext, block: BlockRef, anchor: HTMLElement): Promise<void> {
+/** `anchor` positions the popover; `trigger` is the button that owns it */
+export async function openHistory(
+  ctx: PageContext,
+  block: BlockRef,
+  anchor: HTMLElement,
+  trigger: HTMLElement,
+): Promise<void> {
   let recs: RevisionRecord[];
   try {
     const [resp, cur] = await Promise.all([
@@ -102,13 +109,14 @@ export async function openHistory(ctx: PageContext, block: BlockRef, anchor: HTM
     toast(err instanceof Error ? err.message : S.history.loadFailed, 'err');
     return;
   }
+  const title = S.history.title(block.start, block.end);
   const body = h(
     'div',
     { class: 'wiki-history' },
-    h('div', { class: 'wiki-panel-title' }, S.history.title(block.start, block.end)),
+    h('div', { class: 'wiki-panel-title' }, title),
     recs.length === 0
       ? h('div', { class: 'wiki-history-empty' }, S.history.noRecords)
       : h('div', { class: 'wiki-history-list' }, ...recs.slice(0, 20).map((r) => entry(ctx, r))),
   );
-  popover(anchor, body);
+  popover(anchor, body, { label: title, trigger });
 }

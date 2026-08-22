@@ -1,23 +1,133 @@
 /* ============================================================
    wiki chrome — injected only in WIKI mode.
-   Themes itself through the host site's --color-* tokens; the
-   literal fallbacks below form a self-contained warm-paper
-   default so the UI stays presentable on token-less sites.
    Everything is layered glass over the page; nothing shifts the
    reading column.
+
+   Theme contract: the chrome paints exclusively with the --wiki-*
+   tokens below. Each one defaults from the host site's token of
+   the same role (--color-bg / --color-ink / --color-ink-soft /
+   --color-ink-faint / --color-line / --color-accent /
+   --color-accent2 / --color-code-bg / --font-ui / --font-mono /
+   --font-body)
+   and falls back to a self-contained warm-paper value, so the
+   UI stays presentable on token-less sites. The dark block gives
+   every token its own value; light is the default and the chrome
+   never reads prefers-color-scheme itself. Raw color values are
+   allowed only inside these two token blocks.
    ============================================================ */
 
 :root {
-  --wiki-glass: rgba(251, 249, 244, 0.92);
-  --wiki-line: var(--color-line, #e5e0d3);
-  --wiki-ink: var(--color-ink, #1f2024);
-  --wiki-soft: var(--color-ink-soft, #4a4d57);
+  --wiki-surface: var(--color-bg, #fbf9f4);
+  --wiki-on-surface: var(--color-ink, #1f2024);
+  --wiki-muted: var(--color-ink-soft, #4a4d57);
   --wiki-faint: var(--color-ink-faint, #8a8d97);
+  --wiki-line: var(--color-line, #e5e0d3);
   --wiki-accent: var(--color-accent, #b6552e);
   --wiki-ai: var(--color-accent2, #2a6f6b);
-  --wiki-shadow: 0 2px 6px rgba(31, 32, 36, 0.06), 0 12px 32px rgba(31, 32, 36, 0.1);
+  --wiki-danger: #8c2f1b;
+  --wiki-focus: var(--wiki-accent);
+  /* shadow / scrim color (carries its own alpha) */
+  --wiki-overlay: rgba(31, 32, 36, 0.12);
+  /* raised field surface: buttons, inputs, editor paper */
+  --wiki-field: color-mix(in srgb, var(--wiki-surface) 40%, white);
+  /* text on accent / ai fills */
+  --wiki-on-accent: var(--wiki-surface);
+  --wiki-code-bg: var(--color-code-bg, color-mix(in srgb, var(--wiki-on-surface) 6%, var(--wiki-surface)));
+  --wiki-brand-google: #4285f4;
+  --wiki-glass: color-mix(in srgb, var(--wiki-surface) 92%, transparent);
+  --wiki-shadow:
+    0 2px 6px color-mix(in srgb, var(--wiki-overlay) 50%, transparent),
+    0 12px 32px var(--wiki-overlay);
   --wiki-radius: 10px;
   --wiki-font: var(--font-ui, 'Inter', 'Noto Sans SC', system-ui, sans-serif);
+  --wiki-mono: var(--font-mono, 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, monospace);
+  --wiki-body-font: var(--font-body, serif);
+}
+
+/* Dark theme, driven by the site's data-theme attribute only. */
+:root[data-theme='dark'] {
+  --wiki-surface: var(--color-bg, #161924);
+  --wiki-on-surface: var(--color-ink, #e8e6df);
+  --wiki-muted: var(--color-ink-soft, #b4b2aa);
+  --wiki-faint: var(--color-ink-faint, #8a8c97);
+  --wiki-line: var(--color-line, #2e3242);
+  --wiki-accent: var(--color-accent, #e08a63);
+  --wiki-ai: var(--color-accent2, #6fb8b2);
+  --wiki-danger: #f09a85;
+  --wiki-focus: var(--wiki-accent);
+  --wiki-overlay: rgba(0, 0, 0, 0.45);
+  --wiki-field: color-mix(in srgb, var(--wiki-surface) 88%, white);
+  --wiki-on-accent: var(--wiki-surface);
+  --wiki-code-bg: var(--color-code-bg, color-mix(in srgb, var(--wiki-on-surface) 8%, var(--wiki-surface)));
+  --wiki-brand-google: #8ab4f8;
+  --wiki-glass: color-mix(in srgb, var(--wiki-surface) 92%, transparent);
+  --wiki-shadow:
+    0 2px 6px color-mix(in srgb, var(--wiki-overlay) 70%, transparent),
+    0 12px 32px var(--wiki-overlay);
+}
+
+/* ---------------- utilities ---------------- */
+
+/* visually hidden, available to assistive technology */
+.wiki-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* the hidden attribute wins over the display rules below */
+.wiki-fab[hidden],
+.wiki-handle button[hidden],
+.wiki-ai-quick[hidden],
+.wiki-ai-log[hidden],
+.wiki-share-slot[hidden] {
+  display: none;
+}
+
+/* one focus ring for every interactive piece of the chrome */
+.wiki-chip:focus-visible,
+.wiki-btn:focus-visible,
+.wiki-icon-btn:focus-visible,
+.wiki-fab:focus-visible,
+.wiki-input:focus-visible,
+.wiki-textarea:focus-visible,
+.wiki-popover:focus-visible,
+.wiki-block:focus-visible,
+.wiki-handle button:focus-visible,
+.wiki-ai-quick button:focus-visible,
+.wiki-members-remove:focus-visible,
+.wiki-comment-del:focus-visible,
+.wiki-comment-signin button:focus-visible,
+.wiki-history-diff summary:focus-visible {
+  outline: 2px solid var(--wiki-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wiki-chip,
+  .wiki-popover,
+  .wiki-btn,
+  .wiki-input,
+  .wiki-textarea,
+  .wiki-toast,
+  .wiki-block-hover,
+  .wiki-handle,
+  .wiki-handle button,
+  .wiki-ai-quick button,
+  .wiki-fab,
+  .wiki-chat {
+    transition: none;
+  }
+  .wiki-working::before {
+    animation: none;
+  }
 }
 
 /* ---------------- session chip ---------------- */
@@ -46,13 +156,13 @@
   backdrop-filter: saturate(160%) blur(8px);
   -webkit-backdrop-filter: saturate(160%) blur(8px);
   font: 500 12.5px/1 var(--wiki-font);
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .wiki-chip:hover {
   border-color: var(--wiki-accent);
-  box-shadow: 0 1px 4px rgba(182, 85, 46, 0.15);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--wiki-accent) 15%, transparent);
 }
 .wiki-chip-name.wiki-chip-signin {
   padding: 3px 4px;
@@ -69,7 +179,7 @@
 }
 .wiki-avatar-fallback {
   background: var(--wiki-accent);
-  color: #fff;
+  color: var(--wiki-on-accent);
   font: 600 11px/1 var(--wiki-font);
 }
 
@@ -88,7 +198,7 @@
   box-shadow: var(--wiki-shadow);
   padding: 14px;
   font: 400 13px/1.5 var(--wiki-font);
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
   opacity: 0;
   transform: translateY(-4px) scale(0.98);
   transition: opacity 0.14s ease, transform 0.14s ease;
@@ -116,8 +226,8 @@
   padding: 7px 12px;
   border: 1px solid var(--wiki-line);
   border-radius: 7px;
-  background: #fff;
-  color: var(--wiki-ink);
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
   font: 500 13px/1.2 var(--wiki-font);
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
@@ -132,14 +242,14 @@
 .wiki-btn-primary {
   background: var(--wiki-accent);
   border-color: var(--wiki-accent);
-  color: #fff;
+  color: var(--wiki-on-accent);
 }
 .wiki-btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
 }
 .wiki-btn-google .wiki-g-mark {
   font: 700 12px/1 var(--wiki-font);
-  color: #4285f4;
+  color: var(--wiki-brand-google);
 }
 .wiki-badge-soft {
   margin-left: auto;
@@ -155,15 +265,18 @@
   padding: 7px 10px;
   border: 1px solid var(--wiki-line);
   border-radius: 7px;
-  background: #fff;
-  color: var(--wiki-ink);
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
   font: 400 13px/1.45 var(--wiki-font);
-  outline: none;
   transition: border-color 0.15s ease;
 }
 .wiki-input:focus,
 .wiki-textarea:focus {
   border-color: var(--wiki-accent);
+}
+.wiki-input:focus-visible,
+.wiki-textarea:focus-visible {
+  outline-offset: 0;
 }
 .wiki-textarea {
   resize: vertical;
@@ -171,6 +284,7 @@
   font-family: var(--wiki-font);
 }
 .wiki-form-label {
+  display: block;
   font: 600 11px/1 var(--wiki-font);
   letter-spacing: 0.06em;
   color: var(--wiki-faint);
@@ -224,15 +338,15 @@
 .wiki-auth-provider {
   font: 500 11px/1 var(--wiki-font);
   color: var(--wiki-ai);
-  background: rgba(42, 111, 107, 0.08);
+  background: color-mix(in srgb, var(--wiki-ai) 8%, transparent);
   border-radius: 6px;
   padding: 5px 8px;
   align-self: flex-start;
 }
 .wiki-auth-role {
   font: 500 11px/1 var(--wiki-font);
-  color: var(--wiki-soft);
-  background: rgba(31, 32, 36, 0.05);
+  color: var(--wiki-muted);
+  background: color-mix(in srgb, var(--wiki-on-surface) 5%, transparent);
   border-radius: 6px;
   padding: 5px 8px;
   align-self: flex-start;
@@ -276,7 +390,7 @@
   white-space: nowrap;
 }
 .wiki-members-email {
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
 }
 select.wiki-members-role {
   width: auto;
@@ -320,40 +434,54 @@ select.wiki-members-role {
   color: var(--wiki-faint);
 }
 
-/* ---------------- toast ---------------- */
+/* ---------------- toasts ---------------- */
 
-.wiki-toast {
+/* a fixed stack holding the two persistent live regions */
+.wiki-toasts {
   position: fixed;
   bottom: 28px;
   left: 50%;
-  transform: translate(-50%, 12px);
+  transform: translateX(-50%);
   z-index: 1400;
-  background: var(--wiki-ink);
-  color: #faf8f2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, 86vw);
+  pointer-events: none;
+}
+.wiki-toast-region {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.wiki-toast {
+  background: var(--wiki-on-surface);
+  color: var(--wiki-surface);
   padding: 9px 16px;
   border-radius: 999px;
   font: 500 13px/1.3 var(--wiki-font);
   box-shadow: var(--wiki-shadow);
   opacity: 0;
+  transform: translateY(12px);
   transition: opacity 0.25s ease, transform 0.25s ease;
-  max-width: min(560px, 86vw);
 }
 .wiki-toast.show {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: none;
 }
 .wiki-toast.err {
-  background: #8c2f1b;
+  background: var(--wiki-danger);
 }
 
 /* ---------------- block handles ---------------- */
 
-[data-wiki-block-bound] {
-  position: relative;
+.wiki-block {
+  border-radius: 4px;
 }
 .wiki-block-hover {
-  border-radius: 4px;
-  box-shadow: 0 0 0 4px rgba(182, 85, 46, 0.045);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--wiki-accent) 5%, transparent);
   transition: box-shadow 0.12s ease;
 }
 .wiki-handle {
@@ -371,7 +499,7 @@ select.wiki-members-role {
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--wiki-line);
   border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(31, 32, 36, 0.07);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--wiki-overlay) 60%, transparent);
   opacity: 0;
   transform: translateX(4px);
   transition: opacity 0.12s ease, transform 0.12s ease;
@@ -396,12 +524,24 @@ select.wiki-members-role {
   transition: background 0.12s ease, color 0.12s ease;
 }
 .wiki-handle button:hover {
-  background: rgba(182, 85, 46, 0.1);
+  background: color-mix(in srgb, var(--wiki-accent) 10%, transparent);
   color: var(--wiki-accent);
 }
 .wiki-handle button.ai:hover {
-  background: rgba(42, 111, 107, 0.1);
+  background: color-mix(in srgb, var(--wiki-ai) 10%, transparent);
   color: var(--wiki-ai);
+}
+/* coarse pointer: a horizontal bar with touch-sized targets */
+@media (pointer: coarse) {
+  .wiki-handle {
+    flex-direction: row;
+    gap: 4px;
+    transform: translateY(4px);
+  }
+  .wiki-handle button {
+    width: 34px;
+    height: 34px;
+  }
 }
 
 /* ---------------- inline block editor ---------------- */
@@ -410,7 +550,7 @@ select.wiki-members-role {
   margin: 10px 0;
   border: 1px solid var(--wiki-line);
   border-radius: var(--wiki-radius);
-  background: #fffdf8;
+  background: var(--wiki-field);
   box-shadow: var(--wiki-shadow);
   overflow: hidden;
   font-family: var(--wiki-font);
@@ -433,7 +573,7 @@ select.wiki-members-role {
 .wiki-editor-preview {
   padding: 4px 16px;
   border-bottom: 1px dashed var(--wiki-line);
-  background: #fff;
+  background: var(--wiki-field);
   max-height: 320px;
   overflow: auto;
 }
@@ -446,10 +586,11 @@ select.wiki-members-role {
   font-size: 13.5px;
 }
 .wiki-editor-cm .cm-editor.cm-focused {
-  outline: none;
+  outline: 2px solid var(--wiki-focus);
+  outline-offset: -2px;
 }
 .wiki-editor-cm .cm-scroller {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--wiki-mono);
   line-height: 1.65;
   max-height: 46vh;
 }
@@ -472,11 +613,11 @@ select.wiki-members-role {
 }
 .wiki-editor-error {
   padding: 8px 12px;
-  background: rgba(140, 47, 27, 0.07);
-  color: #8c2f1b;
-  font: 400 12px/1.5 var(--font-mono, monospace);
+  background: color-mix(in srgb, var(--wiki-danger) 7%, transparent);
+  color: var(--wiki-danger);
+  font: 400 12px/1.5 var(--wiki-mono);
   white-space: pre-wrap;
-  border-top: 1px solid rgba(140, 47, 27, 0.2);
+  border-top: 1px solid color-mix(in srgb, var(--wiki-danger) 20%, transparent);
 }
 
 /* ---------------- AI popover (block-level) ---------------- */
@@ -494,13 +635,13 @@ select.wiki-members-role {
 }
 .wiki-ai-quick button {
   border: 1px solid var(--wiki-line);
-  background: #fff;
+  background: var(--wiki-field);
   border-radius: 999px;
   padding: 4px 11px;
   font: 500 12px/1.2 var(--wiki-font);
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: border-color 0.12s ease, color 0.12s ease;
 }
 .wiki-ai-quick button:hover {
   border-color: var(--wiki-ai);
@@ -516,15 +657,15 @@ select.wiki-members-role {
 }
 .wiki-ai-log .tool {
   color: var(--wiki-ai);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--wiki-mono);
   font-size: 11.5px;
 }
 .wiki-ai-log .text {
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
   white-space: pre-wrap;
 }
 .wiki-ai-log .err {
-  color: #8c2f1b;
+  color: var(--wiki-danger);
 }
 .wiki-working {
   display: inline-flex;
@@ -592,7 +733,7 @@ select.wiki-members-role {
   backdrop-filter: saturate(170%) blur(18px);
   -webkit-backdrop-filter: saturate(170%) blur(18px);
   border-left: 1px solid var(--wiki-line);
-  box-shadow: -12px 0 40px rgba(31, 32, 36, 0.12);
+  box-shadow: -12px 0 40px var(--wiki-overlay);
   font: 400 13.5px/1.55 var(--wiki-font);
   transform: translateX(100%);
   transition: transform 0.22s cubic-bezier(0.32, 0.72, 0.28, 1);
@@ -609,11 +750,15 @@ select.wiki-members-role {
 }
 .wiki-chat-title {
   font-weight: 600;
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
 }
 .wiki-chat-sub {
   font-size: 11.5px;
   color: var(--wiki-faint);
+}
+.wiki-chat-empty {
+  text-align: center;
+  margin-top: 2em;
 }
 .wiki-chat-head .spacer {
   flex: 1;
@@ -630,9 +775,13 @@ select.wiki-members-role {
   color: var(--wiki-faint);
   cursor: pointer;
 }
-.wiki-icon-btn:hover {
-  background: rgba(31, 32, 36, 0.06);
-  color: var(--wiki-ink);
+.wiki-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wiki-on-surface) 6%, transparent);
+  color: var(--wiki-on-surface);
+}
+.wiki-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .wiki-chat-actions {
   display: flex;
@@ -658,33 +807,39 @@ select.wiki-members-role {
 }
 .wiki-msg.user {
   align-self: flex-end;
-  background: rgba(182, 85, 46, 0.08);
-  border: 1px solid rgba(182, 85, 46, 0.18);
+  background: color-mix(in srgb, var(--wiki-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wiki-accent) 18%, transparent);
   border-radius: 12px 12px 3px 12px;
   padding: 8px 12px;
   white-space: pre-wrap;
 }
 .wiki-msg.claude {
   align-self: flex-start;
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
 }
 .wiki-msg.claude .tool {
   color: var(--wiki-ai);
-  font: 400 11.5px/1.6 var(--font-mono, monospace);
+  font: 400 11.5px/1.6 var(--wiki-mono);
   display: block;
+}
+.wiki-msg.claude .text {
+  white-space: pre-wrap;
+}
+.wiki-msg.claude .err {
+  color: var(--wiki-danger);
 }
 .wiki-msg.claude :is(p, ul, ol, pre) {
   margin: 0.45em 0;
 }
 .wiki-msg.claude pre {
-  background: var(--color-code-bg, #f3f1ea);
+  background: var(--wiki-code-bg);
   padding: 8px 10px;
   border-radius: 7px;
   overflow-x: auto;
   font-size: 12px;
 }
 .wiki-msg.claude code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--wiki-mono);
   font-size: 0.92em;
 }
 .wiki-chat-input {
@@ -703,12 +858,13 @@ select.wiki-members-role {
   height: 36px;
   border-radius: 9px;
   background: var(--wiki-ai);
-  color: #fff;
+  color: var(--wiki-on-accent);
   flex-shrink: 0;
 }
-.wiki-chat-input .wiki-icon-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.wiki-chat-input .wiki-icon-btn:hover:not(:disabled) {
+  background: var(--wiki-ai);
+  color: var(--wiki-on-accent);
+  filter: brightness(1.06);
 }
 
 /* ---------------- comments ---------------- */
@@ -724,7 +880,7 @@ select.wiki-members-role {
   align-items: baseline;
   gap: 10px;
   font: 600 15px/1.3 var(--wiki-font);
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
   border-top: 1px solid var(--wiki-line);
   padding-top: 1.6em;
 }
@@ -744,6 +900,10 @@ select.wiki-members-role {
   flex-shrink: 0;
   font-size: 13px;
 }
+.wiki-comment-main {
+  flex: 1;
+  min-width: 0;
+}
 .wiki-comment-meta {
   display: flex;
   align-items: baseline;
@@ -754,17 +914,23 @@ select.wiki-members-role {
 .wiki-comment-meta .name {
   font-weight: 600;
   font-size: 13px;
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
 }
 .wiki-comment-body {
-  font: 400 14px/1.65 var(--font-body, serif);
-  color: var(--wiki-ink);
+  font: 400 14px/1.65 var(--wiki-body-font);
+  color: var(--wiki-on-surface);
+}
+.wiki-comment-preview {
+  padding: 8px 2px;
+}
+.wiki-comment-note {
+  color: var(--wiki-faint);
 }
 .wiki-comment-body :is(p, ul, ol, pre, blockquote) {
   margin: 0.4em 0;
 }
 .wiki-comment-body pre {
-  background: var(--color-code-bg, #f3f1ea);
+  background: var(--wiki-code-bg);
   padding: 8px 10px;
   border-radius: 7px;
   overflow-x: auto;
@@ -773,7 +939,7 @@ select.wiki-members-role {
 .wiki-comment-body blockquote {
   border-left: 3px solid var(--wiki-line);
   padding-left: 10px;
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
 }
 .wiki-comment-del {
   border: 0;
@@ -784,7 +950,7 @@ select.wiki-members-role {
   padding: 0;
 }
 .wiki-comment-del:hover {
-  color: #8c2f1b;
+  color: var(--wiki-danger);
 }
 .wiki-comment-form {
   display: flex;
@@ -802,6 +968,12 @@ select.wiki-members-role {
   padding: 6px 16px;
   margin-left: auto;
 }
+.wiki-comment-form .row .wiki-comment-previewbtn {
+  padding: 6px 12px;
+}
+.wiki-comment-form .row .wiki-comment-previewbtn + .wiki-btn {
+  margin-left: 0;
+}
 .wiki-comment-form .hint {
   font-size: 11.5px;
   color: var(--wiki-faint);
@@ -811,7 +983,7 @@ select.wiki-members-role {
   padding: 14px;
   border: 1px dashed var(--wiki-line);
   border-radius: var(--wiki-radius);
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
   font-size: 13px;
   text-align: center;
 }
@@ -864,7 +1036,7 @@ select.wiki-members-role {
 .wiki-history-diff summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
 }
 .wiki-history-diff pre {
   margin: 6px 0 0;
@@ -878,12 +1050,12 @@ select.wiki-members-role {
   overflow-y: auto;
 }
 .wiki-diff-before {
-  background: rgba(182, 85, 46, 0.07);
+  background: color-mix(in srgb, var(--wiki-accent) 7%, transparent);
   text-decoration: line-through;
-  text-decoration-color: rgba(182, 85, 46, 0.4);
+  text-decoration-color: color-mix(in srgb, var(--wiki-accent) 40%, transparent);
 }
 .wiki-diff-after {
-  background: rgba(42, 111, 107, 0.08);
+  background: color-mix(in srgb, var(--wiki-ai) 8%, transparent);
 }
 .wiki-history-revert {
   align-self: flex-end;
@@ -898,9 +1070,6 @@ select.wiki-members-role {
   .wiki-chip-slot {
     top: var(--wiki-chip-top, 4px);
     right: var(--wiki-chip-right, 8px);
-  }
-  .wiki-handle {
-    display: none; /* touch: block editing via long-press is out of scope */
   }
 }
 
@@ -950,20 +1119,20 @@ select.wiki-members-role {
   font-size: 12px;
 }
 .wiki-share-mono {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, monospace;
+  font-family: var(--wiki-mono);
   font-size: 12.5px;
 }
 .wiki-share-hint {
   font: 400 12px/1.55 var(--wiki-font);
-  color: var(--wiki-soft);
+  color: var(--wiki-muted);
 }
 .wiki-share-error {
-  color: var(--wiki-accent);
+  color: var(--wiki-danger);
 }
 .wiki-share-meta {
   font: 500 11px/1 var(--wiki-font);
   color: var(--wiki-ai);
-  background: rgba(42, 111, 107, 0.08);
+  background: color-mix(in srgb, var(--wiki-ai) 8%, transparent);
   border-radius: 6px;
   padding: 5px 8px;
   align-self: flex-start;
@@ -977,18 +1146,8 @@ select.wiki-members-role {
   display: none;
 }
 .wiki-share-revoke:hover:not(:disabled) {
-  border-color: #a4262c;
-  color: #a4262c;
-}
-
-/* ============================================================
-   Dark theme (driven by the site's data-theme): most tokens are
-   --color-* aliases and follow the site automatically; only the
-   glass backdrop needs its own step.
-   ============================================================ */
-:root[data-theme='dark'] {
-  --wiki-glass: rgba(22, 25, 36, 0.92);
-  --wiki-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.4);
+  border-color: var(--wiki-danger);
+  color: var(--wiki-danger);
 }
 
 /* ============================================================
@@ -1008,7 +1167,7 @@ select.wiki-members-role {
   overflow: hidden;
 }
 .cm-tooltip-autocomplete > ul {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, monospace;
+  font-family: var(--wiki-mono);
   max-height: 264px;
   min-width: 240px;
 }
@@ -1019,7 +1178,7 @@ select.wiki-members-role {
   padding: 5px 9px;
   border-radius: 6px;
   font-size: 12.5px;
-  color: var(--wiki-ink);
+  color: var(--wiki-on-surface);
   line-height: 1.45;
 }
 .cm-tooltip-autocomplete > ul > li[aria-selected] {
@@ -1036,7 +1195,7 @@ select.wiki-members-role {
 }
 .cm-tooltip-autocomplete .cm-completionDetail {
   margin-left: auto;
-  font-family: 'Inter', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--wiki-font);
   font-style: normal;
   font-size: 11px;
   color: var(--wiki-faint);
@@ -1052,6 +1211,6 @@ select.wiki-members-role {
   padding: 9px 12px;
   margin-left: 6px;
   max-width: 320px;
-  font: 400 12px/1.6 'Inter', 'Noto Sans SC', ui-sans-serif, system-ui, sans-serif;
-  color: var(--wiki-soft);
+  font: 400 12px/1.6 var(--wiki-font);
+  color: var(--wiki-muted);
 }

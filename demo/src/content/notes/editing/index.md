@@ -9,7 +9,8 @@ paragraph you are looking at, not a giant textarea holding the whole page.
 Hover this paragraph in editing mode and click ✎. The rendered block hides,
 and a [CodeMirror](https://codemirror.net/) editor expands in its place with
 the block's Markdown source. A live preview renders below it as you type —
-produced by the **same parser** that renders the page, so the preview never
+produced by the **same parser and the same plugins** that render the page
+(the site hands them to the CMS in its Astro config), so the preview never
 lies. `⌘/Ctrl + Enter` saves; `Esc` cancels.
 
 ## The two safety nets
@@ -18,10 +19,12 @@ lies. `⌘/Ctrl + Enter` saves; `Esc` cancels.
 from. If someone else changed the file under you, the save is rejected with
 a conflict instead of silently overwriting their work — refresh and retry.
 
-**A compile gate.** Before anything is written to disk, the whole file is
-re-compiled with the site's exact Markdown dialect. A save that would break
-the page — an unclosed component tag, a malformed expression — is refused
-with the compiler's error, and the file on disk stays untouched.
+**A build gate.** Before anything is written to disk, the whole file is
+run through the site's Markdown pipeline — the dialect, the content guard,
+the site's own plugins, and the MDX compiler for `.mdx`. A save that would
+break the page — an unpaired `**`, an unclosed component tag, a malformed
+expression — is refused with the error, and the file on disk stays
+untouched.
 
 ## Where saves go
 

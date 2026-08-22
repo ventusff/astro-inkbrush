@@ -1,39 +1,43 @@
 /**
- * Obsidian inbox sync — OPTIONAL per deployment: watches the vault folder
- * configured in inkbrush.config.ts → inbox.dir (env override WIKI_INBOX_DIR) and
- * converts every NEW note into a site article under
- * src/content/notes/inbox/<slug>/index.md. No dir configured (or empty) =
- * the watcher never starts and the import endpoint refuses.
+ * Obsidian inbox sync — optional per deployment: watches the vault folder
+ * configured in inkbrush.config.ts → inbox.dir (env override WIKI_INBOX_DIR)
+ * and converts every new note into a site article under
+ * <content.dir>/inbox/<slug>/index.md. No dir configured = the watcher never
+ * starts and the import endpoint refuses.
  *
- *  - Plain .md output (not .mdx) — immune to the JSX escaping pitfalls.
- *  - `![[img|alt]]` embeds: the asset is copied from the note's _assets/
- *    folder into the note dir src/content/notes/inbox/<slug>/ (co-located, so
- *    the site can serve it from the note's own URL) and rewritten to standard
- *    image syntax.
- *  - `[[wikilink]]` → *italic text*; `==x==` → <mark>; single-line `$$x$$`
- *    display math normalized to the three-line form remark-math requires.
+ *  - Plain .md output (not .mdx), so prose is never parsed as JSX.
+ *  - `![[img|alt]]` embeds: the asset is copied from the vault (the note's
+ *    `_assets/<note>/`, `_assets/` or own folder — never from outside those)
+ *    into the note's directory and rewritten to a relative image reference
+ *    (`./file`), which the site's Markdown pipeline resolves beside the note.
+ *  - `[[wikilink]]` and `[[note#anchor|label]]` are parsed by the shared
+ *    extractor: a target that resolves to a site note stays a wikilink, any
+ *    other is flattened to italics with a warning.
+ *  - `==x==` → <mark>; single-line `$$x$$` display math normalized to the
+ *    three-line form.
  *  - Obsidian frontmatter (author/source/url/saved) becomes a "Source" quote
  *    block at the top of the article.
  *  - `inbox.ignore` (config) skips files by vault-relative path or basename
- *    prefix — e.g. auto-generated daily digests.
+ *    prefix.
  *
- * Files that already exist when the watcher starts are marked as seen and
- * NOT imported (only future notes sync automatically); the manual
- * POST /api/wiki/inbox/import {path} endpoint backfills specific files.
+ * Files that exist when the watcher starts are marked as seen and not
+ * imported; POST /api/wiki/inbox/import {path} imports a specific file.
  * State lives in .wiki/data/inbox-sync.json (content hash → re-import on
- * change, same slug).
+ * change, same slug); every read-modify-write of it holds its lock.
  */
 import { watch, type FSWatcher } from 'chokidar';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
-import { buildWikilinkResolver, cachedScan } from '../../lib/wikilinks';
-import { wikiConfig } from './config';
-import type { RouteRegistrar } from './index';
-import { fail, json, readBody } from './index';
-import { autocommit, journalRevision } from './source';
-import { projectRoot, readJson, wikiDataDir, writeJson } from './store';
+import { buildWikilinkResolver, cachedScan, extractWikilinks } from '../../lib/wikilinks.ts';
+import { wikiConfig } from './config.ts';
+import type { RouteRegistrar } from './index.ts';
+import { fail, json, readBody } from './index.ts';
+import { containedPath, isWithin } from './paths.ts';
+import { noteUrl } from './site.ts';
+import { autocommit, contentRoot, journalRevision } from './source.ts';
+import { projectRoot, readJson, wikiDataDir, withLock, writeFileAtomic, writeJson } from './store.ts';
 
 /** configured watch dir (absolute, ~ expanded) — null = inbox sync disabled */
 export function inboxDir(): string | null {
@@ -129,12 +133,12 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
   const slug = slugFor(sourcePath, fm);
   const warnings: string[] = [];
 
-  // assets co-locate with the note (src/content/notes/inbox/<slug>/), so a
-  // site that serves note-relative assets picks them up with no extra config.
-  const noteDir = join(projectRoot(), wikiConfig().content.dir, 'inbox', slug);
+  // assets co-locate with the note in its directory
+  const noteDir = join(contentRoot(), 'inbox', slug);
   let assetsCopied = 0;
 
-  /** obsidian keeps embeds in `<note dir>/_assets/<note name>/` */
+  /** obsidian keeps embeds in `<note dir>/_assets/<note name>/`; a name
+   *  only ever resolves to a file inside one of these roots */
   const assetRoots = [
     join(dirname(sourcePath), '_assets', title),
     join(dirname(sourcePath), '_assets'),
@@ -142,8 +146,8 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
   ];
   const resolveAsset = (name: string): string | null => {
     for (const root of assetRoots) {
-      const candidate = join(root, name);
-      if (existsSync(candidate)) return candidate;
+      const candidate = containedPath(root, name);
+      if (candidate && existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     }
     return null;
   };
@@ -163,30 +167,26 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
     mkdirSync(noteDir, { recursive: true });
     copyFileSync(found, join(noteDir, basename(found)));
     assetsCopied++;
-    return `![${alt?.trim() ?? ''}](/inbox/${slug}/${encodeURIComponent(basename(found))})`;
+    return `![${alt?.trim() ?? ''}](./${encodeURIComponent(basename(found))})`;
   });
 
-  // [[link|label]] wikilinks: resolvable to a site note → kept as a real
-  // wikilink (renders as a live link); unresolvable (mostly vault-internal
-  // targets) → flattened to italics + warning, so pages don't fill with dead
-  // links. Snapshot-at-import semantics: a note created later under the same
-  // name is not retroactively linked — acceptable.
-  const resolveWikilink = buildWikilinkResolver({
-    notes: cachedScan(resolve(projectRoot(), wikiConfig().content.dir)),
-    urlFor: (id) => `/${id}/`,
-  });
-  markdown = markdown.replace(
-    /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
-    (_, target: string, label?: string) => {
-      const res = resolveWikilink(target.trim());
-      if (res.kind === 'ok') {
-        const shown = label?.trim();
-        return shown && shown !== res.id ? `[[${res.id}|${shown}]]` : `[[${res.id}]]`;
-      }
-      warnings.push(`unresolved wikilink: ${target.trim()}`);
-      return `*${(label ?? target).trim()}*`;
-    },
-  );
+  // [[wikilinks]] (anchors and labels included, code spans excluded — the
+  // shared extractor): a target that resolves to a site note stays a
+  // wikilink; any other is flattened to italics with a warning
+  const resolveWikilink = buildWikilinkResolver({ notes: cachedScan(contentRoot()), urlFor: noteUrl });
+  for (const link of extractWikilinks(markdown).reverse()) {
+    const res = resolveWikilink(link.target);
+    let replacement: string;
+    if (res.kind === 'ok') {
+      const anchor = link.anchor ? `#${link.anchor}` : '';
+      const shown = link.label && link.label !== res.id ? `|${link.label}` : '';
+      replacement = `[[${res.id}${anchor}${shown}]]`;
+    } else {
+      warnings.push(`unresolved wikilink: ${link.target}`);
+      replacement = `*${link.label ?? link.target}*`;
+    }
+    markdown = markdown.slice(0, link.offset) + replacement + markdown.slice(link.offset + link.raw.length);
+  }
 
   // ==highlight== → <mark>
   markdown = markdown.replace(/==([^=\n][^=\n]*)==/g, '<mark>$1</mark>');
@@ -215,8 +215,7 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
     '---',
   ].join('\n');
 
-  mkdirSync(noteDir, { recursive: true });
-  writeFileSync(join(noteDir, 'index.md'), `${frontmatter}\n\n${attribution}${markdown.trim()}\n`);
+  writeFileAtomic(join(noteDir, 'index.md'), `${frontmatter}\n\n${attribution}${markdown.trim()}\n`);
   return { slug, noteDir, assetsCopied, warnings };
 }
 
@@ -236,19 +235,24 @@ function isInboxNote(path: string): boolean {
   return true;
 }
 
-export function importNote(sourcePath: string, opts?: { force?: boolean }): ConvertResult | null {
+export async function importNote(sourcePath: string, opts?: { force?: boolean }): Promise<ConvertResult | null> {
   const dir = inboxDir();
   if (!dir) throw new Error('Inbox is not enabled (inkbrush.config.ts → inbox.dir)');
   const abs = resolve(sourcePath);
+  if (!isWithin(dir, abs)) throw new Error('note is outside the inbox directory');
   const rel = relative(dir, abs);
   const raw = readFileSync(abs, 'utf8');
   const hash = contentHash(raw);
-  const state = readJson<SyncState>(stateFile(), {});
-  const existing = state[rel];
-  if (!opts?.force && existing?.hash === hash && existing.importedAt !== null) return null;
-  const result = convertObsidianNote(abs);
-  state[rel] = { slug: result.slug, hash, importedAt: Date.now() };
-  writeJson(stateFile(), state);
+  const result = await withLock(stateFile(), () => {
+    const state = readJson<SyncState>(stateFile(), {});
+    const existing = state[rel];
+    if (!opts?.force && existing?.hash === hash && existing.importedAt !== null) return null;
+    const converted = convertObsidianNote(abs);
+    state[rel] = { slug: converted.slug, hash, importedAt: Date.now() };
+    writeJson(stateFile(), state);
+    return converted;
+  });
+  if (!result) return null;
   journalRevision({
     ts: Date.now(),
     user: 'inbox-sync',
@@ -269,12 +273,14 @@ export function importNote(sourcePath: string, opts?: { force?: boolean }): Conv
 }
 
 /** mark a pre-existing file as seen without importing it */
-function markSeen(dir: string, sourcePath: string): void {
+function markSeen(dir: string, sourcePath: string): Promise<void> {
   const rel = relative(dir, resolve(sourcePath));
-  const state = readJson<SyncState>(stateFile(), {});
-  if (state[rel]) return;
-  state[rel] = { slug: '', hash: contentHash(readFileSync(sourcePath, 'utf8')), importedAt: null };
-  writeJson(stateFile(), state);
+  return withLock(stateFile(), () => {
+    const state = readJson<SyncState>(stateFile(), {});
+    if (state[rel]) return;
+    state[rel] = { slug: '', hash: contentHash(readFileSync(sourcePath, 'utf8')), importedAt: null };
+    writeJson(stateFile(), state);
+  });
 }
 
 /* ---------------- watcher ---------------- */
@@ -304,26 +310,21 @@ export function startInboxWatcher(): void {
     // _assets image trees only burns inotify watches
     ignored: (path) => path.includes('/_assets'),
   });
+  const report = (what: string, path: string) => (err: unknown): void => {
+    console.error(`[wiki inbox] ${what} failed for ${path}:`, err);
+  };
   watcher.on('add', (path) => {
     if (!isInboxNote(path)) return;
-    try {
-      if (!ready) markSeen(dir, path);
-      else importNote(path);
-    } catch (err) {
-      console.error(`[wiki inbox] import failed for ${path}:`, err);
-    }
+    if (!ready) markSeen(dir, path).catch(report('marking', path));
+    else importNote(path).catch(report('import', path));
   });
   watcher.on('change', (path) => {
     if (!ready || !isInboxNote(path)) return;
-    // re-import only notes we've imported before (content changed)
+    // only a note imported before is re-imported on change
     const rel = relative(dir, resolve(path));
     const state = readJson<SyncState>(stateFile(), {});
     if (state[rel]?.importedAt === null) return;
-    try {
-      importNote(path);
-    } catch (err) {
-      console.error(`[wiki inbox] re-import failed for ${path}:`, err);
-    }
+    importNote(path).catch(report('re-import', path));
   });
   watcher.on('ready', () => {
     ready = true;
@@ -335,17 +336,21 @@ export function startInboxWatcher(): void {
 /* ---------------- routes ---------------- */
 
 export function registerInboxRoutes(on: RouteRegistrar): void {
-  on('GET', '/inbox/status', ({ res }) => {
-    const state = readJson<SyncState>(stateFile(), {});
-    const entries = Object.entries(state);
-    json(res, 200, {
-      enabled: inboxDir() !== null,
-      dir: inboxDir(),
-      watching: Boolean((globalThis as Record<string, unknown>)[WATCHER_KEY]),
-      seen: entries.length,
-      imported: entries.filter(([, v]) => v.importedAt !== null).length,
-    });
-  });
+  on(
+    'GET',
+    '/inbox/status',
+    ({ res }) => {
+      const state = readJson<SyncState>(stateFile(), {});
+      const entries = Object.entries(state);
+      json(res, 200, {
+        enabled: inboxDir() !== null,
+        watching: Boolean((globalThis as Record<string, unknown>)[WATCHER_KEY]),
+        seen: entries.length,
+        imported: entries.filter(([, v]) => v.importedAt !== null).length,
+      });
+    },
+    { auth: true },
+  );
 
   on(
     'POST',
@@ -355,13 +360,11 @@ export function registerInboxRoutes(on: RouteRegistrar): void {
       if (!dir) return fail(res, 400, 'Inbox is not enabled (inkbrush.config.ts → inbox.dir)');
       const { path } = await readBody<{ path?: string }>(req);
       if (!path) return fail(res, 400, 'missing path');
-      const abs = resolve(dir, path);
-      // `+ sep` matters: a bare prefix test also accepts sibling directories
-      // like /vault/inbox-evil for an inbox of /vault/inbox (same as snapshot.ts)
-      if (!abs.startsWith(resolve(dir) + sep)) return fail(res, 400, 'path must be inside the inbox directory');
-      if (!existsSync(abs)) return fail(res, 404, `file does not exist: ${abs}`);
+      const abs = containedPath(dir, path);
+      if (!abs) return fail(res, 400, 'path must be inside the inbox directory');
+      if (!existsSync(abs)) return fail(res, 404, `file does not exist: ${path}`);
       if (!isInboxNote(abs)) return fail(res, 400, 'not an importable note file');
-      const result = importNote(abs, { force: true });
+      const result = await importNote(abs, { force: true });
       json(res, 200, { ok: true, slug: result?.slug, warnings: result?.warnings ?? [] });
     },
     { auth: true },

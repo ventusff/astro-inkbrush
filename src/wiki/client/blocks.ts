@@ -4,11 +4,15 @@
  * rehype-wiki-blocks stamped every top-level block: markdown blocks carry
  * `data-wiki-src="start-end"` themselves; JSX components are preceded by an
  * invisible `<template data-wiki-src … data-wiki-jsx>` anchor bound here to
- * its next element sibling. One shared handle follows the hovered block;
- * ✎ opens the in-place source editor, ✦ opens the Claude popover, ⟲ opens
- * the revision-history popover (view diffs / one-click revert).
+ * its next element sibling. One shared handle (a toolbar) follows the active
+ * block; ✎ opens the in-place source editor, ✦ opens the Claude popover, ⟲
+ * opens the revision-history popover (view diffs / one-click revert).
+ *
+ * Activation paths: hovering a block (fine pointer), tapping a block (coarse
+ * pointer), or focusing a block / a control inside it (keyboard — every block
+ * is a tab stop; Enter moves focus into the toolbar, Escape returns it).
  */
-import { currentUser } from './auth';
+import { currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
 import { S } from './strings';
 import { h, icon, toast } from './ui';
@@ -50,17 +54,57 @@ export function mountBlocks(ctx: PageContext): void {
   if (blocks.length === 0) return;
 
   const byEl = new Map(blocks.map((b) => [b.el, b]));
+  const coarsePointer = window.matchMedia('(pointer: coarse)');
   let active: BlockRef | null = null;
   let editing = false;
 
-  const editBtn = h('button', { title: S.blocks.edit }, icon('pencil'));
-  const aiBtn = h('button', { class: 'ai', title: S.blocks.ai }, icon('sparkle'));
-  const historyBtn = h('button', { class: 'hist', title: S.blocks.history }, icon('history'));
-  const handle = h('div', { class: 'wiki-handle' }, editBtn, aiBtn, historyBtn);
-  document.body.append(handle);
+  const hint = h('span', { id: 'wiki-block-hint', class: 'wiki-sr-only' }, S.blocks.focusHint);
+  for (const block of blocks) {
+    block.el.classList.add('wiki-block');
+    block.el.tabIndex = 0;
+    block.el.setAttribute('aria-describedby', hint.id);
+  }
+
+  const editBtn = h(
+    'button',
+    { type: 'button', 'aria-label': S.blocks.edit, title: S.blocks.edit },
+    icon('pencil'),
+  );
+  const aiBtn = h(
+    'button',
+    { type: 'button', class: 'ai', 'aria-label': S.blocks.ai, title: S.blocks.ai, 'aria-expanded': 'false' },
+    icon('sparkle'),
+  );
+  const historyBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'hist',
+      'aria-label': S.blocks.history,
+      title: S.blocks.history,
+      'aria-expanded': 'false',
+    },
+    icon('history'),
+  );
+  const handle = h(
+    'div',
+    { class: 'wiki-handle', role: 'toolbar', 'aria-label': S.blocks.toolbar, inert: true },
+    editBtn,
+    aiBtn,
+    historyBtn,
+  );
+  document.body.append(hint, handle);
+
+  // revision history is editor-only on the server: the control exists only for signed-in users
+  const syncHistory = (): void => {
+    historyBtn.hidden = !currentUser();
+  };
+  syncHistory();
+  onAuthChange(syncHistory);
 
   const hideHandle = (): void => {
     handle.classList.remove('show');
+    handle.inert = true;
     active?.el.classList.remove('wiki-block-hover');
     active = null;
   };
@@ -78,20 +122,28 @@ export function mountBlocks(ctx: PageContext): void {
   };
 
   /**
-   * Place the handle at the block's top-left, clamped into the viewport:
-   * long block scrolled past its start → pinned below the breadcrumb; block
-   * end approaching → rides up with it. Returns false when the block has no
-   * visible room for the handle.
+   * Fine pointer: the handle sits in the gutter at the block's top-left.
+   * Coarse pointer: a horizontal bar hugging the block's top-right corner.
+   * Both are clamped into the viewport: a long block scrolled past its start
+   * pins the handle below the sticky chrome; an approaching block end lifts
+   * it. Returns false when the block has no visible room for the handle.
    */
   const positionHandle = (block: BlockRef): boolean => {
     const rect = block.el.getBoundingClientRect();
-    const height = handle.offsetHeight || 62;
+    const coarse = coarsePointer.matches;
+    handle.setAttribute('aria-orientation', coarse ? 'horizontal' : 'vertical');
+    const height = handle.offsetHeight || (coarse ? 40 : 62);
     const minTop = navBottom() + 6;
     if (rect.bottom < minTop + height + 4 || rect.top > window.innerHeight - 24) return false;
     let top = Math.max(rect.top + 2, minTop);
     top = Math.min(top, rect.bottom - height - 2);
     handle.style.top = `${top}px`;
-    handle.style.left = `${Math.max(6, rect.left - 40)}px`;
+    if (coarse) {
+      const width = handle.offsetWidth || 112;
+      handle.style.left = `${Math.max(6, Math.min(rect.right - width, window.innerWidth - width - 6))}px`;
+    } else {
+      handle.style.left = `${Math.max(6, rect.left - 40)}px`;
+    }
     return true;
   };
 
@@ -100,21 +152,87 @@ export function mountBlocks(ctx: PageContext): void {
     active?.el.classList.remove('wiki-block-hover');
     active = block;
     block.el.classList.add('wiki-block-hover');
-    if (positionHandle(block)) handle.classList.add('show');
-    else hideHandle();
+    if (positionHandle(block)) {
+      handle.classList.add('show');
+      handle.inert = false;
+    } else {
+      hideHandle();
+    }
+  };
+
+  /** nearest bound block containing the node */
+  const blockOf = (node: EventTarget | null): BlockRef | null => {
+    let el = node instanceof Element ? node : null;
+    while (el && !byEl.has(el as HTMLElement)) el = el.parentElement;
+    return el ? (byEl.get(el as HTMLElement) ?? null) : null;
   };
 
   document.addEventListener('mouseover', (e) => {
-    if (editing) return;
-    const target = e.target as HTMLElement | null;
-    if (!target) return;
-    if (handle.contains(target)) return;
-    // nearest bound ancestor block
-    let el: HTMLElement | null = target;
-    while (el && !byEl.has(el)) el = el.parentElement;
-    if (el) {
-      const block = byEl.get(el)!;
+    if (editing || handle.contains(e.target as Node)) return;
+    const block = blockOf(e.target);
+    if (block && block !== active) showHandle(block);
+  });
+
+  // coarse pointer: a tap on a block shows its toolbar, a tap elsewhere hides it
+  document.addEventListener('pointerup', (e) => {
+    if (editing || e.pointerType !== 'touch' || handle.contains(e.target as Node)) return;
+    const block = blockOf(e.target);
+    if (block) {
       if (block !== active) showHandle(block);
+    } else {
+      hideHandle();
+    }
+  });
+
+  // keyboard: focus inside a block shows its toolbar; focus elsewhere hides it
+  // (a popover opened from the toolbar keeps it, so focus can return to it)
+  document.addEventListener('focusin', (e) => {
+    if (editing) return;
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    if (handle.contains(target) || target.closest('.wiki-popover')) return;
+    const block = blockOf(target);
+    if (block) {
+      if (block !== active) showHandle(block);
+    } else {
+      hideHandle();
+    }
+  });
+
+  const toolbarButtons = (): HTMLButtonElement[] =>
+    [editBtn, aiBtn, historyBtn].filter((b) => !b.hidden);
+
+  document.addEventListener('keydown', (e) => {
+    if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (handle.contains(target)) {
+      const buttons = toolbarButtons();
+      const index = buttons.indexOf(target as HTMLButtonElement);
+      let next: HTMLButtonElement | undefined;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = buttons[(index + 1) % buttons.length];
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft')
+        next = buttons[(index - 1 + buttons.length) % buttons.length];
+      else if (e.key === 'Home') next = buttons[0];
+      else if (e.key === 'End') next = buttons[buttons.length - 1];
+      else if (e.key === 'Escape') {
+        e.preventDefault();
+        active?.el.focus();
+        return;
+      }
+      if (next) {
+        e.preventDefault();
+        next.focus();
+      }
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && byEl.has(target)) {
+      const block = byEl.get(target)!;
+      if (block !== active) showHandle(block);
+      if (block === active) {
+        e.preventDefault();
+        toolbarButtons()[0]?.focus();
+      }
     }
   });
 
@@ -122,7 +240,7 @@ export function mountBlocks(ctx: PageContext): void {
     'scroll',
     () => {
       if (!active || editing) return;
-      // follow the hovered block while scrolling; hide once it leaves view
+      // follow the active block while scrolling; hide once it leaves view
       if (!positionHandle(active)) hideHandle();
     },
     { passive: true },
@@ -143,6 +261,7 @@ export function mountBlocks(ctx: PageContext): void {
       const { openEditor } = await import('./editor');
       openEditor(ctx, block, () => {
         editing = false;
+        block.el.focus();
       });
     } catch (err) {
       // a failed lazy load must never brick the handles for the session
@@ -157,20 +276,19 @@ export function mountBlocks(ctx: PageContext): void {
     const block = active;
     try {
       const { openAiPopover } = await import('./ai-popover');
-      openAiPopover(ctx, block, handle);
+      openAiPopover(ctx, block, handle, aiBtn);
     } catch (err) {
       console.error('[wiki] ai popover failed to load:', err);
       toast(S.blocks.aiLoadFailed, 'err');
     }
   });
 
-  // history is readable without login; the revert button checks the session
   historyBtn.addEventListener('click', async () => {
-    if (!active) return;
+    if (!active || !requireLogin()) return;
     const block = active;
     try {
       const { openHistory } = await import('./history');
-      await openHistory(ctx, block, handle);
+      await openHistory(ctx, block, handle, historyBtn);
     } catch (err) {
       console.error('[wiki] history panel failed to load:', err);
       toast(S.blocks.historyLoadFailed, 'err');

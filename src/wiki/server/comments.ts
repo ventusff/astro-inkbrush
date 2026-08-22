@@ -7,15 +7,15 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import type { WikiComment } from '../shared/types';
-import type { RouteRegistrar } from './index';
-import { fail, json, readBody } from './index';
-import { renderMarkdown } from './markdown';
-import { noteFile } from './source';
-import { appendNdjson, readNdjson, wikiDataDir } from './store';
+import type { WikiComment } from '../shared/types.ts';
+import type { RouteRegistrar } from './index.ts';
+import { fail, json, readBody } from './index.ts';
+import { renderMarkdown } from './markdown.ts';
+import { noteFile } from './source.ts';
+import { appendNdjson, noteKey, readNdjson, wikiDataDir } from './store.ts';
 
 function commentsFile(noteId: string): string {
-  return join(wikiDataDir('comments'), `${noteId.replace(/\//g, '__')}.ndjson`);
+  return join(wikiDataDir('comments'), `${noteKey(noteId)}.ndjson`);
 }
 
 type CommentRecord = WikiComment | { id: string; deleted: true; by: string; ts: number };

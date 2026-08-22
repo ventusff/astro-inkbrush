@@ -18,8 +18,8 @@
  */
 import type { IncomingMessage } from 'node:http';
 
-import type { WikiUser } from '../shared/types';
-import { sessionUser } from './auth';
+import type { WikiUser } from '../shared/types.ts';
+import { sessionUser } from './auth.ts';
 
 export type { WikiUser };
 

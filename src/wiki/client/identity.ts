@@ -40,7 +40,11 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
   const roleSelect = (value: string, onchange: (role: string) => void): HTMLSelectElement =>
     h(
       'select',
-      { class: 'wiki-input wiki-members-role', onchange: (e: Event) => onchange((e.target as HTMLSelectElement).value) },
+      {
+        class: 'wiki-input wiki-members-role',
+        'aria-label': S.identity.colRole,
+        onchange: (e: Event) => onchange((e.target as HTMLSelectElement).value),
+      },
       ...data.roles.map((r) => h('option', { value: r, selected: r === value }, r)),
     );
 
@@ -66,6 +70,7 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
             {
               class: 'wiki-members-remove',
               type: 'button',
+              'aria-label': S.identity.removeLabel(u.email),
               onclick: () => {
                 if (!window.confirm(S.identity.confirmRemove(u.email))) return;
                 void save(users.filter((x) => x.email !== u.email));
@@ -77,8 +82,17 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
       ),
     );
 
-    const email = h('input', { class: 'wiki-input', type: 'email', placeholder: 'name@team.com' });
-    const name = h('input', { class: 'wiki-input', placeholder: S.identity.namePlaceholder });
+    const email = h('input', {
+      class: 'wiki-input',
+      type: 'email',
+      placeholder: S.identity.emailPlaceholder,
+      'aria-label': S.identity.colEmail,
+    });
+    const name = h('input', {
+      class: 'wiki-input',
+      placeholder: S.identity.namePlaceholder,
+      'aria-label': S.identity.colName,
+    });
     const role = roleSelect(data.defaultRole, () => {});
     const addForm = h(
       'form',
@@ -117,7 +131,7 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
             h('th', {}, S.identity.colEmail),
             h('th', {}, S.identity.colName),
             h('th', {}, S.identity.colRole),
-            h('th', {}, ''),
+            h('th', { 'aria-label': S.identity.colActions }),
           ),
         ),
         h('tbody', {}, ...rows),
@@ -128,5 +142,5 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
   };
 
   render();
-  popover(anchor, panel);
+  popover(anchor, panel, { label: S.identity.title });
 }
