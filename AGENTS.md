@@ -77,8 +77,8 @@ npm test
 - UI strings live in `src/wiki/client/strings.ts` (English + Chinese,
   selected by the page's `<html lang>`); server messages are English.
 - Comments and documentation are English; the README and manual ship in
-  English and Simplified Chinese — keep the pairs in sync. Commit messages:
-  English subject line; a Chinese mirror line in the body is welcome.
+  English and Simplified Chinese — keep the pairs in sync. Commit
+  messages: English, entirely — subject and body.
 
 ## Doc map
 
