@@ -28,3 +28,24 @@ test("the site's remark plugins run as well", async () => {
   assert.match((await validateSource('a/index.md', 'text')) ?? '', /site plugin refused/);
   setSiteHooks(undefined);
 });
+
+test('broken frontmatter YAML fails validation with its file line', async () => {
+  const problem = await validateSource('a/index.md', '---\ntitle: ok\nbad: [unclosed\n---\n\nbody\n');
+  assert.match(problem ?? '', /frontmatter/);
+  // the flow sequence opens on frontmatter line 2 = file line 3
+  assert.match(problem ?? '', /line/);
+  assert.equal(await validateSource('a/index.md', '---\ntitle: fine\n---\n\nbody\n'), null);
+});
+
+test("the site's rehype plugins run for both .md and .mdx", async () => {
+  setSiteHooks({
+    rehypePlugins: [
+      () => () => {
+        throw new Error('site rehype refused');
+      },
+    ],
+  });
+  assert.match((await validateSource('a/index.md', 'text')) ?? '', /site rehype refused/);
+  assert.match((await validateSource('a/index.mdx', 'text')) ?? '', /site rehype refused/);
+  setSiteHooks(undefined);
+});

@@ -1,7 +1,9 @@
 /**
  * Block revision history popover (the ⟲ handle): lists revisions-journal
  * entries whose recorded line range overlaps the hovered block, each with a
- * collapsible before/after diff and a one-click revert.
+ * collapsible before/after diff and a one-click revert. Whole-file records
+ * (lines '*': translation, inbox import) appear as read-only audit rows —
+ * who, when, via what — with a note that undoing them is a git operation.
  *
  * Revert is server-side (POST /revert with the revision's id): exact-match
  * replace of the revision's `after` span with its `before` — 409 when the
@@ -14,6 +16,7 @@ import { api } from './api';
 import { currentUser } from './auth';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
+import { rememberScroll } from './index';
 import { S } from './strings';
 import { h, popover, time, toast } from './ui';
 
@@ -38,7 +41,23 @@ function contentHit(rec: RevisionRecord, source: string | null): boolean {
   return s.length > 0 && (rec.after.trim() === s || rec.before.trim() === s);
 }
 
+/** Read-only audit row for a whole-file record: no diff, no revert. */
+function auditEntry(rec: RevisionRecord): HTMLElement {
+  return h(
+    'div',
+    { class: 'wiki-history-entry', dataset: { revisionId: rec.id } },
+    h(
+      'div',
+      { class: 'wiki-history-meta' },
+      h('span', { class: 'wiki-badge-soft' }, S.history.via[rec.via] ?? rec.via),
+      h('span', { class: 'wiki-history-who' }, `${rec.user} · `, time(rec.ts), ` · ${S.history.wholeFile}`),
+    ),
+    h('div', { class: 'wiki-history-note' }, S.history.wholeFileNote),
+  );
+}
+
 function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
+  if (rec.lines === '*') return auditEntry(rec);
   const revertBtn = h(
     'button',
     {
@@ -53,6 +72,7 @@ function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
         revertBtn.disabled = true;
         try {
           await api.post(`/revert/${ctx.meta.id}`, { id: rec.id });
+          rememberScroll();
           toast(S.history.reverted);
           setTimeout(() => window.location.reload(), 1200);
         } catch (err) {
@@ -101,9 +121,10 @@ export async function openHistory(
         .then((b) => b.source)
         .catch(() => null),
     ]);
-    // journal is append-ordered → newest first; whole-file ops ('*') excluded
+    // journal is append-ordered → newest first; whole-file ops ('*') always
+    // concern this block and stay in the list as read-only audit rows
     recs = resp.revisions
-      .filter((r) => r.lines !== '*' && (overlaps(r, block) || contentHit(r, cur)))
+      .filter((r) => r.lines === '*' || overlaps(r, block) || contentHit(r, cur))
       .reverse();
   } catch (err) {
     toast(err instanceof Error ? err.message : S.history.loadFailed, 'err');

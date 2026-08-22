@@ -74,8 +74,13 @@ npm test
 - Every path the server touches — notes, assets, inbox files, AI job
   changes — is resolved through `server/paths.ts` and must stay inside its
   root; every write goes through `store.ts` (atomic, under the in-process
-  lock). AI jobs never work in the project: they run in a
-  `workspace.ts` copy and their changes pass `validate.ts` first.
+  lock). AI jobs never work in the project: they run in a `workspace.ts`
+  copy against a start-of-job snapshot, their changes pass `validate.ts`,
+  and a file that changed in the project meanwhile refuses the whole
+  application — a concurrent manual edit always wins.
+- Child processes (claude jobs, snapshot builds) receive an allowlisted
+  environment — deployment secrets never reach them. API responses never
+  carry a member's email except to that member or an admin.
 
 - Naming boundary: **inkbrush** is the component name (package,
   integration, config, meta tags, slots); **wiki** is the feature name

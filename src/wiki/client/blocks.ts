@@ -9,8 +9,11 @@
  * opens the revision-history popover (view diffs / one-click revert).
  *
  * Activation paths: hovering a block (fine pointer), tapping a block (coarse
- * pointer), or focusing a block / a control inside it (keyboard — every block
- * is a tab stop; Enter moves focus into the toolbar, Escape returns it).
+ * pointer), or focusing a block / a control inside it (keyboard). Keyboard
+ * model: the blocks share one roving tab stop — Tab enters the block layer
+ * once, ↑/↓ move between blocks, Enter moves focus into the toolbar (whose
+ * buttons rove the same way with ←/→/↑/↓), Escape returns it. Host-set
+ * tabindex / aria-describedby values are preserved and restored on unmount.
  */
 import { currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
@@ -58,12 +61,30 @@ export function mountBlocks(ctx: PageContext): void {
   let active: BlockRef | null = null;
   let editing = false;
 
+  // host attribute values, restored verbatim on unmount
+  const savedAttrs = new Map<HTMLElement, { tabindex: string | null; describedby: string | null }>();
   const hint = h('span', { id: 'wiki-block-hint', class: 'wiki-sr-only' }, S.blocks.focusHint);
   for (const block of blocks) {
+    savedAttrs.set(block.el, {
+      tabindex: block.el.getAttribute('tabindex'),
+      describedby: block.el.getAttribute('aria-describedby'),
+    });
     block.el.classList.add('wiki-block');
-    block.el.tabIndex = 0;
-    block.el.setAttribute('aria-describedby', hint.id);
+    // the hint joins (never replaces) a host-provided description
+    const described = block.el.getAttribute('aria-describedby');
+    block.el.setAttribute('aria-describedby', described ? `${described} ${hint.id}` : hint.id);
   }
+
+  // Roving tab stop over the blocks: exactly one block is in the tab order at
+  // a time; the stop follows the active block, ↑/↓ move it (see keydown).
+  let tabStop: BlockRef = blocks[0]!;
+  for (const block of blocks) block.el.tabIndex = block === tabStop ? 0 : -1;
+  const setTabStop = (block: BlockRef): void => {
+    if (block === tabStop) return;
+    tabStop.el.tabIndex = -1;
+    tabStop = block;
+    block.el.tabIndex = 0;
+  };
 
   const editBtn = h(
     'button',
@@ -72,16 +93,23 @@ export function mountBlocks(ctx: PageContext): void {
   );
   const aiBtn = h(
     'button',
-    { type: 'button', class: 'ai', 'aria-label': S.blocks.ai, title: S.blocks.ai, 'aria-expanded': 'false' },
+    {
+      type: 'button',
+      class: 'ai',
+      'aria-label': S.blocks.ai,
+      title: S.blocks.ai,
+      'aria-haspopup': 'dialog',
+      'aria-expanded': 'false',
+    },
     icon('sparkle'),
   );
   const historyBtn = h(
     'button',
     {
       type: 'button',
-      class: 'hist',
       'aria-label': S.blocks.history,
       title: S.blocks.history,
+      'aria-haspopup': 'dialog',
       'aria-expanded': 'false',
     },
     icon('history'),
@@ -95,9 +123,22 @@ export function mountBlocks(ctx: PageContext): void {
   );
   document.body.append(hint, handle);
 
+  // Roving tab stop inside the toolbar (arrow keys move focus, so only one
+  // button sits in the tab order).
+  const allButtons = [editBtn, aiBtn, historyBtn];
+  const focusToolbarButton = (btn: HTMLButtonElement): void => {
+    for (const b of allButtons) b.tabIndex = b === btn ? 0 : -1;
+    btn.focus();
+  };
+  for (const b of allButtons) b.tabIndex = b === editBtn ? 0 : -1;
+
   // revision history is editor-only on the server: the control exists only for signed-in users
   const syncHistory = (): void => {
     historyBtn.hidden = !currentUser();
+    if (historyBtn.hidden && historyBtn.tabIndex === 0) {
+      historyBtn.tabIndex = -1;
+      editBtn.tabIndex = 0;
+    }
   };
   syncHistory();
   onAuthChange(syncHistory);
@@ -111,9 +152,9 @@ export function mountBlocks(ctx: PageContext): void {
 
   /**
    * Sticky-chrome clamp — the handle must never slide underneath the site's
-   * sticky header. Contract: a site marks its sticky bar with
-   * `[data-inkbrush-sticky]`; a `.site-nav` element is honored as a fallback
-   * convention. Neither present → no clamp.
+   * sticky header. Contract: an explicit `[data-inkbrush-sticky]` marker
+   * wins; the `.site-nav` class fallback exists for sites that declare no
+   * marker. Neither present → no clamp.
    */
   const navBottom = (): number => {
     const nav =
@@ -151,6 +192,7 @@ export function mountBlocks(ctx: PageContext): void {
     if (editing) return;
     active?.el.classList.remove('wiki-block-hover');
     active = block;
+    setTabStop(block);
     block.el.classList.add('wiki-block-hover');
     if (positionHandle(block)) {
       handle.classList.add('show');
@@ -167,14 +209,28 @@ export function mountBlocks(ctx: PageContext): void {
     return el ? (byEl.get(el as HTMLElement) ?? null) : null;
   };
 
-  document.addEventListener('mouseover', (e) => {
+  // Document-level listeners are registered through `listen` so unmount (HMR
+  // dispose) can remove every one of them.
+  const documentListeners: Array<
+    [string, EventListener, AddEventListenerOptions | undefined]
+  > = [];
+  const listen = <K extends keyof DocumentEventMap>(
+    type: K,
+    fn: (e: DocumentEventMap[K]) => void,
+    opts?: AddEventListenerOptions,
+  ): void => {
+    document.addEventListener(type, fn as EventListener, opts);
+    documentListeners.push([type, fn as EventListener, opts]);
+  };
+
+  listen('mouseover', (e) => {
     if (editing || handle.contains(e.target as Node)) return;
     const block = blockOf(e.target);
     if (block && block !== active) showHandle(block);
   });
 
   // coarse pointer: a tap on a block shows its toolbar, a tap elsewhere hides it
-  document.addEventListener('pointerup', (e) => {
+  listen('pointerup', (e) => {
     if (editing || e.pointerType !== 'touch' || handle.contains(e.target as Node)) return;
     const block = blockOf(e.target);
     if (block) {
@@ -186,7 +242,7 @@ export function mountBlocks(ctx: PageContext): void {
 
   // keyboard: focus inside a block shows its toolbar; focus elsewhere hides it
   // (a popover opened from the toolbar keeps it, so focus can return to it)
-  document.addEventListener('focusin', (e) => {
+  listen('focusin', (e) => {
     if (editing) return;
     const target = e.target;
     if (!(target instanceof Element)) return;
@@ -199,10 +255,9 @@ export function mountBlocks(ctx: PageContext): void {
     }
   });
 
-  const toolbarButtons = (): HTMLButtonElement[] =>
-    [editBtn, aiBtn, historyBtn].filter((b) => !b.hidden);
+  const toolbarButtons = (): HTMLButtonElement[] => allButtons.filter((b) => !b.hidden);
 
-  document.addEventListener('keydown', (e) => {
+  listen('keydown', (e) => {
     if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
@@ -222,21 +277,33 @@ export function mountBlocks(ctx: PageContext): void {
       }
       if (next) {
         e.preventDefault();
-        next.focus();
+        focusToolbarButton(next);
       }
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey && byEl.has(target)) {
+    if (!byEl.has(target)) return;
+    // ↑/↓ on a block element move the roving tab stop to its neighbor
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const index = blocks.indexOf(byEl.get(target)!);
+      const next = blocks[index + (e.key === 'ArrowDown' ? 1 : -1)];
+      if (next) {
+        e.preventDefault();
+        next.el.focus();
+      }
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
       const block = byEl.get(target)!;
       if (block !== active) showHandle(block);
       if (block === active) {
         e.preventDefault();
-        toolbarButtons()[0]?.focus();
+        const first = toolbarButtons()[0];
+        if (first) focusToolbarButton(first);
       }
     }
   });
 
-  document.addEventListener(
+  listen(
     'scroll',
     () => {
       if (!active || editing) return;
@@ -294,4 +361,21 @@ export function mountBlocks(ctx: PageContext): void {
       toast(S.blocks.historyLoadFailed, 'err');
     }
   });
+
+  // Unmount: drop the document listeners, remove the injected chrome and
+  // restore every host attribute this mount touched.
+  const unmount = (): void => {
+    for (const [type, fn, opts] of documentListeners) document.removeEventListener(type, fn, opts);
+    handle.remove();
+    hint.remove();
+    for (const block of blocks) {
+      block.el.classList.remove('wiki-block', 'wiki-block-hover');
+      const saved = savedAttrs.get(block.el)!;
+      if (saved.tabindex === null) block.el.removeAttribute('tabindex');
+      else block.el.setAttribute('tabindex', saved.tabindex);
+      if (saved.describedby === null) block.el.removeAttribute('aria-describedby');
+      else block.el.setAttribute('aria-describedby', saved.describedby);
+    }
+  };
+  import.meta.hot?.dispose(unmount);
 }

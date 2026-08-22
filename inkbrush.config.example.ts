@@ -11,19 +11,23 @@ import { defineInkbrushConfig } from 'astro-inkbrush/config';
 
 export default defineInkbrushConfig({
   auth: {
-    // Local quick login (name + email, no password) — for your own machine or
-    // a private network; MUST be off for anything externally reachable.
+    // Local quick login (name + email, no password). Omitted, the default
+    // serves LOOPBACK clients only (127.0.0.1/::1, no reverse proxy in
+    // between); an explicit `dev: true` — as here — serves every client and
+    // MUST be off for anything externally reachable.
     dev: true,
     // Google Workspace login: false = off. When enabled, secrets come from
     // the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET env vars, and the OAuth
-    // callback uses baseUrl:
+    // callback uses baseUrl. allowedDomains is fail-closed: an empty list
+    // admits NOBODY — list your domains (['*'] = any Google account):
     // google: { allowedDomains: ['your-team.com'], baseUrl: 'https://wiki.example.com' },
     google: false,
     // Google Workspace SAML SSO (Admin console → custom SAML app).
     // The SP side needs no private key; certFile is the IdP signing
     // certificate (full PEM / bare base64 body / whole base64 blob all work;
-    // the path supports ~/ and site-root-relative). SP entityID/ACS derive
-    // from baseUrl:
+    // the path supports ~/ and site-root-relative). allowedDomains follows
+    // the same fail-closed policy as google above: an empty list admits
+    // NOBODY — list your domains. SP entityID/ACS derive from baseUrl:
     //   entityID = <baseUrl>/api/wiki/auth/saml/metadata
     //   ACS      = <baseUrl>/api/wiki/auth/saml/callback
     // googleSaml: {

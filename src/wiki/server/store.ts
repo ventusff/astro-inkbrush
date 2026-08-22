@@ -25,6 +25,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -49,18 +50,39 @@ function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
-/** write `text` to `file` atomically: a sibling temp file, fsync, rename */
+/** write `text` to `file` atomically: a sibling temp file, fsync, rename;
+ *  a failed write removes the temp file, and the directory entry is fsynced
+ *  (best-effort) so the rename survives a crash */
 export function writeFileAtomic(file: string, text: string, mode?: number): void {
   ensureDir(dirname(file));
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-  const fd = openSync(tmp, 'w', mode);
   try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    const fd = openSync(tmp, 'w', mode);
+    try {
+      writeSync(fd, text);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, file);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* temp file never created or already gone */
+    }
+    throw err;
   }
-  renameSync(tmp, file);
+  try {
+    const dirFd = openSync(dirname(file), 'r');
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch {
+    /* directory fsync is best-effort (not every fs supports it) */
+  }
 }
 
 /* ---------------- in-process lock ---------------- */

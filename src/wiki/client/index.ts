@@ -39,6 +39,11 @@ export function rememberScroll(): void {
 }
 
 async function init(): Promise<void> {
+  // Mount guard: the entry may be evaluated more than once (Vite HMR, double
+  // injection); the chrome mounts into the document exactly once.
+  if (document.documentElement.dataset['inkbrushMounted']) return;
+  document.documentElement.dataset['inkbrushMounted'] = '1';
+
   restoreScroll();
   await mountAuthChip();
 
@@ -53,7 +58,7 @@ async function init(): Promise<void> {
   const ctx: PageContext = { meta };
 
   // feature modules load lazily so the base bundle stays light
-  const [{ mountBlocks }] = await Promise.all([import('./blocks')]);
+  const { mountBlocks } = await import('./blocks');
   mountBlocks(ctx);
   const { mountChatPanel } = await import('./chat-panel');
   mountChatPanel(ctx);

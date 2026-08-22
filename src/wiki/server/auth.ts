@@ -16,7 +16,9 @@
  *
  * Providers (toggled per deployment in inkbrush.config.ts → auth):
  *  - dev:    quick login with any name/email — personal machines and
- *            private networks (`auth.dev`, default true).
+ *            private networks (`auth.dev`). The built-in default serves
+ *            loopback clients only; an explicit `dev: true` serves every
+ *            client.
  *  - google: OAuth2 authorization-code flow with PKCE (Google Workspace).
  *            Opt-in via `auth.google: {…}`; the client id/secret stay in env
  *            (GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET). The authorization
@@ -202,8 +204,22 @@ export function safeReturnUrl(raw: string | null | undefined): string {
 
 /* ---------------- providers ---------------- */
 
-export function devLoginEnabled(): boolean {
-  return wikiConfig().auth.dev;
+/** the request comes from the machine itself: a loopback socket address and
+ *  no forwarding header (a proxied request is never loopback) */
+export function isLoopbackRequest(req: IncomingMessage): boolean {
+  if (req.headers['x-forwarded-for']) return false;
+  const addr = req.socket.remoteAddress ?? '';
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
+/** dev quick-login availability for this request: `auth.dev: false` is off
+ *  everywhere; an explicit `auth.dev: true` (config file or WIKI_DEV_LOGIN)
+ *  serves every client; the built-in default serves loopback clients only */
+export function devLoginEnabled(req: IncomingMessage): boolean {
+  const auth = wikiConfig().auth;
+  if (!auth.dev) return false;
+  if (auth.devExplicit) return true;
+  return isLoopbackRequest(req);
 }
 
 /** off = disabled in inkbrush.config.ts · ready = usable · unconfigured = enabled

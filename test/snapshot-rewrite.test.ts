@@ -395,10 +395,9 @@ test('a stylesheet dense with url() tokens stays linear too', () => {
 });
 
 test('a document far larger than any note finishes in one pass', () => {
-  // Measured separately, cost per element holds flat from 2k to 128k elements,
-  // so the walk is linear. A wall-clock ratio would only measure the noise of a
-  // shared machine, hence a single loose ceiling: it catches a quadratic
-  // regression (which would take minutes here) and nothing else.
+  // The walk must stay linear in element count. The ceiling is a single
+  // loose bound: a quadratic walk takes minutes at this size, and a tighter
+  // wall-clock bound would only measure shared-machine noise.
   const html = `<div>${'<p><img src="fig.jpg"><style data-x=">">'.repeat(30_000)}</div>`;
   const started = process.hrtime.bigint();
   const out = rewriteHtml(html, PAGE);
@@ -425,8 +424,8 @@ test('malformed markup does not lose content or hang', () => {
 /* ---------------- the CMS-leak check ---------------- */
 
 test('a note that documents an endpoint is not mistaken for a CMS leak', () => {
-  // this exact page could not be shared at all: the hygiene check matched the
-  // endpoint printed in its SAML settings table
+  // an endpoint URL printed in a page's prose (here a SAML settings table)
+  // is text, not executable markup — it must never block sharing the page
   const html = '<body><table><tr><td>ACS URL</td><td><code>https://hub.example.com/api/wiki/auth/saml/callback</code></td></tr></table></body>';
   assert.equal(executableMarkup(html).includes('/api/wiki'), false);
 });

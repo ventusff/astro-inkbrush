@@ -15,7 +15,7 @@
 import type { GoogleAuthState, MeResponse, WikiUser } from '../shared/types';
 import { api } from './api';
 import { S } from './strings';
-import { dismissPopover, h, popover, toast } from './ui';
+import { dismissPopover, h, popover, toast, uid } from './ui';
 
 let me: MeResponse = { user: null, providers: { dev: false, google: 'off', googleSaml: 'off' }, share: 'off' };
 const listeners = new Set<(user: WikiUser | null) => void>();
@@ -37,57 +37,58 @@ function notify(): void {
   for (const fn of listeners) fn(me.user);
 }
 
+/** Avatar. Decorative: the user's name is rendered right next to it (chip
+ *  and account panel alike), so it is empty-alt / hidden for assistive
+ *  technology. */
 function avatar(user: WikiUser): HTMLElement {
   if (user.picture) {
-    return h('img', { class: 'wiki-avatar', src: user.picture, alt: user.name, referrerpolicy: 'no-referrer' });
+    return h('img', { class: 'wiki-avatar', src: user.picture, alt: '', referrerpolicy: 'no-referrer' });
   }
   const initial = [...user.name][0]?.toUpperCase() ?? '?';
-  return h('span', { class: 'wiki-avatar wiki-avatar-fallback' }, initial);
+  return h('span', { class: 'wiki-avatar wiki-avatar-fallback', 'aria-hidden': 'true' }, initial);
+}
+
+/**
+ * One SSO sign-in button. 'off' (disabled in inkbrush.config.ts) → not
+ * rendered at all; 'unconfigured' → greyed out, with the missing-config
+ * explanation as a visible hint the button also references via
+ * aria-describedby.
+ */
+function ssoButton(state: GoogleAuthState, label: string, href: string, hintText: string): HTMLElement[] {
+  if (state === 'off') return [];
+  const ready = state === 'ready';
+  const hintId = ready ? null : uid('auth-hint');
+  const btn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'wiki-btn wiki-btn-google',
+      disabled: !ready,
+      ...(hintId ? { 'aria-describedby': hintId } : {}),
+      onclick: () => {
+        window.location.href = `${href}?return=${encodeURIComponent(window.location.pathname)}`;
+      },
+    },
+    h('span', { class: 'wiki-g-mark', 'aria-hidden': 'true' }, 'G'),
+    ` ${label}`,
+    ready ? null : h('span', { class: 'wiki-badge-soft' }, S.auth.notConfigured),
+  );
+  return hintId ? [btn, h('div', { id: hintId, class: 'wiki-auth-hint' }, hintText)] : [btn];
 }
 
 function signedOutPanel(rerender: () => void): HTMLElement {
-  const google = me.providers.google;
-  // 'off' (disabled in inkbrush.config.ts) → not rendered at all;
-  // 'unconfigured' → greyed out with a missing-env hint
-  const googleBtn =
-    google === 'off'
-      ? null
-      : h(
-          'button',
-          {
-            type: 'button',
-            class: 'wiki-btn wiki-btn-google',
-            disabled: google !== 'ready',
-            title: google === 'ready' ? '' : S.auth.googleMissingEnv,
-            onclick: () => {
-              window.location.href = `/api/wiki/auth/google?return=${encodeURIComponent(window.location.pathname)}`;
-            },
-          },
-          h('span', { class: 'wiki-g-mark', 'aria-hidden': 'true' }, 'G'),
-          ` ${S.auth.googleButton}`,
-          google === 'ready' ? null : h('span', { class: 'wiki-badge-soft' }, S.auth.notConfigured),
-        );
-
-  // SAML SSO: 'off' → not rendered; 'unconfigured' → greyed out
-  const saml = me.providers.googleSaml;
-  const samlBtn =
-    saml === 'off'
-      ? null
-      : h(
-          'button',
-          {
-            type: 'button',
-            class: 'wiki-btn wiki-btn-google',
-            disabled: saml !== 'ready',
-            title: saml === 'ready' ? '' : S.auth.samlMissingConfig,
-            onclick: () => {
-              window.location.href = `/api/wiki/auth/saml/login?return=${encodeURIComponent(window.location.pathname)}`;
-            },
-          },
-          h('span', { class: 'wiki-g-mark', 'aria-hidden': 'true' }, 'G'),
-          ` ${S.auth.googleButton}`,
-          saml === 'ready' ? null : h('span', { class: 'wiki-badge-soft' }, S.auth.notConfigured),
-        );
+  const googleParts = ssoButton(
+    me.providers.google,
+    S.auth.googleButton,
+    '/api/wiki/auth/google',
+    S.auth.googleMissingEnv,
+  );
+  const samlParts = ssoButton(
+    me.providers.googleSaml,
+    S.auth.samlButton,
+    '/api/wiki/auth/saml/login',
+    S.auth.samlMissingConfig,
+  );
 
   const name = h('input', {
     class: 'wiki-input',
@@ -135,15 +136,15 @@ function signedOutPanel(rerender: () => void): HTMLElement {
       )
     : null;
 
-  const ssoButtons = [samlBtn, googleBtn].filter((b): b is HTMLButtonElement => b !== null);
+  const ssoParts = [...samlParts, ...googleParts];
   return h(
     'div',
     { class: 'wiki-auth-panel' },
     h('div', { class: 'wiki-panel-title' }, S.auth.panelTitle),
-    ...ssoButtons,
-    ssoButtons.length && devForm ? h('div', { class: 'wiki-divider' }, h('span', {}, S.auth.or)) : null,
+    ...ssoParts,
+    ssoParts.length && devForm ? h('div', { class: 'wiki-divider' }, h('span', {}, S.auth.or)) : null,
     devForm,
-    !ssoButtons.length && !devForm
+    !ssoParts.length && !devForm
       ? h('div', { class: 'wiki-form-label' }, S.auth.noProviders)
       : null,
   );
@@ -219,6 +220,7 @@ export async function mountAuthChip(): Promise<void> {
     type: 'button',
     class: 'wiki-chip',
     'aria-label': S.auth.chipLabel,
+    'aria-haspopup': 'dialog',
     'aria-expanded': 'false',
   });
   const render = (): void => {

@@ -153,6 +153,7 @@ export function mountChatPanel(ctx: PageContext): void {
       class: 'wiki-fab',
       'aria-label': S.chat.fabTitle,
       title: S.chat.fabTitle,
+      'aria-haspopup': 'dialog',
       'aria-controls': panel.id,
       'aria-expanded': 'false',
     },
@@ -179,8 +180,8 @@ export function mountChatPanel(ctx: PageContext): void {
 
   /* ---------- open / close ---------- */
   // Closed = slid out of view + inert (nothing inside is focusable or exposed
-  // to assistive technology). Focus enters the input on open and returns to
-  // the FAB on close when it was inside the panel.
+  // to assistive technology). Focus enters the input on open; closing moves
+  // focus to the FAB when it is inside the panel.
   const setOpen = (open: boolean, focus = true): void => {
     const hadFocus = panel.contains(document.activeElement);
     state.open = open;
@@ -206,21 +207,20 @@ export function mountChatPanel(ctx: PageContext): void {
   if (state.open) setOpen(true, false);
 
   /* ---------- busy / generation ---------- */
-  // A generation identifies one conversation; every stream captures the one
-  // it was started in and stops touching state once it is left behind. Reset
-  // is disabled while a stream is busy, and a reset aborts any request still
-  // in flight.
+  // A generation identifies one conversation. Each stream captures the
+  // generation current at its start and stops touching shared state once the
+  // panel's generation moves past it. Reset stays available during a run: it
+  // advances the generation, aborts the in-flight request and clears the
+  // conversation.
   let busy = false;
   let generation = 0;
   let inflight: AbortController | null = null;
   const setBusy = (value: boolean): void => {
     busy = value;
     sendBtn.disabled = value;
-    resetBtn.disabled = value;
     log.setAttribute('aria-busy', String(value));
   };
   resetBtn.addEventListener('click', () => {
-    if (busy) return;
     generation += 1;
     inflight?.abort();
     inflight = null;
@@ -299,6 +299,11 @@ export function mountChatPanel(ctx: PageContext): void {
           log.scrollTop = log.scrollHeight;
           return;
         }
+      }
+      // the stream ended (clean EOF) without an error/result event
+      if (mine === generation) {
+        spinner.remove();
+        live.append(h('div', { class: 'tool err' }, S.chat.streamEnded));
       }
     } catch (err) {
       if (mine !== generation) return;

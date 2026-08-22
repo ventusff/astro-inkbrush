@@ -41,15 +41,17 @@ Inkstone 配套获得完整观感。
 - 🤖 **AI 协作** —— 改写某个块、就当前笔记提问、一键生成整篇笔记的另一语言
   版——经 `claude` CLI,进度实时流式展示。每个任务都在一份只含这篇笔记
   (以及你配置里点名的伴随文件)的临时工作副本里跑,文件工具被限制在副本内、
-  没有 shell 与网络工具;结果先像手工保存一样过校验,过了才搬回项目。
+  没有 shell 与网络工具、环境变量按白名单给;结果先像手工保存一样过校验,
+  而且只有任务期间没人动过这批文件才搬回项目——并发的手工编辑永远赢。
 - 💬 **评论区** —— Markdown + 数学公式,服务端消毒,以 NDJSON 平文件存放在
-  项目旁的 `.wiki/data/` 下。
+  项目旁的 `.wiki/data/` 下;作者邮箱永不出服务端。
 - 📥 **Obsidian 收件箱** —— 监听 vault 目录;新笔记自动转换导入(附件复制到
   笔记同目录、用相对路径引用,双链用页面同一套解析器解析,高亮保留)。
 - 🔗 **双链** —— 一份 `[[wikilink]]` 实现,页面管线、编辑器预览、导入器三处
   共用:别名、锚点、语言镜像,解析不到时渲染死链标记而不是弄红构建。
-- 🔐 **登录方式** —— 本地快速登录、Google OAuth(PKCE、绑定浏览器的一次性
-  state)、Google Workspace SAML SSO(每个响应都必须对应本服务发出的请求);
+- 🔐 **登录方式** —— 本地快速登录(默认只服务本机)、Google OAuth(PKCE、
+  绑定浏览器的一次性 state)、Google Workspace SAML SSO(每个响应都必须对应
+  本服务发出的请求);域名白名单一律默认拒绝;
   HMAC cookie 或 JWT 会话(可跨子域 SSO);可选的文件式成员注册表——开启后
   只有在册成员能编辑,只有管理员能管理名单。
 - 📤 **密码门控分享** —— 把单篇笔记连同全部资源快照成静态包,经一个
@@ -104,14 +106,18 @@ import { markdownProcessor } from 'astro-inkbrush/markdown';
 
 const WIKI_MODE = Boolean(process.env.WIKI);
 
+const remarkPlugins = [/* 站点自己的 */];
+const rehypePlugins = [/* 站点自己的 */];
+
 export default defineConfig({
   markdown: {
     processor: markdownProcessor({
-      remarkPlugins: [/* 站点自己的 */],
-      rehypePlugins: [/* 站点自己的 */, ...(WIKI_MODE ? [rehypeWikiBlocks] : [])],
+      remarkPlugins,
+      rehypePlugins: [...rehypePlugins, ...(WIKI_MODE ? [rehypeWikiBlocks] : [])],
     }),
   },
-  integrations: [...(WIKI_MODE ? [inkbrush()] : [])],
+  // 同一份插件交给 CMS:预览与保存校验就和页面渲染一模一样
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins } })] : [])],
 });
 ```
 

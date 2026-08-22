@@ -8,9 +8,9 @@ import { defineInkbrushConfig } from 'astro-inkbrush/config';
 
 export default defineInkbrushConfig({
   auth: {
-    // Local quick sign-in (name + email, no password) — exactly right for a
-    // demo on your own machine. Anything externally reachable must turn this
-    // off and use Google OAuth / SAML instead (see inkbrush.config.example.ts).
+    // Local quick sign-in (name + email, no password) — for a demo on one's
+    // own machine only. Anything externally reachable must turn this off and
+    // use Google OAuth / SAML instead (see inkbrush.config.example.ts).
     dev: true,
   },
   content: {

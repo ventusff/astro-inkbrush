@@ -36,6 +36,8 @@ Each incoming note is converted, not copied:
   source line under the title, and a description is derived from the first
   substantive paragraph
 
-Every import lands in the revision journal (via: inbox) and autocommits
-like any other edit — so [[revisions]] applies to imported notes too, from
-their very first second on the site.
+Every import lands in the revision journal (via: inbox) as a whole-file
+record: ⟲ lists it as an audit row, and undoing an import is a git
+operation. With `autocommit` on, each import also becomes a git commit like
+any other edit — this demo keeps autocommit off, so imported files arrive
+as ordinary working-tree changes to review and commit yourself.

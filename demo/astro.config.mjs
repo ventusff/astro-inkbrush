@@ -1,13 +1,17 @@
 // @ts-check
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'astro/config';
 import { markdownProcessor } from 'astro-inkbrush/markdown';
 import { buildWikilinkResolver, cachedScan, remarkWikilinks } from 'astro-inkbrush/wikilinks';
 
 // WIKI=1 astro dev → editing mode: the inkbrush integration mounts the CMS
 // (client UI + /api/wiki middleware) and rehypeWikiBlocks stamps each block
-// with its source line range. A plain `astro build` takes neither import —
-// the published site is byte-identical to one that never installed the CMS.
-const WIKI_MODE = Boolean(process.env.WIKI);
+// with its source line range. A plain `astro build` loads neither CMS
+// module, and the output contains no CMS bytes (postbuild check-dist
+// enforces it); the dialect and wikilink imports above run at build time
+// but ship nothing.
+const WIKI_MODE = process.env.WIKI === '1' || process.env.WIKI === 'true';
 const engine = WIKI_MODE ? await import('astro-inkbrush') : null;
 
 // Deploy target comes from the environment: GitHub Pages project sites live
@@ -19,7 +23,7 @@ const BASE = (process.env.DEMO_BASE || '/').replace(/\/+$/, '') || '';
 // rendering, editor preview and the inbox importer; the site supplies the
 // resolution domain (which notes exist) and the routing (where a note lives).
 // remarkWikilinks is a unified plugin: mount it as a [plugin, options] pair.
-const CONTENT_DIR = new URL('./src/content/notes', import.meta.url).pathname;
+const CONTENT_DIR = fileURLToPath(new URL('./src/content/notes', import.meta.url));
 const urlFor = (id) => `${BASE}/notes/${id}/`;
 const wikilinkOptions = {
   resolve: buildWikilinkResolver({

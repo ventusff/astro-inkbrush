@@ -31,7 +31,7 @@ the same way, marked ambiguous.)
 
 ## One implementation, three consumers
 
-The same resolver runs in the page pipeline, in the editor's live preview,
-and in the [[inbox]] importer — so a link means the same thing everywhere.
+The pages, the editor's live preview and the [[inbox]] importer resolve
+with the same rules — so a link means the same thing everywhere.
 In editing mode, typing `[[` in the editor pops up autocompletion over ids,
 titles and aliases.

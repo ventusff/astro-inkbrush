@@ -26,9 +26,12 @@ import { join } from 'node:path';
 
 import type { IdentityUser, IdentityUsersResponse } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
+import { IdentityValidationError, validateUserRecords } from './identity-records.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, json, readBody } from './index.ts';
 import { withLock, writeFileAtomic } from './store.ts';
+
+export { IdentityValidationError };
 
 type IdentityConf = NonNullable<ReturnType<typeof wikiConfig>['identity']>;
 
@@ -36,9 +39,6 @@ type IdentityConf = NonNullable<ReturnType<typeof wikiConfig>['identity']>;
 export function identityConfig(): IdentityConf | null {
   return wikiConfig().identity;
 }
-
-/** validation failures the API maps to 400 (vs unexpected errors → 500) */
-export class IdentityValidationError extends Error {}
 
 function usersFile(conf: IdentityConf): string {
   return join(conf.dir, 'users.json');
@@ -73,8 +73,10 @@ export function ensureRegistry(): void {
   if (conf) readUsers(conf);
 }
 
-/** the registry; a file that exists but does not parse is an error, never
- *  an empty list (the next write would erase every member) */
+/** the registry; a file that exists but does not parse — or whose records
+ *  violate the write-side invariants (shape, email, role vocabulary, no
+ *  duplicates) — is an error, never an empty or partial list (fail closed:
+ *  the next write would otherwise erase recoverable members) */
 function readUsers(conf: IdentityConf): IdentityUser[] {
   ensureSeeded(conf);
   const file = usersFile(conf);
@@ -84,8 +86,13 @@ function readUsers(conf: IdentityConf): IdentityUser[] {
   } catch (err) {
     throw new Error(`identity registry unreadable (${file}): ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!Array.isArray(parsed)) throw new Error(`identity registry is not an array (${file})`);
-  return parsed as IdentityUser[];
+  try {
+    return validateUserRecords(parsed, conf.roles);
+  } catch (err) {
+    throw new Error(
+      `identity registry invalid (${file}): ${err instanceof Error ? err.message : String(err)} — refusing to use it`,
+    );
+  }
 }
 
 export function listUsers(): IdentityUser[] {
@@ -101,31 +108,10 @@ export function findUser(email: string): IdentityUser | null {
 }
 
 /** normalize + validate an untrusted users list against the configured
- *  vocabulary and the at-least-one-admin invariant; throws IdentityValidationError */
+ *  vocabulary (shared with the read side) and the at-least-one-admin
+ *  invariant; throws IdentityValidationError */
 function validateUsers(conf: IdentityConf, input: unknown): IdentityUser[] {
-  if (!Array.isArray(input)) {
-    throw new IdentityValidationError('users must be an array');
-  }
-  const seen = new Set<string>();
-  const users = input.map((entry): IdentityUser => {
-    const rec = entry as Partial<IdentityUser> | null;
-    const email = typeof rec?.email === 'string' ? rec.email.trim().toLowerCase() : '';
-    if (!email.includes('@')) {
-      throw new IdentityValidationError(`invalid email: '${String(rec?.email ?? '')}'`);
-    }
-    if (seen.has(email)) {
-      throw new IdentityValidationError(`duplicate email: ${email}`);
-    }
-    seen.add(email);
-    const role = typeof rec?.role === 'string' ? rec.role : '';
-    if (!conf.roles.includes(role)) {
-      throw new IdentityValidationError(
-        `unknown role '${role}' (allowed: ${conf.roles.join(', ')})`,
-      );
-    }
-    const name = typeof rec?.name === 'string' && rec.name.trim() ? rec.name.trim() : (email.split('@')[0] ?? email);
-    return { email, name, role };
-  });
+  const users = validateUserRecords(input, conf.roles);
   if (!users.some((u) => u.role === conf.adminRole)) {
     throw new IdentityValidationError(
       `at least one '${conf.adminRole}' must remain`,

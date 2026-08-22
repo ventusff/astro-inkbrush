@@ -122,7 +122,7 @@ function createForm(ctx: PanelCtx): HTMLElement {
   });
   const expiry = h(
     'select',
-    { id: expiryId, class: 'wiki-input wiki-share-expiry' },
+    { id: expiryId, class: 'wiki-input' },
     h('option', { value: '7', selected: true }, S.share.days7),
     h('option', { value: '30' }, S.share.days30),
     h('option', { value: '' }, S.share.never),
@@ -234,6 +234,7 @@ export function mountShare(pageCtx: PageContext): void {
       type: 'button',
       class: 'wiki-chip wiki-share-chip',
       'aria-label': S.share.title,
+      'aria-haspopup': 'dialog',
       'aria-expanded': 'false',
       disabled: state !== 'ready',
       title: state === 'ready' ? S.share.chipReady : S.share.chipUnconfigured,

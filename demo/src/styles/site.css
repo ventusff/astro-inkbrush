@@ -1,7 +1,6 @@
-/* Demo stylesheet — deliberately small and deliberately ours.
- * astro-inkbrush ships no styling: this file is the whole look of the site,
- * ~150 lines of neutral CSS. Swap it out entirely and the CMS still works
- * (its own chrome themes itself through --color-* tokens when present). */
+/* Demo stylesheet. astro-inkbrush ships no styling: this file is the whole
+ * look of the site. Swap it out entirely and the CMS still works (its own
+ * chrome themes itself through the --color-* tokens when present). */
 
 :root {
   --bg: #fdfdfc;
@@ -14,7 +13,8 @@
   --measure: 44rem;
 
   /* Host-token contract: the CMS chrome reads these --color-* names and
-   * takes on the site's palette; they alias the demo's own tokens above. */
+   * takes on the site's palette; they alias the demo's own tokens above.
+   * --wiki-content-max aligns the comment column with the reading measure. */
   --color-bg: var(--bg);
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
@@ -22,6 +22,7 @@
   --color-line: var(--line);
   --color-accent: var(--accent);
   --color-code-bg: var(--code-bg);
+  --wiki-content-max: var(--measure);
 }
 
 * {

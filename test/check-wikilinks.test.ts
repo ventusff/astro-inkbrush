@@ -5,10 +5,13 @@
  * test/fixtures/wikinotes, test/fixtures/cards and test/fixtures/site-config.ts.
  */
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { anchorsOf, checkWikilinks, loadSiteConfig } from '../scripts/check-wikilinks.mjs';
+import { anchorsOf, checkWikilinks, collectCorpus, loadSiteConfig, main } from '../scripts/check-wikilinks.mjs';
 import { defaultSlugify } from '../src/lib/wikilinks.ts';
 
 const NOTES = fileURLToPath(new URL('./fixtures/wikinotes', import.meta.url));
@@ -26,6 +29,19 @@ const lines = (report: Line[]): string[] => report.map((r) => `${r.level} ${r.ki
 test('anchors: ATX headings slugged, closing hashes dropped, explicit {#id} kept, code excluded', () => {
   const text = ['## Deep Dive ##', '### Custom *Name* {#custom-id}', '```', '## Not A Heading', '```', '#notahashtag'].join('\n');
   assert.deepEqual([...anchorsOf(text, defaultSlugify)].sort(), ['custom-id', 'custom-name', 'deep-dive']);
+});
+
+test('anchors: duplicate headings take -2, -3 suffixes; setext headings count', () => {
+  const text = ['Top Title', '=========', '', '## Setup', '', '## Setup', '', '## Setup', ''].join('\n');
+  assert.deepEqual([...anchorsOf(text, defaultSlugify)].sort(), ['setup', 'setup-2', 'setup-3', 'top-title']);
+});
+
+test('anchors: an explicit id reserves its slug in the dedup pool', () => {
+  const text = ['## One {#setup}', '', '## Setup', ''].join('\n');
+  const anchors = anchorsOf(text, defaultSlugify);
+  // the generated slug of the second heading dedups against the explicit id
+  assert.ok(anchors.has('setup'));
+  assert.ok(anchors.has('setup-2'));
 });
 
 test('the built-in resolver: missing, ambiguous, anchor and unmatched are each reported once', () => {
@@ -91,4 +107,41 @@ test('--config: the site resolver and slugifier replace the built-in ones', asyn
 
 test('--config rejects a module without a wikilinks options object', async () => {
   await assert.rejects(loadSiteConfig(fileURLToPath(new URL('./fixtures/site-config-empty.mjs', import.meta.url))), /wikilinks/);
+});
+
+test('a backslash-escaped wikilink is neither a dead link nor a stray opener', () => {
+  // alpha carries `\[[never-a-note]]`: an unescaped spelling would FAIL
+  // missing and the leftover [[ would WARN unmatched
+  const { report } = checkWikilinks(NOTES);
+  assert.equal(report.some((r) => r.message.includes('never-a-note')), false);
+  assert.equal(report.filter((r) => r.kind === 'unmatched').length, 1);
+});
+
+test('a trailing valued option is a usage error', async () => {
+  for (const argv of [[NOTES, '--config'], [NOTES, '--allow'], ['--extra']]) {
+    assert.equal(await main(argv), 2);
+  }
+});
+
+test('an extra corpus follows symlinks only inside its own tree and terminates on cycles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-cards-'));
+  const outside = mkdtempSync(join(tmpdir(), 'inkbrush-vault-'));
+  try {
+    writeFileSync(join(outside, 'leak.md'), '---\ntitle: Leak\n---\n');
+    mkdirSync(join(dir, 'sub'));
+    writeFileSync(join(dir, 'one.md'), '---\ntitle: One\n---\n');
+    writeFileSync(join(dir, 'sub', 'two.md'), '---\ntitle: Two\n---\n');
+    symlinkSync(dir, join(dir, 'loop'));
+    symlinkSync(outside, join(dir, 'ext'));
+    symlinkSync(join(dir, 'sub'), join(dir, 'alias'));
+    const corpus = collectCorpus(NOTES, [{ dir, prefix: 'cards' }]);
+    const cardIds = corpus.map((n: { id: string }) => n.id).filter((id: string) => id.startsWith('cards/'));
+    // each real directory is visited once, under the first path that reaches
+    // it in name order: `alias` (a symlink to sub/) precedes `sub`; the
+    // escaping `ext` link and the `loop` cycle contribute nothing
+    assert.deepEqual(cardIds.sort(), ['cards/alias/two', 'cards/one']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });

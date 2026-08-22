@@ -19,8 +19,10 @@ import type { LocaleDef, LocaleInput } from './shared/locales.ts';
 export type { LocaleDef, LocaleInput };
 
 export interface GoogleAuthConfig {
-  /** allowed Workspace domains and/or full addresses (omitted/empty = anyone
-   *  who passes Google auth), e.g. ['acme.com', 'bob@gmail.com'] */
+  /** allowed Workspace domains and/or full addresses, e.g. ['acme.com',
+   *  'bob@gmail.com']. Fail-closed: omitted/empty admits NOBODY — a
+   *  deployment must list its domains; ['*'] explicitly admits every
+   *  Google account */
   allowedDomains?: string[];
   /** external base URL for the OAuth callback (default: the request host —
    *  set this behind a reverse proxy / on a named domain) */
@@ -38,7 +40,9 @@ export interface GoogleSamlAuthConfig {
    *  the site root). Three shapes are accepted: full multi-line PEM / bare
    *  base64 body / a whole `base64 -w0 cert.pem` blob */
   certFile: string;
-  /** allowed email domains and/or full addresses (omitted/empty = no restriction) */
+  /** allowed email domains and/or full addresses. Fail-closed, same policy
+   *  as Google OAuth: omitted/empty admits NOBODY — a deployment must list
+   *  its domains; ['*'] explicitly admits every asserted email */
   allowedDomains?: string[];
   /** external base URL of the site — SP entityID and ACS URL derive from it
    *  (required):
@@ -98,7 +102,9 @@ export interface IdentityConfig {
 export interface WikiConfigInput {
   auth?: {
     /** dev quick-login (name + email, no password) — local machines and
-     *  private networks. default true */
+     *  private networks. Omitted, the default (true) serves LOOPBACK
+     *  clients only (127.0.0.1/::1, direct socket, no forwarding header);
+     *  an explicit `dev: true` serves every client, `false` disables it */
     dev?: boolean;
     /** Google Workspace login; `false` or omitted = off. When enabled the
      *  client id/secret still come from env (GOOGLE_CLIENT_ID /
@@ -166,6 +172,9 @@ export interface WikiConfigInput {
 export interface WikiConfig {
   auth: {
     dev: boolean;
+    /** the dev flag was set explicitly (config file or WIKI_DEV_LOGIN);
+     *  a merely-defaulted true serves loopback clients only */
+    devExplicit: boolean;
     google: false | { allowedDomains: string[]; baseUrl: string | null };
     googleSaml:
       | false

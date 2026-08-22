@@ -44,14 +44,23 @@ export const LOCALES: readonly LocaleDef[] = [
 export function resolveLocales(input?: LocaleInput[] | undefined): readonly LocaleDef[] {
   if (!input || input.length === 0) return LOCALES;
   const seen = new Set<string>();
+  const seenPrefixes = new Set<string>();
   const resolved = input.map((l): LocaleDef => {
     if (!l.code || seen.has(l.code)) {
       throw new Error(`content.locales: duplicate or empty code '${l.code}'`);
     }
     seen.add(l.code);
-    if (l.prefix !== '' && !l.prefix.endsWith('/')) {
-      throw new Error(`content.locales: prefix for '${l.code}' must be '' or end with '/' (got '${l.prefix}')`);
+    // a prefix is '' (the default locale) or one id segment of word
+    // characters/dashes plus the trailing slash — never nested, never dotted
+    if (l.prefix !== '' && !/^[\w-]+\/$/.test(l.prefix)) {
+      throw new Error(
+        `content.locales: prefix for '${l.code}' must be '' or '<segment>/' where the segment is word characters/dashes (got '${l.prefix}')`,
+      );
     }
+    if (seenPrefixes.has(l.prefix)) {
+      throw new Error(`content.locales: duplicate prefix '${l.prefix}'`);
+    }
+    seenPrefixes.add(l.prefix);
     return {
       code: l.code,
       prefix: l.prefix,

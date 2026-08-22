@@ -81,8 +81,10 @@ integrations: [inkbrush({
 CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本内(编辑类任务
 `Read`、`Edit`、`Write`、`MultiEdit` 只对 `./**`;问答只有 `Read`),
 `Bash`、`Grep`、`Glob`、`WebSearch`、`WebFetch`、`NotebookEdit` 和子代理一律
-禁用。任务结束后把副本和项目做对比;每个改动过的 Markdown 文件都要过和
-人工保存相同的构建关(方言、守门、你的插件、MDX),过了才写进项目、入账、
+禁用,环境变量按白名单给——部署密钥到不了子进程。任务结束后把副本和开工时
+的快照做对比;每个改动过的 Markdown 文件都要过和人工保存相同的构建关
+(方言、守门、你的插件、MDX),而任务进行中被人手工改过的文件会让整批改动
+作废——手工编辑永远赢。全过了才把改动(伴随文件也在内)写进项目、入账、
 并在开了 `autocommit` 时提交。站点自己的写作规范通过 `claude.rules` 进入
 每一条提示词。
 
@@ -91,14 +93,16 @@ CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本
 每次内容变更——人工、Claude、翻译、收件箱导入、回滚——都往账本里追加一条
 带唯一 id 的记录(谁、何时、哪些行、改前改后、经何途径)。⟲ 列出当前块的
 记录(按行号重叠或内容精确匹配找回),带可展开的改前/改后对照和一键回滚;
-要撤销的内容已被后续修改覆盖时拒绝(409),不瞎猜。整文件的记录——导入、
-翻译——只留作审计,没有一键回滚:那是 git 的活。
+要撤销的内容已不在记录的位置(被后续修改覆盖,或同样文字出现在多处、
+无法唯一定位)时拒绝(409),不瞎猜。整文件的记录——导入、翻译、AI 的
+伴随文件改动——列为只读的审计行:撤销它们是 git 的活。
 
 ### 评论区
 
 每篇笔记页尾的评论区(挂进 `[data-inkbrush-slot="comments"]`,没有槽位则
 回退找 `.note-main .col` 容器)。Markdown + `$…$` 数学 + 代码块;服务端过
-消毒器渲染(GitHub 规则集,外加 `<mark>` 与数学类名);单条上限一万字;
+消毒器渲染(GitHub 规则集,外加数学类名;评论渲染数学但不解析双链——
+评论不能凭空铸造站内链接);单条上限一万字;
 只能删自己的评论。以 NDJSON 平文件存放——没有数据库。
 
 ### Obsidian 收件箱
@@ -167,7 +171,7 @@ export default defineInkbrushConfig({
 
 | 配置项 | 默认 | 作用 |
 |---|---|---|
-| `auth.dev` | `true` | 昵称+邮箱即时登录。对外可达的部署必须 `false` |
+| `auth.dev` | `true`(只服务本机) | 昵称+邮箱即时登录。默认只服务回环地址;显式 `true` 才对所有客户端开放——对外可达的部署绝不能开 |
 | `auth.google` | 关 | Google OAuth——[配置步骤](#google-oauth) |
 | `auth.googleSaml` | 关 | Google Workspace SAML SSO——[配置步骤](#google-workspace-saml-sso) |
 | `auth.session` | hmac 默认值 | 会话 cookie 行为——[会话](#会话)一节 |
@@ -194,7 +198,8 @@ dev server 启动时创建的,改它要重启。
 
 笔记语言表决定语言识别、语言切换按钮和 AI 翻译的目标语言。笔记 id 用路径
 前缀标语言;**必须恰好有一条 `prefix: ''`**——那是默认语言,它的笔记不带
-前缀、直接放内容根。默认表:
+前缀、直接放内容根。code 与 prefix 都不得重复,非空 prefix 只能是单个路径段
+(`en/`),否则拒绝启动。默认表:
 
 ```ts
 locales: [
@@ -244,9 +249,12 @@ locales: [
 
 ## 登录方式与会话
 
-### 本地快速登录
+### 本地快速登录(默认只服务本机)
 
-`auth.dev: true`——昵称+邮箱,无口令,即刻拿到会话。只适合本机与可信内网。
+昵称+邮箱,无口令,即刻拿到会话。默认(没有配置文件、或没写 `auth.dev`)
+**只服务本机回环地址**——`--host` 起的 dev server 会拒掉别的机器的快速登录。
+显式写 `auth.dev: true` 才对所有可达客户端开放:只适合可信内网,对外可达的
+部署绝不能开。
 
 ### Google OAuth
 
@@ -286,7 +294,9 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 `return`。相对路径的 return 恒放行;站外 origin 必须列入
 `session.trustedOrigins`。**ACS 永不 500**——一切失败都优雅降级为
 `303 /?login_error=<code>`,code 为 `saml_config` / `saml_disabled` /
-`saml_response` / `saml_invalid` / `wrong_domain` / `saml_error` 之一。
+`saml_response` / `saml_invalid` / `wrong_domain` / `not_member` /
+`saml_error` 之一。`allowedDomains` 和 OAuth 一样默认拒绝:空表谁也进不来,
+`['*']` 才是明说的全放行。
 
 ### 会话
 
@@ -327,13 +337,15 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 密码门控的静态快照:
 
 1. **创建**——弹层预生成 10 位密码(可改;最少 6 位),有效期 7 天 / 30 天 /
-   永久三选一。服务端跑一次 **WIKI-free 的 `astro build`**(缓存在
+   永久三选一。服务端用站点自己装的 astro、白名单环境变量、10 分钟上限跑一次
+   **WIKI-free 的 `astro build`**(缓存在
    `.wiki/share-dist`;冷构建要几分钟,进度实时流式回传),抽出该路由的
    `index.html` 与完整资源闭包(HTML 属性 → CSS `url()`/`@import` → JS
    import 图),引用改写成 `./` 相对、注入 `noindex`,打成 tar.gz PUT 给
    网关。分享 id 是 10 位 base58——不含 `0/O/I/l`,念出来不会错。
-2. **密码**——引擎侧 scrypt 哈希后才发给网关;明文不落盘、不出机器,仅创建
-   成功时显示一次。
+2. **密码**——从作者浏览器发到编辑机一次,在编辑机上 scrypt 哈希,发给网关的
+   只有哈希;明文在哪里都不落盘,仅创建成功时显示一次。一篇笔记同时只有
+   一个活跃分享:已有活跃分享时再创建会被拒(409)并回给现有链接。
 3. **撤销**——删掉网关上的目录,链接立刻 404。本地记录(含 `revokedAt`)
    保留在 `.wiki/data/shares.json` 作审计。
 
@@ -364,9 +376,9 @@ PUT 的请求头:
 
 ## 双链
 
-`[[目标]]`、`[[目标|显示文字]]`、`[[目标#锚点]]`——笔记、编辑器预览、评论
-里都可用,编辑器里有 `[[` 自动补全。`![[嵌入]]` 与引用惯用法 `[[1]](#ref)`
-刻意不算双链。解析顺序:
+`[[目标]]`、`[[目标|显示文字]]`、`[[目标#锚点]]`——笔记与编辑器预览里可用,
+编辑器里有 `[[` 自动补全(评论渲染数学但不解析双链)。`![[嵌入]]`、引用
+惯用法 `[[1]](#ref)` 与转义写法 `\[[x]]` 刻意不算双链。解析顺序:
 
 1. **来源笔记的语言镜像优先**——`en/` 笔记里的 `[[X]]`,若 `en/X` 存在则
    解析到它;
@@ -395,27 +407,31 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `GET /meta/<id>` | 公开 | 笔记元数据:文件、标题、`locales`(各语言存在与否) |
 | `GET /notes` | 公开 | 轻量笔记清单(自动补全与链接解析用) |
 | `GET /block/<id>?start&end` | 需登录 | 读块源码 `{source, hash, start, end}`(400/416) |
-| `PUT /block/<id>` | 需登录 | 写块 `{start,end,hash,source}`(409 锁冲突 / 422 MDX 错误) |
+| `PUT /block/<id>` | 需登录 | 写块 `{start,end,hash,source}`(409 锁冲突 / 422 构建错误);开 autocommit 时提交失败会回 `{ok:true, git:'failed'}` |
 | `POST /render` | 需登录 | `{markdown, sanitize?, note?}` → HTML(默认消毒;受信路径解析双链) |
 | `GET /revisions/<id>` | 需登录 | 该笔记的修订记录(最近 100 条) |
 | `POST /revert/<id>` | 需登录 | `{id}` → 回滚该条块级修订(404/400/409/422;整文件记录 400) |
 | `POST /claude/block` | 需登录 | NDJSON 流;300 秒上限;关页面照跑 |
-| `POST /claude/ask` | 需登录 | NDJSON 流;300 秒上限;断连即杀;可续对话 |
+| `POST /claude/ask` | 需登录 | NDJSON 流;300 秒上限;断连即杀;可续对话——但只有开启该会话的同一用户、同一笔记能续(否则 403;会话表在内存里,服务重启即清) |
 | `POST /claude/translate` | 需登录 | NDJSON 流;30 分钟上限;目标语言已存在时 409 |
+
+AI 任务每用户最多同时 2 个(超出 429)。
 | `GET /inbox/status` | 需登录 | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | 需登录 | `{path}` 补导;路径锁定在 `inbox.dir` 内 |
-| `GET /comments/<id>` | 公开 | 现存评论(删除已生效) |
+| `GET /comments/<id>` | 公开 | 现存评论(删除已生效);作者只露 `{name, provider}`——邮箱永不出服务端;`canDelete` 按请求者计算 |
 | `POST /comments/<id>` | 需登录 | 发评论(超一万字 413) |
 | `DELETE /comments/<id>?cid=` | 需登录 | 只能删自己的(否则 403) |
 | `GET /identity/users` | 管理员 | 成员表 + 角色词汇表 |
 | `PUT /identity/users` | 管理员 | 全表覆盖写(校验;保护最后一名管理员) |
-| `POST /share` | 需登录 | 创建分享——NDJSON 流:`progress…` → `result` |
-| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享 |
-| `DELETE /share/<id>` | 需登录 | 撤销 |
+| `POST /share` | 需登录 | 创建分享——NDJSON 流:`progress…` → `result`;该笔记已有活跃分享时 409 |
+| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填) |
+| `DELETE /share/<id>` | 需登录 | 撤销——只有创建者本人,或注册表开启时的管理员(否则 403) |
 
 通用规则:JSON 请求体必须以 `application/json` 发送、上限 1 MiB(否则
 415/413);改状态的请求若 `Origin`(或 `Referer`)指向本站和 `trustedOrigins`
-之外的站点,一律 403——浏览器总会带上它,所以 cookie 无法被别的网页盗用;
+之外的站点,一律 403——浏览器跨站表单必带 Origin,cookie 因此无法被别的
+网页盗用(两个头都没有的是非浏览器客户端,放行);SAML ACS 例外——它的
+鉴权是签名断言本身;
 预期内的 4xx 返回 `{error}` JSON,意外失败返回带参考 id 的 500,服务端日志里
 能按 id 找到。
 
@@ -444,7 +460,7 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
 ```
 .wiki/
   secret                    会话 HMAC 密钥(首次运行生成,0600)
-  data/comments/<id>.ndjson 追加式评论(笔记 id 里的 / 变 __)
+  data/comments/<id>.ndjson 追加式评论(笔记 id 经 URL 编码)
   data/revisions.ndjson     修订账本
   data/inbox-sync.json      收件箱监听状态(内容哈希)
   data/shares.json          分享记录(含已撤销的,作审计)

@@ -14,6 +14,10 @@
    every token its own value; light is the default and the chrome
    never reads prefers-color-scheme itself. Raw color values are
    allowed only inside these two token blocks.
+
+   Layout contract: --wiki-content-max sets the width of the
+   comment column (it falls back to the host's --maxw, then to
+   820px).
    ============================================================ */
 
 :root {
@@ -67,6 +71,28 @@
 }
 
 /* ---------------- utilities ---------------- */
+
+/* The chrome sizes its own boxes: border-box everywhere inside its own
+   surfaces, independent of the host page's box-sizing. */
+.wiki-chip-slot,
+.wiki-chip-slot *,
+.wiki-popover,
+.wiki-popover *,
+.wiki-editor,
+.wiki-editor *,
+.wiki-chat,
+.wiki-chat *,
+.wiki-comments,
+.wiki-comments *,
+.wiki-handle,
+.wiki-handle *,
+.wiki-toasts,
+.wiki-toasts *,
+.wiki-share-slot,
+.wiki-share-slot *,
+.wiki-fab {
+  box-sizing: border-box;
+}
 
 /* visually hidden, available to assistive technology */
 .wiki-sr-only {
@@ -335,6 +361,11 @@
   color: var(--wiki-faint);
   font-size: 12px;
 }
+.wiki-auth-hint {
+  font: 400 11px/1.5 var(--wiki-font);
+  color: var(--wiki-faint);
+  margin-top: -4px;
+}
 .wiki-auth-provider {
   font: 500 11px/1 var(--wiki-font);
   color: var(--wiki-ai);
@@ -355,8 +386,8 @@
 /* ---------------- members panel (identity module) ---------------- */
 
 .wiki-popover:has(.wiki-members) {
-  min-width: 400px;
-  max-width: 480px;
+  min-width: min(400px, calc(100vw - 2rem));
+  max-width: min(480px, calc(100vw - 2rem));
 }
 .wiki-members {
   display: flex;
@@ -581,6 +612,11 @@ select.wiki-members-role {
   color: var(--wiki-faint);
   font: italic 400 12.5px/2.4 var(--wiki-font);
 }
+.wiki-editor-preview .preview-error {
+  color: var(--wiki-danger);
+  font: 400 12.5px/1.6 var(--wiki-font);
+  padding: 8px 0;
+}
 .wiki-editor-cm .cm-editor {
   background: transparent;
   font-size: 13.5px;
@@ -622,11 +658,14 @@ select.wiki-members-role {
 
 /* ---------------- AI popover (block-level) ---------------- */
 
+.wiki-popover:has(.wiki-ai-pop) {
+  max-width: min(360px, calc(100vw - 2rem));
+}
 .wiki-ai-pop {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: 330px;
+  width: min(330px, calc(100vw - 4rem));
 }
 .wiki-ai-quick {
   display: flex;
@@ -870,7 +909,7 @@ select.wiki-members-role {
 /* ---------------- comments ---------------- */
 
 .wiki-comments {
-  max-width: var(--maxw, 820px);
+  max-width: var(--wiki-content-max, var(--maxw, 820px));
   margin: 3.5em auto 2em;
   padding: 0 8px;
   font-family: var(--wiki-font);
@@ -999,8 +1038,11 @@ select.wiki-members-role {
 
 /* ---------------- block revision history (⟲) ---------------- */
 
+.wiki-popover:has(.wiki-history) {
+  max-width: min(510px, calc(100vw - 1rem));
+}
 .wiki-history {
-  width: min(480px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 4rem));
   font-family: var(--wiki-font);
 }
 .wiki-history-list {
@@ -1032,6 +1074,10 @@ select.wiki-members-role {
 }
 .wiki-history-who {
   color: var(--wiki-faint);
+}
+.wiki-history-note {
+  color: var(--wiki-faint);
+  font-size: 12px;
 }
 .wiki-history-diff summary {
   cursor: pointer;
@@ -1070,6 +1116,17 @@ select.wiki-members-role {
   .wiki-chip-slot {
     top: var(--wiki-chip-top, 4px);
     right: var(--wiki-chip-right, 8px);
+  }
+  /* every popover surface yields to a narrow viewport */
+  .wiki-popover,
+  .wiki-popover:has(.wiki-members),
+  .wiki-popover:has(.wiki-history),
+  .wiki-popover:has(.wiki-ai-pop) {
+    min-width: 0;
+    max-width: calc(100vw - 1rem);
+  }
+  .wiki-members-add {
+    flex-wrap: wrap;
   }
 }
 
@@ -1154,9 +1211,12 @@ select.wiki-members-role {
    [[ autocomplete tooltip — same visual language as the wiki
    chrome: glass backdrop, hairline borders, accent highlight;
    monospace label foregrounds the id, detail shows the brand,
-   the info panel carries the full title.
+   the info panel carries the full title. Scoped under
+   .wiki-editor-cm (CodeMirror mounts its tooltips inside the
+   editor's DOM) so other CodeMirror instances on the host page
+   keep their own theme.
    ============================================================ */
-.cm-tooltip.cm-tooltip-autocomplete {
+.wiki-editor-cm .cm-tooltip.cm-tooltip-autocomplete {
   background: var(--wiki-glass);
   backdrop-filter: saturate(160%) blur(10px);
   -webkit-backdrop-filter: saturate(160%) blur(10px);
@@ -1166,12 +1226,12 @@ select.wiki-members-role {
   padding: 4px;
   overflow: hidden;
 }
-.cm-tooltip-autocomplete > ul {
+.wiki-editor-cm .cm-tooltip-autocomplete > ul {
   font-family: var(--wiki-mono);
   max-height: 264px;
   min-width: 240px;
 }
-.cm-tooltip-autocomplete > ul > li {
+.wiki-editor-cm .cm-tooltip-autocomplete > ul > li {
   display: flex;
   align-items: baseline;
   gap: 10px;
@@ -1181,19 +1241,15 @@ select.wiki-members-role {
   color: var(--wiki-on-surface);
   line-height: 1.45;
 }
-.cm-tooltip-autocomplete > ul > li[aria-selected] {
+.wiki-editor-cm .cm-tooltip-autocomplete > ul > li[aria-selected] {
   background: color-mix(in srgb, var(--wiki-accent) 14%, transparent);
   color: var(--wiki-accent);
 }
-.cm-tooltip-autocomplete .cm-completionLabel {
+.wiki-editor-cm .cm-completionLabel {
   font-weight: 600;
   letter-spacing: 0.01em;
 }
-.cm-tooltip-autocomplete .cm-completionMatchedText {
-  text-decoration: none;
-  color: var(--wiki-accent);
-}
-.cm-tooltip-autocomplete .cm-completionDetail {
+.wiki-editor-cm .cm-completionDetail {
   margin-left: auto;
   font-family: var(--wiki-font);
   font-style: normal;
@@ -1201,7 +1257,7 @@ select.wiki-members-role {
   color: var(--wiki-faint);
   white-space: nowrap;
 }
-.cm-tooltip.cm-completionInfo {
+.wiki-editor-cm .cm-tooltip.cm-completionInfo {
   background: var(--wiki-glass);
   backdrop-filter: saturate(160%) blur(10px);
   -webkit-backdrop-filter: saturate(160%) blur(10px);

@@ -9,9 +9,9 @@ paragraph you are looking at, not a giant textarea holding the whole page.
 Hover this paragraph in editing mode and click ✎. The rendered block hides,
 and a [CodeMirror](https://codemirror.net/) editor expands in its place with
 the block's Markdown source. A live preview renders below it as you type —
-produced by the **same parser and the same plugins** that render the page
-(the site hands them to the CMS in its Astro config), so the preview never
-lies. `⌘/Ctrl + Enter` saves; `Esc` cancels.
+through the engine's dialect plus the plugins the site hands to
+`inkbrush({ markdown })`, the same rule set the page pipeline mounts.
+`⌘/Ctrl + Enter` saves; `Esc` cancels.
 
 ## The two safety nets
 

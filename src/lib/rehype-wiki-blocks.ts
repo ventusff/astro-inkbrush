@@ -15,8 +15,8 @@
  *
  * Position fallbacks (in order): the node's own position → first/last
  * positioned descendant (e.g. div.tbl-wrap wrappers) → the gap between the
- * neighbouring positioned siblings (e.g. KaTeX display blocks whose nodes
- * were rebuilt without position), trimmed to non-empty source lines.
+ * neighbouring positioned siblings (e.g. KaTeX display blocks, whose nodes
+ * carry no position), trimmed to non-empty source lines.
  */
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';

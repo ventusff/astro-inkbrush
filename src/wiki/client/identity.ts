@@ -2,8 +2,10 @@
  * Members panel (identity module, admin only) — lazy-loaded from the account
  * popover. Table of users.json entries with a role dropdown (options = the
  * configured vocabulary), remove buttons and an add form. Every mutation PUTs
- * the whole list; the server enforces the role vocabulary and the
- * at-least-one-admin invariant, and its 400s surface here as toasts.
+ * the whole list; while the PUT is pending the whole form is disabled, so no
+ * edit can be entered that the save would drop. The server enforces the role
+ * vocabulary and the at-least-one-admin invariant, and its 400s surface here
+ * as toasts.
  */
 import type { IdentityUser, IdentityUsersResponse } from '../shared/types';
 import { api } from './api';
@@ -23,18 +25,32 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
   let busy = false;
   const panel = h('div', { class: 'wiki-members' });
 
+  // disable every control while a save is pending (render() re-enables by
+  // rebuilding the panel)
+  const disableForm = (): void => {
+    for (const el of panel.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>(
+      'button, input, select',
+    )) {
+      el.disabled = true;
+    }
+    panel.setAttribute('aria-busy', 'true');
+  };
+
   const save = async (next: IdentityUser[]): Promise<void> => {
     if (busy) return;
     busy = true;
+    disableForm();
     try {
       const res = await api.put<{ users: IdentityUser[] }>('/identity/users', { users: next });
       users = res.users;
       toast(S.identity.saved);
     } catch (err) {
       toast(err instanceof Error ? err.message : S.identity.saveFailed, 'err');
+    } finally {
+      busy = false;
+      render();
+      panel.setAttribute('aria-busy', 'false');
     }
-    busy = false;
-    render();
   };
 
   const roleSelect = (value: string, onchange: (role: string) => void): HTMLSelectElement =>

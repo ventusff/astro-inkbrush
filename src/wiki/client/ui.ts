@@ -129,7 +129,8 @@ export interface PopoverOptions {
  * pointerdown, on focus leaving it, and on Escape. `anchor` positions it
  * (below-start alignment, clamped to the viewport). Focus moves to the first
  * focusable child on open (the dialog itself when there is none) and returns
- * to the trigger on close when it is still inside.
+ * to the trigger on close when it is still inside. While open, the trigger
+ * carries aria-expanded="true" and aria-controls pointing at the dialog's id.
  */
 let openPopover: HTMLElement | null = null;
 let closeCurrent: (() => void) | null = null;
@@ -139,9 +140,10 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
   const trigger = opts.trigger ?? anchor;
   const pop = h(
     'div',
-    { class: 'wiki-popover', role: 'dialog', 'aria-label': opts.label, tabindex: '-1' },
+    { id: uid('popover'), class: 'wiki-popover', role: 'dialog', 'aria-label': opts.label, tabindex: '-1' },
     content,
   );
+  trigger.setAttribute('aria-controls', pop.id);
   document.body.append(pop);
   const rect = anchor.getBoundingClientRect();
   const top = rect.bottom + 8 + window.scrollY;
@@ -163,6 +165,7 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
     document.removeEventListener('pointerdown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
     trigger.setAttribute('aria-expanded', 'false');
+    trigger.removeAttribute('aria-controls');
     if (pop.contains(document.activeElement)) trigger.focus();
     pop.classList.remove('show');
     setTimeout(() => pop.remove(), 150);

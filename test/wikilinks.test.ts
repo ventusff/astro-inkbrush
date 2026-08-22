@@ -44,6 +44,12 @@ test('embeds and citation-style links are excluded', () => {
   assert.deepEqual(matches('a citation [[1]](#ref-one) marker'), []);
 });
 
+test('the regex itself is escape-agnostic (autocomplete matches inside a typed \\[[)', () => {
+  // escape handling belongs to the extractor and the transform, never to
+  // the shared regex: editor autocompletion matches on the raw spelling
+  assert.deepEqual(matches('a \\[[x]] b'), ['[[x]]']);
+});
+
 /* ---------------- resolver lookup order ---------------- */
 
 function resolver(notes: WikiNoteInfo[]) {
@@ -209,6 +215,53 @@ test('an embed stays literal text', () => {
   assert.deepEqual(collect(tree, 'link'), []);
 });
 
+/** run the transform with the vfile source attached, the way unified passes it */
+function transformWithSource(markdown: string, notes: WikiNoteInfo[]): AnyNode {
+  const tree = unified().use(remarkParse).parse(markdown) as unknown as AnyNode;
+  remarkWikilinks({
+    resolve: buildWikilinkResolver({ notes: () => notes, urlFor: (id) => `/${id}/` }),
+  })(tree as never, { path: 'sample-note/index.md', value: markdown });
+  return tree;
+}
+
+test('a backslash-escaped opener stays literal text when the source is on the file', () => {
+  for (const src of ['a \\[[sample-note]] b', 'a [\\[sample-note]] b']) {
+    const tree = transformWithSource(src, NOTES);
+    assert.deepEqual(collect(tree, 'link'), [], src);
+    assert.deepEqual(collect(tree, 'wikilinkDead'), [], src);
+    assert.deepEqual(
+      collect(tree, 'text').map((t) => t.value),
+      ['a [[sample-note]] b'],
+      src,
+    );
+  }
+});
+
+test('an escaped backslash before an opener does not escape it', () => {
+  const tree = transformWithSource('a \\\\[[sample-note]] b', NOTES);
+  const [link] = collect(tree, 'link');
+  assert.equal(link?.url, '/sample-note/');
+  assert.deepEqual(
+    collect(tree, 'text').map((t) => t.value),
+    ['a \\', 'sample-note', ' b'],
+  );
+});
+
+test('escaped and real openers mix in one text node', () => {
+  const tree = transformWithSource('\\[[sample-note]] and [[getting-started]]', NOTES);
+  const links = collect(tree, 'link');
+  assert.deepEqual(
+    links.map((l) => l.url),
+    ['/getting-started/'],
+  );
+  assert.equal(collect(tree, 'text')[0]?.value, '[[sample-note]] and ');
+});
+
+test('without a source on the file the transform still links (the escape is unknowable)', () => {
+  const tree = transform('a \\[[sample-note]] b', NOTES);
+  assert.equal(collect(tree, 'link').length, 1);
+});
+
 /* ---------------- mask & extract ---------------- */
 
 const SOURCE = [
@@ -248,6 +301,13 @@ test('extractWikilinks returns prose links only, with valid offsets', () => {
   for (const l of links) {
     assert.equal(SOURCE.slice(l.offset, l.offset + l.raw.length), l.raw);
   }
+});
+
+test('extractWikilinks honors backslash escapes by parity', () => {
+  assert.deepEqual(extractWikilinks('a \\[[x]] b'), []);
+  assert.deepEqual(extractWikilinks('a [\\[x]] b'), []);
+  assert.equal(extractWikilinks('a \\\\[[x]] b')[0]?.target, 'x');
+  assert.deepEqual(extractWikilinks('a \\\\\\[[x]] b'), []);
 });
 
 /* ---------------- fs scan over the fixture tree ---------------- */

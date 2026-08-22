@@ -94,6 +94,16 @@ export function openAiPopover(
       running = false;
       log.setAttribute('aria-busy', 'false');
     };
+    // Recoverable failure (transport error, or the stream ending without a
+    // terminal event): show the error and restore the controls for a retry.
+    const fail = (message: string): void => {
+      finish();
+      log.append(h('span', { class: 'err' }, message));
+      input.hidden = false;
+      quick.hidden = false;
+      runBtn.disabled = false;
+      runBtn.replaceChildren(icon('sparkle'), ` ${S.ai.run}`);
+    };
 
     try {
       for await (const event of stream('/claude/block', {
@@ -122,10 +132,10 @@ export function openAiPopover(
           return;
         }
       }
-      finish();
+      // the stream ended (clean EOF) without an error/result event
+      fail(S.ai.streamEnded);
     } catch (err) {
-      finish();
-      log.append(h('span', { class: 'err' }, err instanceof Error ? err.message : S.common.requestFailed));
+      fail(err instanceof Error ? err.message : S.common.requestFailed);
     }
   };
 

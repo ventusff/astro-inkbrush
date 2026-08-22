@@ -17,7 +17,7 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { LocaleDef } from '../shared/locales.ts';
@@ -27,6 +27,7 @@ import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, HttpError, json, readBody } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
+import { frontmatterField, NOTE_ID } from './note-id.ts';
 import { containedPath } from './paths.ts';
 import { appendNdjson, projectRoot, readNdjson, wikiDataDir, withLock, writeFileAtomic } from './store.ts';
 import { validateSource } from './validate.ts';
@@ -47,33 +48,28 @@ export function contentRoot(): string {
   return resolve(projectRoot(), notesBase());
 }
 
-/** a note id: path segments of word characters, dots, dashes and CJK */
-const NOTE_ID = /^[\w一-鿿][\w.\-一-鿿]*(\/[\w一-鿿][\w.\-一-鿿]*)*$/;
-
 /** resolve a note id ("guides/getting-started", "en/getting-started", "inbox/…")
- *  to its source file inside the content root; null when absent or outside */
+ *  to its source file inside the content root; null when absent or outside.
+ *  A note with both index.md and index.mdx is a collision (the scanner
+ *  refuses it too) and answers 404 naming it. */
 export function noteFile(id: string): { file: string; rel: string } | null {
   if (!NOTE_ID.test(id)) return null;
+  const located: Array<{ file: string; rel: string }> = [];
   for (const ext of ['mdx', 'md']) {
     const rel = `${notesBase()}/${id}/index.${ext}`;
     const file = containedPath(contentRoot(), resolve(projectRoot(), rel));
-    if (file && existsSync(file)) return { file, rel };
+    if (file && existsSync(file)) located.push({ file, rel });
   }
-  return null;
+  if (located.length > 1) {
+    throw new HttpError(404, `Note '${id}' has both index.md and index.mdx — remove one of them`);
+  }
+  return located[0] ?? null;
 }
 
 /** the directory a new note would live in, inside the content root; null when outside */
 export function noteDir(id: string): string | null {
   if (!NOTE_ID.test(id)) return null;
   return containedPath(contentRoot(), resolve(projectRoot(), notesBase(), id));
-}
-
-function frontmatterField(source: string, field: string): string | null {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
-  if (!fm) return null;
-  const line = new RegExp(`^${field}:\\s*(.+)$`, 'm').exec(fm[1]!);
-  if (!line) return null;
-  return line[1]!.trim().replace(/^['"]|['"]$/g, '');
 }
 
 /** the deployment's locale table — inkbrush.config.ts → content.locales */
@@ -151,11 +147,14 @@ export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRec
  * Replace the file's content under its lock: `produce` computes the next
  * content from the file as it is at write time (and refuses with an error
  * when a block no longer matches, → 409), the result is validated (→ 422
- * when it would not build), then written atomically.
+ * when it would not build), then written atomically. `afterWrite` runs
+ * inside the same lock after the write (journaling belongs there, so the
+ * journal order matches the write order).
  */
 export async function writeNote(
   file: string,
   produce: (current: string) => { next: string; error?: string | undefined },
+  afterWrite?: (next: string) => void,
 ): Promise<void> {
   await withLock(file, async () => {
     const current = readFileSync(file, 'utf8');
@@ -164,49 +163,73 @@ export async function writeNote(
     const problem = await validateSource(file, next);
     if (problem) throw new HttpError(422, `The note would not build — not saved: ${problem}`);
     writeFileAtomic(file, next);
+    afterWrite?.(next);
   });
 }
 
+export type AutocommitResult = 'off' | 'clean' | 'committed' | 'failed';
+
+// git operations run one at a time behind this queue, so concurrent saves
+// cannot interleave their add/status/commit sequences
+let gitChain: Promise<unknown> = Promise.resolve();
+
 /**
- * Per-save git commit (+ optional async push), executed INSIDE the content
- * repo. Accepts project-relative files or directories; commits only those
- * paths, and makes no commit when nothing changed.
+ * Per-save git commit (+ optional async push) of the given project-relative
+ * files or directories, executed from the content repo's own top level (so
+ * paths outside content.dir but inside the repo commit too). Returns the
+ * outcome; 'failed' also covers a path that lies outside the repo and
+ * therefore cannot be committed.
  */
-export async function autocommit(
+export function autocommit(
   relPaths: string | string[],
   message: string,
   user: string,
-): Promise<void> {
+): Promise<AutocommitResult> {
   const cfg = wikiConfig();
-  if (!cfg.autocommit) return;
-  const root = contentRoot();
-  const rels: string[] = [];
-  for (const p of Array.isArray(relPaths) ? relPaths : [relPaths]) {
-    const rel = relative(root, resolve(projectRoot(), p));
-    if (rel.startsWith('..')) {
-      console.error(`[wiki autocommit] path is outside the content repo, skipping: ${p}`);
-      continue;
+  if (!cfg.autocommit) return Promise.resolve('off');
+  const run = async (): Promise<AutocommitResult> => {
+    let repoRoot: string;
+    try {
+      const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd: contentRoot() });
+      repoRoot = stdout.trim();
+    } catch (err) {
+      console.error('[wiki autocommit] cannot locate the content repo:', err);
+      return 'failed';
     }
-    rels.push(rel);
-  }
-  if (rels.length === 0) return;
-  try {
-    await execFileP('git', ['add', '-A', '--', ...rels], { cwd: root });
-    const { stdout } = await execFileP('git', ['status', '--porcelain', '--', ...rels], { cwd: root });
-    if (!stdout.trim()) return;
-    await execFileP('git', ['commit', '-m', message, '--author', `${user} <wiki@local>`, '--', ...rels], {
-      cwd: root,
-    });
-  } catch (err) {
-    console.error('[wiki autocommit]', err);
-    return;
-  }
-  if (cfg.autopush) {
-    // the save never waits on the network
-    execFileP('git', ['push'], { cwd: root }).catch((err: unknown) => {
-      console.error('[wiki autopush]', err);
-    });
-  }
+    const rels: string[] = [];
+    let outside = false;
+    for (const p of Array.isArray(relPaths) ? relPaths : [relPaths]) {
+      const rel = relative(repoRoot, resolve(projectRoot(), p));
+      if (rel.startsWith('..') || isAbsolute(rel)) {
+        console.error(`[wiki autocommit] path is outside the content repo, cannot commit: ${p}`);
+        outside = true;
+        continue;
+      }
+      rels.push(rel);
+    }
+    if (rels.length === 0) return outside ? 'failed' : 'clean';
+    try {
+      await execFileP('git', ['add', '-A', '--', ...rels], { cwd: repoRoot });
+      const { stdout } = await execFileP('git', ['status', '--porcelain', '--', ...rels], { cwd: repoRoot });
+      if (!stdout.trim()) return outside ? 'failed' : 'clean';
+      await execFileP('git', ['commit', '-m', message, '--author', `${user} <wiki@local>`, '--', ...rels], {
+        cwd: repoRoot,
+      });
+    } catch (err) {
+      console.error('[wiki autocommit]', err);
+      return 'failed';
+    }
+    if (cfg.autopush) {
+      // the save never waits on the network
+      execFileP('git', ['push'], { cwd: repoRoot }).catch((err: unknown) => {
+        console.error('[wiki autopush]', err);
+      });
+    }
+    return outside ? 'failed' : 'committed';
+  };
+  const chained = gitChain.then(run, run);
+  gitChain = chained.catch(() => undefined);
+  return chained;
 }
 
 /* ---------------- routes ---------------- */
@@ -250,28 +273,33 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
         return fail(res, 400, 'missing start/end/hash/source');
       }
       let before = '';
-      await writeNote(located.file, (current) => {
-        const lines = current.split('\n');
-        if (start < 1 || end < start || end > lines.length) {
-          return { next: current, error: 'line range outside the file' };
-        }
-        before = lines.slice(start - 1, end).join('\n');
-        if (sliceHash(before) !== hash) {
-          return { next: current, error: 'This block was modified by someone else — refresh and retry' };
-        }
-        return { next: [...lines.slice(0, start - 1), ...source.split('\n'), ...lines.slice(end)].join('\n') };
-      });
-      journalRevision({
-        ts: Date.now(),
-        user: user!.email,
-        note: id,
-        lines: `${start}-${end}`,
-        via: 'manual',
-        before,
-        after: source,
-      });
-      await autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name);
-      json(res, 200, { ok: true });
+      await writeNote(
+        located.file,
+        (current) => {
+          const lines = current.split('\n');
+          if (start < 1 || end < start || end > lines.length) {
+            return { next: current, error: 'line range outside the file' };
+          }
+          before = lines.slice(start - 1, end).join('\n');
+          if (sliceHash(before) !== hash) {
+            return { next: current, error: 'This block was modified by someone else — refresh and retry' };
+          }
+          return { next: [...lines.slice(0, start - 1), ...source.split('\n'), ...lines.slice(end)].join('\n') };
+        },
+        // journaled inside the file's lock, so journal order = write order
+        () =>
+          journalRevision({
+            ts: Date.now(),
+            user: user!.email,
+            note: id,
+            lines: `${start}-${end}`,
+            via: 'manual',
+            before,
+            after: source,
+          }),
+      );
+      const git = await autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name);
+      json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },
     { auth: true },
   );
@@ -318,8 +346,10 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
   );
 
   // one-click revert of a journaled block revision: exact-match replace of
-  // the revision's `after` span with its `before`; content that drifted
-  // since (no match, or more than one) is refused with 409
+  // the revision's `after` span with its `before`. The match must be
+  // unambiguous: no match is a 409; several matches fall back to the one
+  // overlapping the recorded line span, and stay a 409 when none or more
+  // than one does.
   on(
     'POST',
     '/revert/*id',
@@ -336,39 +366,53 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
 
       let at = -1;
       const beforeLines = rec.before.split('\n');
-      await writeNote(located.file, (current) => {
-        const fileLines = current.split('\n');
-        const target = rec.after.split('\n');
-        const matches: number[] = [];
-        for (let i = 0; i + target.length <= fileLines.length; i++) {
-          if (target.every((line, j) => fileLines[i + j] === line)) matches.push(i);
-        }
-        if (matches.length === 0) {
-          return { next: current, error: 'Later edits overwrote this revision — revert by hand instead' };
-        }
-        if (matches.length > 1) {
-          return { next: current, error: 'The target content appears more than once — revert by hand instead' };
-        }
-        at = matches[0]!;
-        return {
-          next: [...fileLines.slice(0, at), ...beforeLines, ...fileLines.slice(at + target.length)].join('\n'),
-        };
-      });
-      journalRevision({
-        ts: Date.now(),
-        user: user!.email,
-        note: id,
-        lines: `${at + 1}-${at + beforeLines.length}`,
-        via: 'revert',
-        before: rec.after,
-        after: rec.before,
-      });
-      await autocommit(
+      await writeNote(
+        located.file,
+        (current) => {
+          const fileLines = current.split('\n');
+          const target = rec.after.split('\n');
+          const matches: number[] = [];
+          for (let i = 0; i + target.length <= fileLines.length; i++) {
+            if (target.every((line, j) => fileLines[i + j] === line)) matches.push(i);
+          }
+          if (matches.length === 0) {
+            return { next: current, error: 'Later edits overwrote this revision — revert by hand instead' };
+          }
+          let chosen = matches;
+          if (matches.length > 1) {
+            // several matches: only the one overlapping the recorded line
+            // span is unambiguous (match at index i covers lines i+1..i+len)
+            const span = /^(\d+)-(\d+)$/.exec(rec.lines);
+            chosen = span
+              ? matches.filter((i) => i + 1 <= Number(span[2]) && i + target.length >= Number(span[1]))
+              : [];
+          }
+          if (chosen.length !== 1) {
+            return { next: current, error: 'The target content appears more than once — revert by hand instead' };
+          }
+          at = chosen[0]!;
+          return {
+            next: [...fileLines.slice(0, at), ...beforeLines, ...fileLines.slice(at + target.length)].join('\n'),
+          };
+        },
+        // journaled inside the file's lock, so journal order = write order
+        () =>
+          journalRevision({
+            ts: Date.now(),
+            user: user!.email,
+            note: id,
+            lines: `${at + 1}-${at + beforeLines.length}`,
+            via: 'revert',
+            before: rec.after,
+            after: rec.before,
+          }),
+      );
+      const git = await autocommit(
         located.rel,
         `wiki: ${id} revert ${rec.via} revision ${rec.id}`,
         user!.name,
       );
-      json(res, 200, { ok: true });
+      json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },
     { auth: true },
   );

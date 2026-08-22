@@ -9,9 +9,7 @@
  *   FAIL missing     the target resolves to no note
  *   FAIL ambiguous   an alias/brand/title matches more than one note
  *   WARN anchor      [[target#heading]] whose heading is not found in the
- *                    target note (best effort: ATX heading text slugged
- *                    with the anchor slugifier, plus explicit `{#id}`
- *                    attributes)
+ *                    target note
  *   WARN unmatched   a stray unclosed `[[` left in prose (typically torn
  *                    apart by a table pipe or a linkReference)
  *   INFO allowed     a missing target the corpus keeps on purpose
@@ -29,13 +27,21 @@
  * slugify or a different locale table can differ from this lint exactly
  * there.
  *
+ * Anchor checking is best effort: the target note's headings are read by
+ * parsing its masked source with the dialect, their text is slugged with
+ * the anchor slugifier, duplicate slugs take `-2`, `-3`, … suffixes and an
+ * explicit `{#id}` wins — the model most site sluggers implement. It
+ * matches the site's real ids only as far as --config injects the site's
+ * own slugifier; a site with different dedup or numbering rules can still
+ * diverge, which is why an anchor miss is a WARN, never a FAIL.
+ *
  * Usage (from the site or content repo root):
  *   node <engine>/scripts/check-wikilinks.mjs <content-dir> [flags]
  *
- *   --strict                 exit 1 when any FAIL (dead link: missing or
- *                            ambiguous) was reported; WARNs never affect the
- *                            exit code. Without --strict the exit code is 0
- *                            and dead links are only listed.
+ *   --strict                 exit 1 when the report carries any FAIL (dead
+ *                            link: missing or ambiguous); WARNs never affect
+ *                            the exit code. Without --strict the exit code
+ *                            is 0 and dead links are only listed.
  *   --locale-prefix <p/>     locale-mirror prefix (repeatable; replaces the
  *                            default `en/ de/` set when given) — a link
  *                            inside a mirrored note resolves to its own
@@ -59,12 +65,16 @@
  * 2 usage error.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 
 const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
 const { buildWikilinkResolver, defaultSlugify, extractWikilinks, maskNonProse, noteInfoFromSource, scanNotes } =
   await import(pathToFileURL(join(engineRoot, 'src/lib/wikilinks.ts')).href);
+const { markdownSyntax } = await import(pathToFileURL(join(engineRoot, 'src/lib/markdown-syntax.ts')).href);
 
 /* ---------------- site config ---------------- */
 
@@ -94,26 +104,58 @@ function pathOfNote(root, id) {
   return null;
 }
 
-/** an extra flat corpus: every `*.md` under `dir` (dot- and underscore-prefixed entries skipped) as `<prefix>/<slug>` */
+/**
+ * An extra flat corpus: every `*.md` under `dir` (dot- and
+ * underscore-prefixed entries skipped) as `<prefix>/<slug>`. Symlinks are
+ * followed only while their real path stays inside the corpus root's real
+ * path, and each real directory is visited once — a symlink cycle cannot
+ * recurse and a link out of the tree is not scanned.
+ */
 function* extraCorpus(dir, prefix) {
-  const walk = function* (d) {
-    let names;
+  let rootReal;
+  try {
+    rootReal = realpathSync(dir);
+  } catch {
+    return;
+  }
+  const insideRoot = (real) => real === rootReal || real.startsWith(rootReal + sep);
+  const visited = new Set([rootReal]);
+  const walk = function* (d, realDir) {
+    let entries;
     try {
-      names = readdirSync(d);
+      entries = readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
     } catch {
       return;
     }
-    for (const name of names) {
+    for (const entry of entries) {
+      const name = entry.name;
       if (name.startsWith('.') || name.startsWith('_')) continue;
       const p = join(d, name);
-      if (statSync(p).isDirectory()) yield* walk(p);
-      else if (name.endsWith('.md')) {
+      let real = join(realDir, name);
+      let isDirectory = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        try {
+          real = realpathSync(p);
+          const stat = statSync(real);
+          isDirectory = stat.isDirectory();
+          isFile = stat.isFile();
+        } catch {
+          continue;
+        }
+        if (!insideRoot(real)) continue;
+      }
+      if (isDirectory) {
+        if (visited.has(real)) continue;
+        visited.add(real);
+        yield* walk(p, real);
+      } else if (isFile && name.endsWith('.md')) {
         const slug = relative(dir, p).replaceAll('\\', '/').replace(/\.md$/, '');
         yield { id: `${prefix}/${slug}`, path: p };
       }
     }
   };
-  yield* walk(dir);
+  yield* walk(dir, rootReal);
 }
 
 /**
@@ -137,18 +179,54 @@ export function collectCorpus(root, extras = []) {
 
 /* ---------------- anchors (best effort) ---------------- */
 
-/** ids a [[note#anchor]] can target: ATX heading text slugged, plus explicit `{#id}` attributes */
+/** the dialect's parser, for heading extraction over masked sources */
+const headingParser = unified().use(remarkParse).use(markdownSyntax()).freeze();
+
+/** the concatenated literal text of a node's subtree (text and inlineCode values) */
+function literalText(node) {
+  if (typeof node.value === 'string') return node.value;
+  return (node.children ?? []).map(literalText).join('');
+}
+
+/**
+ * Ids a [[note#anchor]] can target, best effort. The masked source is
+ * parsed with the dialect, so ATX and setext headings count and anything in
+ * code, HTML or math does not. Each heading contributes:
+ *
+ *  - its explicit `{#id}` when the text carries one (used as spelled, and
+ *    occupying its slug in the dedup pool the way site sluggers reserve
+ *    explicit ids);
+ *  - the slug of its text, deduplicated with `-2`, `-3`, … suffixes when an
+ *    earlier heading generates the same slug. A heading with an explicit id
+ *    also contributes its text slug (without a dedup slot) so a site whose
+ *    slugger keeps both spellings does not warn.
+ */
 export function anchorsOf(text, slugify, mask = {}) {
   const set = new Set();
-  for (const m of maskNonProse(text, mask).matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm)) {
-    let heading = m[1].trim();
-    const explicit = /\{#([^}\s]+)[^}]*\}\s*$/.exec(heading);
-    if (explicit) {
-      set.add(explicit[1]);
-      heading = heading.replace(/`?\{[^}]*\}`?\s*$/, '').trim();
+  const used = new Set();
+  const tree = headingParser.parse(maskNonProse(text, mask));
+  const walk = (node) => {
+    if (node.type === 'heading') {
+      let heading = literalText(node).replace(/\s+/g, ' ').trim();
+      const explicit = /\{#([^}\s]+)[^}]*\}\s*$/.exec(heading);
+      if (explicit) {
+        heading = heading.replace(/\{[^}]*\}\s*$/, '').trim();
+        set.add(explicit[1]);
+        used.add(explicit[1]);
+        set.add(slugify(heading));
+        return;
+      }
+      const base = slugify(heading);
+      let id = base;
+      let n = 2;
+      while (used.has(id)) id = `${base}-${n++}`;
+      used.add(id);
+      set.add(id);
+      return;
     }
-    set.add(slugify(heading.replace(/[*_`]+/g, '')));
-  }
+    (node.children ?? []).forEach(walk);
+  };
+  walk(tree);
   return set;
 }
 
@@ -223,14 +301,18 @@ export function checkWikilinks(root, options = {}) {
     }
 
     // a stray unclosed [[: blank the rendered wikilinks and the [[1]](#ref)
-    // citation idiom out of the prose, then look for a leftover opener
+    // citation idiom out of the prose, then look for a leftover opener —
+    // one that is not itself backslash-escaped (`\[[` is literal text)
     const prose = maskNonProse(n.text, maskOptions(n)).split('');
     for (const { offset, raw } of links) prose.fill(' ', offset, offset + raw.length);
     const stripped = prose.join('').replace(/\[\[[^\][\n]*\]\]\([^)\n]*\)/g, (m) => ' '.repeat(m.length));
-    const orphan = /(?<!!)\[\[/.exec(stripped);
-    if (orphan) {
+    for (const orphan of stripped.matchAll(/(?<!!)\[\[/g)) {
+      let backslashes = 0;
+      for (let i = orphan.index - 1; i >= 0 && stripped[i] === '\\'; i -= 1) backslashes += 1;
+      if (backslashes % 2 === 1) continue;
       const line = stripped.slice(0, orphan.index).split('\n').length;
       warn('unmatched', n.id, `stray unclosed [[ near line ${line}`);
+      break;
     }
   }
 
@@ -242,10 +324,10 @@ export function checkWikilinks(root, options = {}) {
 const USAGE = `usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-prefix <p/>]... [--extra <dir>:<idPrefix>]... [--config <path>] [--allow <target>]...
 
   <content-dir>            the notes root (<id>/index.{md,mdx} layout)
-  --strict                 exit 1 when any FAIL (dead link: missing or
-                           ambiguous target) was reported; WARNs never affect
-                           the exit code. Without --strict dead links are
-                           listed and the exit code is 0.
+  --strict                 exit 1 when the report carries any FAIL (dead
+                           link: missing or ambiguous target); WARNs never
+                           affect the exit code. Without --strict dead links
+                           are listed and the exit code is 0.
   --locale-prefix <p/>     locale-mirror prefix (repeatable; replaces the
                            default en/ de/ set)
   --extra <dir>:<prefix>   an extra flat corpus of *.md files with ids
@@ -273,6 +355,10 @@ export async function main(argv) {
   }
   const valued = new Set(['--locale-prefix', '--extra', '--config', '--allow']);
   const flags = new Set(['--strict']);
+  if (valued.has(argv[argv.length - 1])) {
+    console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
+    return 2;
+  }
   const positional = argv.filter((a, i) => !a.startsWith('--') && !valued.has(argv[i - 1]));
   const unknown = argv.filter((a) => a.startsWith('--') && !valued.has(a) && !flags.has(a));
   if (positional.length !== 1 || unknown.length > 0) {

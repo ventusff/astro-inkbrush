@@ -19,15 +19,20 @@ import {
 import type { NoteListItem, NotesResponse } from '../shared/types';
 import { api } from './api';
 
-// 60s TTL: long-lived pages still pick up notes created elsewhere
-// (a page-lifetime cache would refresh only on a full reload)
+// 60s TTL: long-lived pages pick up notes created elsewhere without a full
+// reload. Only successful responses are cached — a failed fetch clears the
+// slot so the next keystroke retries immediately.
 const NOTES_TTL_MS = 60_000;
 let notesCacheAt = 0;
 let notesCache: Promise<NoteListItem[]> | null = null;
 const loadNotes = (): Promise<NoteListItem[]> => {
   if (!notesCache || Date.now() - notesCacheAt > NOTES_TTL_MS) {
     notesCacheAt = Date.now();
-    notesCache = api.get<NotesResponse>('/notes').then((r) => r.notes);
+    const request = api.get<NotesResponse>('/notes').then((r) => r.notes);
+    notesCache = request;
+    request.catch(() => {
+      if (notesCache === request) notesCache = null;
+    });
   }
   return notesCache;
 };
@@ -51,7 +56,13 @@ async function wikilinkSource(ctx: CompletionContext): Promise<CompletionResult 
   if (m.from === m.to && !ctx.explicit) return null;
   const query = m.text.slice(2).trim().toLowerCase();
 
-  const notes = await loadNotes();
+  // a failed list fetch means "no completions", never a thrown source
+  let notes: NoteListItem[];
+  try {
+    notes = await loadNotes();
+  } catch {
+    return null;
+  }
   const scored = notes
     .map((n) => ({ n, score: rank(n, query) }))
     .filter((x): x is { n: NoteListItem; score: number } => x.score !== null)

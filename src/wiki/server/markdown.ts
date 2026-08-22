@@ -19,8 +19,14 @@ import { relative, sep } from 'node:path';
 import type { Processor } from 'unified';
 
 import { buildWikilinkResolver, cachedScan, remarkWikilinks } from '../../lib/wikilinks.ts';
+import { wikiConfig } from './config.ts';
 import { noteUrl, siteHooks } from './site.ts';
 import { contentRoot, noteFile } from './source.ts';
+
+/** the deployment's locale table in the resolver's shape */
+function resolverLocales(): { code: string; prefix: string }[] {
+  return wikiConfig().content.locales.map((l) => ({ code: l.code, prefix: l.prefix }));
+}
 
 interface RenderOptions {
   sanitize: boolean;
@@ -71,7 +77,11 @@ async function buildProcessor(sanitize: boolean): Promise<Processor> {
     if (bare) p.use(remarkMath);
     p.use(site.remarkPlugins ?? []);
     p.use(remarkWikilinks, {
-      resolve: buildWikilinkResolver({ notes: cachedScan(contentRoot()), urlFor: noteUrl }),
+      resolve: buildWikilinkResolver({
+        notes: cachedScan(contentRoot()),
+        urlFor: noteUrl,
+        locales: resolverLocales(),
+      }),
       noteIdOf: noteIdOfPath,
     });
     p.use(remarkRehype, { allowDangerousHtml: true });
@@ -81,15 +91,15 @@ async function buildProcessor(sanitize: boolean): Promise<Processor> {
 
   if (sanitize) {
     // default GitHub schema + keep the class names remark-math emits so
-    // rehype-katex (which runs after sanitize) can still find math nodes
+    // rehype-katex (which runs after sanitize) can still find math nodes.
+    // Raw HTML never reaches this pipeline (remark-rehype runs without
+    // allowDangerousHtml), so the schema needs no extra tag names.
     const schema = structuredClone(rehypeSanitizeMod.defaultSchema);
     schema.attributes ??= {};
     schema.attributes['code'] = [
       ...(schema.attributes['code'] ?? []),
       ['className', 'language-math', 'math-inline', 'math-display'],
     ];
-    schema.attributes['mark'] = [];
-    schema.tagNames = [...(schema.tagNames ?? []), 'mark'];
     p.use(rehypeSanitizeMod.default, schema).use(rehypeKatex, { output: 'htmlAndMathml' });
   }
 

@@ -57,6 +57,7 @@ interface Strings {
     signIn: string;
     panelTitle: string;
     googleButton: string;
+    samlButton: string;
     notConfigured: string;
     googleMissingEnv: string;
     samlMissingConfig: string;
@@ -117,6 +118,7 @@ interface Strings {
     saveFailed: string;
     readFailed: string;
     empty: string;
+    previewFailed: string;
     jsxNoPreview: (name: string | null) => string;
   };
   ai: {
@@ -127,6 +129,7 @@ interface Strings {
     working: string;
     done: string;
     jobFailed: string;
+    streamEnded: string;
     quick: Array<{ label: string; instruction: string }>;
   };
   chat: {
@@ -145,10 +148,13 @@ interface Strings {
     translateConfirm: (label: string) => string;
     translateAction: (label: string) => string;
     translateDone: string;
+    streamEnded: string;
   };
   history: {
     via: Record<'manual' | 'claude' | 'translate' | 'inbox' | 'revert', string>;
     title: (start: number, end: number) => string;
+    wholeFile: string;
+    wholeFileNote: string;
     viewDiff: string;
     revert: string;
     revertTitle: string;
@@ -232,6 +238,7 @@ const en: Strings = {
     signIn: 'Sign in',
     panelTitle: 'Sign in',
     googleButton: 'Sign in with Google Workspace',
+    samlButton: 'Sign in with Google Workspace SSO',
     notConfigured: 'Not configured',
     googleMissingEnv:
       'Enabled, but the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET env vars are missing (see the docs)',
@@ -276,7 +283,7 @@ const en: Strings = {
   },
   blocks: {
     toolbar: 'Block tools',
-    focusHint: 'Press Enter for block tools',
+    focusHint: 'Enter opens the block tools · Arrow up/down moves between blocks',
     edit: 'Edit this block (opens the source)',
     ai: 'Ask Claude to edit this block',
     history: 'Revision history / revert',
@@ -297,6 +304,7 @@ const en: Strings = {
     saveFailed: 'Save failed',
     readFailed: 'Failed to read the block source',
     empty: '(empty)',
+    previewFailed: 'Preview failed',
     jsxNoPreview: (name) =>
       `⟨${name ?? 'component'}⟩ component blocks have no standalone preview — the page hot-reloads right after save`,
   },
@@ -309,6 +317,7 @@ const en: Strings = {
     working: 'Claude is editing…',
     done: 'Claude finished editing — reloading…',
     jobFailed: 'Job failed',
+    streamEnded: 'The connection ended before the job finished — try again',
     quick: [
       {
         label: 'Polish',
@@ -349,6 +358,7 @@ const en: Strings = {
       `Generate the ${label} version with Claude?\nThe whole note is re-told in the target language (structure and formulas preserved) and any demo language tables are updated. This takes a few minutes.`,
     translateAction: (label) => `✦ Generate the ${label} version (full re-telling translation)`,
     translateDone: 'Translation finished — reloading…',
+    streamEnded: 'The connection ended before the reply finished — try again',
   },
   history: {
     via: {
@@ -359,6 +369,8 @@ const en: Strings = {
       revert: 'Revert',
     },
     title: (start, end) => `Block history · L${start}-${end}`,
+    wholeFile: 'Whole file',
+    wholeFileNote: 'Whole-file operation — undoing it is a git operation, not a one-click revert',
     viewDiff: 'View changes',
     revert: '⟲ Revert this change',
     revertTitle: 'Restore the content from before this change',
@@ -453,6 +465,7 @@ const zh: Strings = {
     signIn: '登录',
     panelTitle: '登录',
     googleButton: '使用 Google Workspace 登录',
+    samlButton: '使用 Google Workspace SSO 登录',
     notConfigured: '未配置',
     googleMissingEnv: '已启用但缺少 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET 环境变量（见文档）',
     samlMissingConfig: '已启用但配置不完整（缺 SSO URL / IdP entity id / 证书 / baseUrl，见文档）',
@@ -495,7 +508,7 @@ const zh: Strings = {
   },
   blocks: {
     toolbar: '块工具',
-    focusHint: '按 Enter 打开块工具',
+    focusHint: '按 Enter 打开块工具，↑/↓ 在块之间移动',
     edit: '编辑此块（点击展开源码）',
     ai: '让 Claude 修改此块',
     history: '本块修订历史 / 回滚',
@@ -516,6 +529,7 @@ const zh: Strings = {
     saveFailed: '保存失败',
     readFailed: '读取源码失败',
     empty: '（空）',
+    previewFailed: '预览失败',
     jsxNoPreview: (name) => `⟨${name ?? '组件'}⟩ 组件块没有独立预览 — 保存后页面即时热更新`,
   },
   ai: {
@@ -526,6 +540,7 @@ const zh: Strings = {
     working: 'Claude 修改中…',
     done: 'Claude 已完成修改，页面即将刷新',
     jobFailed: '任务失败',
+    streamEnded: '连接在任务完成前中断了，请重试',
     quick: [
       {
         label: '润色文字',
@@ -563,6 +578,7 @@ const zh: Strings = {
       `用 Claude 生成${label}版？\n整篇笔记会在目标语言下重述（结构与公式保持不变），并同步更新 demo 的多语言标示，耗时数分钟。`,
     translateAction: (label) => `✦ 生成${label}版（整篇重述式翻译）`,
     translateDone: '翻译完成，页面即将刷新',
+    streamEnded: '连接在回复完成前中断了，请重试',
   },
   history: {
     via: {
@@ -573,6 +589,8 @@ const zh: Strings = {
       revert: '回滚',
     },
     title: (start, end) => `本块修订历史 · L${start}-${end}`,
+    wholeFile: '整篇',
+    wholeFileNote: '整篇级操作 —— 撤销它要用 git 操作，不提供一键回滚',
     viewDiff: '查看改动',
     revert: '⟲ 回滚此次修改',
     revertTitle: '把这次修改撤销回改动前的内容',

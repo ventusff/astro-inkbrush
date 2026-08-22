@@ -10,18 +10,21 @@ import type { PageContext } from './index';
 import { S } from './strings';
 import { h, time, toast } from './ui';
 
+/** Initial avatar. Decorative: the author's name is rendered right next to
+ *  it, so the avatar is hidden from assistive technology. */
 function avatarOf(author: WikiComment['author']): HTMLElement {
-  if (author.picture) {
-    return h('img', { class: 'wiki-avatar', src: author.picture, alt: author.name, referrerpolicy: 'no-referrer' });
-  }
-  return h('span', { class: 'wiki-avatar wiki-avatar-fallback' }, [...author.name][0]?.toUpperCase() ?? '?');
+  return h(
+    'span',
+    { class: 'wiki-avatar wiki-avatar-fallback', 'aria-hidden': 'true' },
+    [...author.name][0]?.toUpperCase() ?? '?',
+  );
 }
 
 export function mountComments(ctx: PageContext): void {
   /**
-   * Mount contract: the site marks the comment container with
-   * `[data-inkbrush-slot="comments"]`; a `.note-main .col` reading column is
-   * honored as a fallback convention. Neither present → comments stay off.
+   * Mount contract: an explicit `[data-inkbrush-slot="comments"]` container
+   * wins; the `.note-main .col` class fallback exists for slotless sites.
+   * Neither present → comments stay off.
    */
   const column =
     document.querySelector('[data-inkbrush-slot="comments"]') ??
@@ -55,7 +58,8 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
   const commentNode = (comment: WikiComment): HTMLElement => {
     const body = h('div', { class: 'wiki-comment-body' });
     body.innerHTML = comment.html;
-    const mine = currentUser()?.email === comment.author.email;
+    // delete permission is computed per requester by the server
+    const mine = comment.canDelete;
     const node = h(
       'div',
       { class: 'wiki-comment' },
@@ -143,10 +147,15 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
     );
     const submitBtn = h('button', { type: 'button', class: 'wiki-btn wiki-btn-primary' }, S.comments.post);
     let previewing = false;
+    // every toggle advances the generation, so a slow render response can
+    // never overwrite the preview of a newer toggle (or the edit view)
+    let previewGeneration = 0;
     const note = (text: string): HTMLElement => h('em', { class: 'wiki-comment-note' }, text);
 
     previewBtn.addEventListener('click', async () => {
       previewing = !previewing;
+      previewGeneration += 1;
+      const generation = previewGeneration;
       previewBtn.textContent = previewing ? S.comments.keepEditing : S.comments.preview;
       previewBtn.setAttribute('aria-pressed', String(previewing));
       input.hidden = previewing;
@@ -158,9 +167,11 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
             markdown: input.value,
             sanitize: true,
           });
+          if (generation !== previewGeneration) return;
           if (html) preview.innerHTML = html;
           else preview.replaceChildren(note(S.editor.empty));
         } catch {
+          if (generation !== previewGeneration) return;
           preview.textContent = S.comments.previewFailed;
         }
       }
@@ -203,7 +214,15 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
   drawComposer();
   onAuthChange(() => {
     drawComposer();
-    redrawList(); // delete buttons depend on identity
+    // canDelete is computed per requester: refetch under the new identity
+    void (async () => {
+      try {
+        ({ comments } = await api.get<{ comments: WikiComment[] }>(`/comments/${meta.id}`));
+        redrawList();
+      } catch {
+        /* keep the current list */
+      }
+    })();
   });
 
   section.append(composerHost);

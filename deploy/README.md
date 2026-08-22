@@ -19,16 +19,31 @@ Contract of the editing machine:
 - **Its own subdomain, never a path prefix under the reader host.** The CMS
   mounts its API at the server root and a dev server's module URLs are
   root-relative.
-- **Configuration arrives as environment.** `INKBRUSH_CONFIG_B64` (the
-  machine's `inkbrush.config.ts`), `BOT_SSH_KEY_B64` (git over SSH) and
-  optionally `SAML_IDP_CERT_B64` are base64 values the entrypoint writes to
-  disk, readable by the service user only. A missing config or key fails the
-  container: the defaults leave `autocommit` and `autopush` off, and a server
-  that saves without committing loses edits at the next restart.
+- **Configuration arrives as environment or mounted secrets.**
+
+  | Input | Alternative | Role |
+  | --- | --- | --- |
+  | `INKBRUSH_CONFIG_B64` | `INKBRUSH_CONFIG_FILE` | the machine's `inkbrush.config.ts` (required) |
+  | `BOT_SSH_KEY_B64` | `BOT_SSH_KEY_FILE` | private key for git over SSH (required) |
+  | `SAML_IDP_CERT_B64` | `SAML_IDP_CERT_FILE` | IdP signing certificate (optional) |
+  | `KNOWN_HOSTS_B64` | `KNOWN_HOSTS_FILE` | known_hosts pinning the git host's key (optional) |
+
+  `*_B64` values are base64 in the service environment; each accepts a
+  `<NAME>_FILE` alternative naming a mounted file (docker secrets) with the
+  raw content. The entrypoint writes them to disk readable by the service
+  user only. A missing config or key fails the container — as does a config
+  that leaves `autocommit` off without `WIKI_AUTOCOMMIT=1`: the machine's
+  contract is that edits reach git. With `KNOWN_HOSTS` installed, SSH runs
+  `StrictHostKeyChecking=yes`; without it, `accept-new` pins the first host
+  key seen.
 - **Fail closed on synchronisation.** Edits found uncommitted in the volume
-  are committed before the update; a fast-forward is tried first, then a
+  are committed before the update — tracked changes across the whole repo
+  plus new files under the content tree, since companion files live outside
+  it — and pushed after a successful update (a failed push of recovered
+  commits stops the container). A fast-forward is tried first, then a
   rebase of local commits; a rebase that does not apply stops the container
-  instead of serving a diverged checkout.
+  instead of serving a diverged checkout. Lockfile drift is discarded with
+  its diff printed, never committed.
 - **Reproducible installs.** `npm ci` or `pnpm install --frozen-lockfile`,
   by the lockfile present.
 - **Health.** nginx listens on IPv6 as well (alpine's wget resolves

@@ -3,11 +3,16 @@
  * deletions are tombstone records). Markdown is rendered server-side through
  * the sanitizing unified pipeline (GFM + KaTeX math), so stored html is safe
  * to inject verbatim.
+ *
+ * The stored record keeps the author's email — it is the ownership key for
+ * deletion. API responses never carry it: the client receives
+ * `{ id, author: { name, provider }, canDelete, markdown, html, ts }`, where
+ * `canDelete` says the requesting user authored the comment.
  */
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-import type { WikiComment } from '../shared/types.ts';
+import { commentView, type StoredComment } from './comment-view.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, json, readBody } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -18,23 +23,23 @@ function commentsFile(noteId: string): string {
   return join(wikiDataDir('comments'), `${noteKey(noteId)}.ndjson`);
 }
 
-type CommentRecord = WikiComment | { id: string; deleted: true; by: string; ts: number };
+type CommentRecord = StoredComment | { id: string; deleted: true; by: string; ts: number };
 
-function loadComments(noteId: string): WikiComment[] {
+function loadComments(noteId: string): StoredComment[] {
   const records = readNdjson<CommentRecord>(commentsFile(noteId));
-  const alive = new Map<string, WikiComment>();
+  const alive = new Map<string, StoredComment>();
   for (const record of records) {
     if ('deleted' in record && record.deleted) alive.delete(record.id);
-    else alive.set(record.id, record as WikiComment);
+    else alive.set(record.id, record as StoredComment);
   }
   return [...alive.values()].sort((a, b) => a.ts - b.ts);
 }
 
 export function registerCommentRoutes(on: RouteRegistrar): void {
-  on('GET', '/comments/*id', ({ res, params }) => {
+  on('GET', '/comments/*id', ({ res, params, user }) => {
     const id = params['id']!;
     if (!noteFile(id)) return fail(res, 404, 'Note not found');
-    json(res, 200, { comments: loadComments(id) });
+    json(res, 200, { comments: loadComments(id).map((c) => commentView(c, user?.email ?? null)) });
   });
 
   on(
@@ -47,7 +52,7 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
       const text = markdown?.trim();
       if (!text) return fail(res, 400, 'Comment cannot be empty');
       if (text.length > 10_000) return fail(res, 413, 'Comment too long (>10000 characters)');
-      const comment: WikiComment = {
+      const comment: StoredComment = {
         id: randomUUID(),
         author: {
           name: user!.name,
@@ -60,7 +65,7 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
         ts: Date.now(),
       };
       appendNdjson(commentsFile(id), comment);
-      json(res, 200, { comment });
+      json(res, 200, { comment: commentView(comment, user!.email) });
     },
     { auth: true },
   );

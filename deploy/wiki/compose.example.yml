@@ -26,10 +26,15 @@ services:
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # The CMS config, the bot SSH key and the IdP certificate arrive
       # base64-encoded in the service environment; the entrypoint writes them
-      # to disk readable by the service user only.
+      # to disk readable by the service user only. Each *_B64 input also
+      # accepts a <NAME>_FILE alternative naming a mounted file (docker
+      # secrets) with the raw content.
       INKBRUSH_CONFIG_B64: ${INKBRUSH_CONFIG_B64:?the machine's inkbrush.config.ts, base64}
       BOT_SSH_KEY_B64: ${BOT_SSH_KEY_B64:?the bot account's private key, base64}
       SAML_IDP_CERT_B64: ${SAML_IDP_CERT_B64:-}
+      # Optional known_hosts pin for the git host: installed, SSH runs
+      # StrictHostKeyChecking=yes; absent, accept-new pins the first key seen.
+      KNOWN_HOSTS_B64: ${KNOWN_HOSTS_B64:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       TZ: ${TZ:-UTC}
     expose:

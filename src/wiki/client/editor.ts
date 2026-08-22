@@ -115,8 +115,13 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         if (generation !== previewGeneration) return;
         if (html.trim()) previewBody.innerHTML = html;
         else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.empty));
-      } catch {
-        /* aborted or failed: the preview is best-effort */
+      } catch (err) {
+        // an aborted request carries a bumped generation; anything else is a
+        // real failure and replaces the (now stale) preview with the error
+        if (generation !== previewGeneration) return;
+        const message =
+          err instanceof ApiError ? `${S.editor.previewFailed} — ${err.message}` : S.editor.previewFailed;
+        previewBody.replaceChildren(h('div', { class: 'preview-error' }, message));
       } finally {
         if (previewRequest === request) previewRequest = null;
       }
@@ -124,19 +129,32 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   };
 
   /* ---- editor ---- */
+  // The host block's own inline display value, restored verbatim on close.
+  const hostDisplay = block.el.style.getPropertyValue('display');
+  const hostDisplayPriority = block.el.style.getPropertyPriority('display');
+
+  // While a save is in flight, Mod-Enter cannot start another one and
+  // Escape / Cancel cannot tear the editor down under the pending PUT.
+  let saving = false;
+
   const close = (): void => {
+    if (saving) return;
     cancelPreview();
     view.destroy();
     shell.remove();
-    block.el.style.removeProperty('display');
+    if (hostDisplay) block.el.style.setProperty('display', hostDisplay, hostDisplayPriority);
+    else block.el.style.removeProperty('display');
     activeCleanup = null;
     onClose();
   };
 
   const save = (): boolean => {
+    if (saving) return true;
+    saving = true;
     void (async () => {
       const source = view.state.doc.toString();
       saveBtn.disabled = true;
+      cancelBtn.disabled = true;
       saveBtn.textContent = S.editor.validating;
       errorBox.hidden = true;
       try {
@@ -149,10 +167,13 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         rememberScroll();
         saveBtn.textContent = S.editor.savedReloading;
         toast(S.editor.saved);
-        // astro content HMR reloads the page; belt-and-braces fallback:
+        // astro content HMR reloads the page; the timed reload covers the
+        // case where HMR does not fire
         setTimeout(() => window.location.reload(), 1500);
       } catch (err) {
+        saving = false;
         saveBtn.disabled = false;
+        cancelBtn.disabled = false;
         saveBtn.textContent = S.editor.save;
         const message = err instanceof ApiError ? err.message : S.editor.saveFailed;
         errorBox.textContent = message;

@@ -20,15 +20,19 @@ import { spawn } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  statSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
+
+import { childEnv } from './child-env.ts';
+import { containedPath } from './paths.ts';
 
 export interface Snapshot {
   /** temp dir with index.html at its root — caller tars + removes it */
@@ -44,15 +48,25 @@ type Progress = (message: string) => void;
 /** build outputs and caches — changes there say nothing about the inputs */
 const MTIME_SKIP = new Set(['node_modules', '.git', '.astro', '.wiki', 'dist']);
 
-/** latest mtime (ms) across a tree — cheap freshness probe for the cache */
-function latestMtime(path: string): number {
+/** latest mtime (ms) across a tree — cheap freshness probe for the cache.
+ *  Symlinks are not followed, and each real directory is visited once, so
+ *  the walk cannot loop or wander outside the inputs. */
+function latestMtime(path: string, visited: Set<string> = new Set()): number {
   let stat;
   try {
-    stat = statSync(path);
+    stat = lstatSync(path);
   } catch {
     return 0; // missing input (or a raced deletion) — nothing to compare against
   }
+  if (stat.isSymbolicLink()) return 0;
   if (!stat.isDirectory()) return stat.mtimeMs;
+  try {
+    const real = realpathSync(path);
+    if (visited.has(real)) return 0;
+    visited.add(real);
+  } catch {
+    return 0;
+  }
   let latest = stat.mtimeMs;
   let entries;
   try {
@@ -62,7 +76,7 @@ function latestMtime(path: string): number {
   }
   for (const entry of entries) {
     if (MTIME_SKIP.has(entry.name)) continue;
-    latest = Math.max(latest, latestMtime(join(path, entry.name)));
+    latest = Math.max(latest, latestMtime(join(path, entry.name), visited));
   }
   return latest;
 }
@@ -84,13 +98,23 @@ function buildInputs(root: string): string[] {
   ];
 }
 
+/** hard ceiling on one astro build; beyond it the child is terminated */
+const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+const BUILD_KILL_GRACE_MS = 5000;
+
 function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
-    // WIKI-free build: the integration + rehype plugin are added conditionally
-    // by the site's astro.config, so unsetting WIKI yields the pure-static page
-    const env = { ...process.env };
-    delete env['WIKI'];
-    const child = spawn('npx', ['astro', 'build', '--outDir', outDirRel], {
+    // the project's own astro binary — never a network-resolving npx
+    const astroBin = join(root, 'node_modules', '.bin', 'astro');
+    if (!existsSync(astroBin)) {
+      rejectPromise(new Error(`astro binary not found (${astroBin}) — install the site's dependencies`));
+      return;
+    }
+    // allowlisted environment (WIKI/WIKI_* and server secrets excluded):
+    // the integration + rehype plugin are added conditionally by the site's
+    // astro.config, so an env without WIKI yields the pure-static page
+    const env = childEnv({ prefixes: ['NODE_', 'ASTRO_', 'PUBLIC_'] });
+    const child = spawn(astroBin, ['build', '--outDir', outDirRel], {
       cwd: root,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -106,13 +130,28 @@ function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): P
     const heartbeat = setInterval(() => {
       onProgress(`astro build running… ${Math.round((Date.now() - started) / 1000)}s`);
     }, 10_000);
-    child.on('error', (err) => {
+    // timeout: SIGTERM, then SIGKILL after a grace window
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), BUILD_KILL_GRACE_MS);
+    }, BUILD_TIMEOUT_MS);
+    const cleanup = (): void => {
       clearInterval(heartbeat);
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+    };
+    child.on('error', (err) => {
+      cleanup();
       rejectPromise(new Error(`failed to start astro build: ${err.message}`));
     });
     child.on('close', (code) => {
-      clearInterval(heartbeat);
-      if (code === 0) resolvePromise();
+      cleanup();
+      if (timedOut) {
+        rejectPromise(new Error(`astro build timed out (${BUILD_TIMEOUT_MS / 60000} min) and was terminated`));
+      } else if (code === 0) resolvePromise();
       else rejectPromise(new Error(`astro build failed (code ${code})${tail ? `: …${tail.slice(-600)}` : ''}`));
     });
   });
@@ -240,9 +279,9 @@ function readStartTag(html: string, at: number): { raw: string; name: string; en
  *
  * The hygiene check exists to catch a CMS-enabled build leaking into a public
  * share, and a leak always arrives as a tag or a script — never as body text.
- * A plain substring search over the whole document cannot tell the two apart,
- * so a note that merely documents an endpoint (`/api/wiki/auth/saml/callback`
- * in a table of SAML settings) failed to share at all.
+ * A plain substring search over the whole document cannot tell the two apart:
+ * a note that merely documents an endpoint (`/api/wiki/...` in a table of
+ * SAML settings) must still be shareable.
  */
 export function executableMarkup(html: string): string {
   let out = '';
@@ -297,8 +336,8 @@ function assertClean(content: string, what: string): void {
  *   `https://…`, `//cdn/…`, `#anchor`, `?q=1`, `data:…`, `mailto:…` → untouched
  *
  * Page-relative refs are what co-located note attachments use
- * (`<img src="fig.jpg">` beside `index.mdx`); missing them is what made every
- * attachment 404 under `/s/<id>/` while the bytes sat correctly in the tarball.
+ * (`<img src="fig.jpg">` beside `index.mdx`); left un-rebased they 404 under
+ * `/s/<id>/` even though the bytes are in the tarball.
  *
  * `pageDir` is the built page's directory relative to the site root
  * (`notes/en/getting-started`; empty for a root-level page). Query and
@@ -759,12 +798,16 @@ export async function buildSnapshot(
 ): Promise<Snapshot> {
   const outDir = await ensureBuild(root, onProgress);
 
-  // route → built page (directory format first, file format fallback)
+  // route → built page (directory format first, file format fallback);
+  // every candidate must resolve inside the build output
   const routePath = noteRoute.replace(/\/+$/, '');
   const candidates = [
     join(outDir, routePath, 'index.html'),
     routePath ? join(outDir, `${routePath}.html`) : '',
-  ].filter(Boolean);
+  ]
+    .filter(Boolean)
+    .map((p) => containedPath(outDir, p))
+    .filter((p): p is string => p !== null);
   const htmlPath = candidates.find((p) => existsSync(p));
   if (!htmlPath) {
     throw new Error(`route '${noteRoute}' not found in the static build (.wiki/share-dist)`);
@@ -788,11 +831,11 @@ export async function buildSnapshot(
     visited.add(abs);
     let stat;
     try {
-      stat = statSync(abs);
+      stat = lstatSync(abs);
     } catch {
       continue; // e.g. <a href="/wiki/other"> — page links are not assets
     }
-    if (!stat.isFile()) continue; // directories = other routes, skip
+    if (!stat.isFile()) continue; // directories = other routes; symlinks are never packed
     const rel = relative(outDir, abs);
     const dest = join(snapDir, rel);
     mkdirSync(dirname(dest), { recursive: true });

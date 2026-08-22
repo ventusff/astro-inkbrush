@@ -29,7 +29,8 @@ export interface IdentityUser {
 export interface MeResponse {
   user: WikiUser | null;
   providers: {
-    /** dev quick-login enabled (local testing) */
+    /** dev quick-login available to THIS request (the default configuration
+     *  serves loopback clients only; an explicit auth.dev: true serves all) */
     dev: boolean;
     google: GoogleAuthState;
     googleSaml: GoogleAuthState;
@@ -105,15 +106,18 @@ export interface BlockSource {
   end: number;
 }
 
+/** a comment as the API returns it — the author's email never leaves the
+ *  server (the stored record keeps it as the ownership key) */
 export interface WikiComment {
   id: string;
-  author: Pick<WikiUser, 'name' | 'email' | 'picture' | 'provider'>;
+  author: Pick<WikiUser, 'name' | 'provider'>;
+  /** the requesting user may delete this comment (they authored it) */
+  canDelete: boolean;
   /** raw markdown as submitted */
   markdown: string;
   /** sanitized rendered HTML */
   html: string;
   ts: number;
-  deleted?: boolean;
 }
 
 /** one line of the fetch-stream NDJSON protocol for claude jobs */
@@ -133,8 +137,9 @@ export interface ShareRecord {
   route: string;
   /** public URL recipients open (<publicBase>/s/<id>/) */
   url: string;
-  /** creator's email */
-  createdBy: string;
+  /** creator's email — persisted and present in the create response;
+   *  omitted from the list response */
+  createdBy?: string;
   createdAt: string;
   /** ISO date, or null = never expires */
   expiresAt: string | null;
@@ -143,9 +148,8 @@ export interface ShareRecord {
   revokedAt: string | null;
 }
 
-/** POST /api/wiki/share request body — `route` is the CURRENT page path
- *  (location.pathname): the engine doesn't know the site's routing scheme,
- *  so the client reports it and the server validates it */
+/** POST /api/wiki/share request body — the snapshotted route derives from
+ *  the note id via the site's URL rule on the server side */
 export interface ShareCreateRequest {
   note: string;
   password: string;
@@ -159,7 +163,9 @@ export type ShareStreamEvent =
   | { kind: 'result'; ok: true; share: ShareRecord }
   | { kind: 'error'; message: string };
 
-/** GET /api/wiki/share?note=<id> — active (not revoked, not expired) shares only */
+/** GET /api/wiki/share?note=<id> — active (not revoked, not expired) shares
+ *  of that note only; the note parameter is required (400 without), and the
+ *  records omit createdBy */
 export interface ShareListResponse {
   shares: ShareRecord[];
 }
@@ -170,6 +176,9 @@ export interface RevisionRecord {
   ts: number;
   user: string;
   note: string;
+  /** project-relative file the record is about when it is not the note's
+   *  own source (an AI job's companion-file change) */
+  file?: string;
   /** "start-end" line range, or "*" for whole-file operations */
   lines: string;
   via: 'manual' | 'claude' | 'translate' | 'inbox' | 'revert';

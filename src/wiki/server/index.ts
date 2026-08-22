@@ -11,8 +11,9 @@
  *    member holding the admin role (404 while the registry is off);
  *  - a mutating request (anything but GET/HEAD) that carries a session
  *    cookie must come from this site: its Origin (or Referer) must be the
- *    request's own origin or a configured trusted origin, and a JSON body
- *    must be declared as application/json;
+ *    request's own origin or a configured trusted origin (the SAML ACS
+ *    route is exempt — see ./csrf.ts), and a JSON body must be declared as
+ *    application/json;
  *  - malformed input (bad percent-encoding, a body that is not JSON, a body
  *    over the limit) is a 4xx; an unexpected failure is logged with a
  *    request id and answered with a generic 500 carrying that id.
@@ -35,6 +36,7 @@ import {
   sessionUser,
 } from './auth.ts';
 import { wikiConfig } from './config.ts';
+import { crossSiteBlocked } from './csrf.ts';
 import {
   addUserIfAbsent as addIdentityUserIfAbsent,
   ensureRegistry,
@@ -227,12 +229,12 @@ export function ndjsonStream(res: ServerResponse): {
 
 /* ---------------- auth routes ---------------- */
 
-on('GET', '/me', ({ user, res }) => {
+on('GET', '/me', ({ req, user, res }) => {
   const identity = identityConfig();
   const record = identity && user ? findIdentityUser(user.email) : null;
   const body: MeResponse = {
     user,
-    providers: { dev: devLoginEnabled(), google: googleState(), googleSaml: googleSamlState() },
+    providers: { dev: devLoginEnabled(req), google: googleState(), googleSaml: googleSamlState() },
     share: shareState(),
     ...(identity && user
       ? {
@@ -245,7 +247,13 @@ on('GET', '/me', ({ user, res }) => {
 });
 
 on('POST', '/auth/dev', async ({ req, res }) => {
-  if (!devLoginEnabled()) return fail(res, 403, 'Dev login is disabled (inkbrush.config.ts → auth.dev)');
+  if (!devLoginEnabled(req)) {
+    return fail(
+      res,
+      403,
+      'Dev login is disabled (inkbrush.config.ts → auth.dev; without an explicit dev: true it serves loopback clients only)',
+    );
+  }
   const { name, email } = await readBody<{ name?: string; email?: string }>(req);
   if (!name?.trim() || !email?.includes('@')) return fail(res, 400, 'A name and a valid email are required');
   const user: WikiUser = { name: name.trim(), email: email.trim(), provider: 'dev' };
@@ -432,15 +440,16 @@ function requestOrigin(req: IncomingMessage): string {
   return `${proto}://${host.split(',')[0]!.trim()}`;
 }
 
-/** a cookie-authenticated mutation must originate from this site (or a
- *  trusted origin); a request with no Origin/Referer is not a browser form post */
-function crossSite(req: IncomingMessage): boolean {
-  const method = req.method ?? 'GET';
-  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
-  const origin = req.headers.origin ?? (req.headers.referer ? new URL(req.headers.referer).origin : null);
-  if (!origin) return false;
-  const allowed = new Set([requestOrigin(req), ...wikiConfig().auth.session.trustedOrigins]);
-  return !allowed.has(origin);
+/** the request's Origin header, falling back to the Referer's origin;
+ *  null when absent or unparsable */
+function originOf(req: IncomingMessage): string | null {
+  if (req.headers.origin) return req.headers.origin;
+  if (!req.headers.referer) return null;
+  try {
+    return new URL(req.headers.referer).origin;
+  } catch {
+    return null;
+  }
 }
 
 export async function handleApi(
@@ -455,7 +464,17 @@ export async function handleApi(
   try {
     const matched = matchRoute(req.method ?? 'GET', path);
     if (!matched) return fail(res, 404, `no route: ${req.method} ${path}`);
-    if (crossSite(req)) return fail(res, 403, 'Cross-site request refused');
+    if (
+      crossSiteBlocked({
+        method: req.method ?? 'GET',
+        path,
+        origin: originOf(req),
+        ownOrigin: requestOrigin(req),
+        trustedOrigins: wikiConfig().auth.session.trustedOrigins,
+      })
+    ) {
+      return fail(res, 403, 'Cross-site request refused');
+    }
     const user = await sessionUser(req);
     const identity = identityConfig();
     if (matched.route.auth === 'admin') {

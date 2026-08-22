@@ -127,11 +127,14 @@ export function googleSamlState(): GoogleAuthState {
   return buildSaml().configured ? 'ready' : 'unconfigured';
 }
 
-/** server-enforced email domain/address allowlist (empty allowedDomains = no restriction) */
+/** server-enforced email domain/address allowlist — the same policy as
+ *  Google OAuth: an empty allowedDomains admits nobody (fail-closed;
+ *  deployments must list their domains), ['*'] admits every asserted email */
 export function samlEmailAllowed(email: string): boolean {
   const conf = samlConf();
   const rules = conf === false ? [] : conf.allowedDomains.map((s) => s.toLowerCase());
-  if (rules.length === 0) return true;
+  if (rules.includes('*')) return true; // explicit allow-all
+  if (rules.length === 0) return false; // no list configured → deny (fail-closed)
   const lower = email.toLowerCase();
   const domain = lower.split('@')[1] ?? '';
   return rules.some((rule) => rule === lower || rule === domain);

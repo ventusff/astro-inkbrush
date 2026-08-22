@@ -101,11 +101,14 @@ that note (the demo module it mounts, say). The CLI's working directory is
 that copy, its file tools are confined to it by permission rules (`Read`,
 `Edit`, `Write`, `MultiEdit` on `./**` for edit jobs; `Read` only for ask
 jobs), and `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `NotebookEdit`
-and sub-agents are denied outright. When the job ends, the copy is diffed
-against the project; every changed Markdown file must pass the same build
-gate as a manual save (the dialect, the guard, your plugins, MDX), and only
-then are the changes written, journaled and — with `autocommit` —
-committed. Your site's own conventions reach every prompt through
+and sub-agents are denied outright, and its environment is an allowlist —
+deployment secrets never reach the child. When the job ends, the copy is
+diffed against a snapshot taken at its start; every changed Markdown file
+must pass the same build gate as a manual save (the dialect, the guard,
+your plugins, MDX), and a file that changed in the project while the job
+ran refuses the whole application — a manual edit always wins. Only then
+are the changes (companions included) written, journaled and — with
+`autocommit` — committed. Your site's own conventions reach every prompt through
 `claude.rules`.
 
 ### Revision history & revert (⟲)
@@ -114,17 +117,19 @@ Every content change — manual, Claude, translation, inbox import, revert —
 appends a record with a unique id to the journal (who, when, which lines,
 before/after, via what). The ⟲ handle lists the current block's records
 (matched by line overlap or exact content) with collapsible diffs and
-one-click revert; a revert whose "before" text no longer matches the file
-(later edits covered it) is refused (409) instead of guessing. Whole-file
-records — imports, translations — are kept for the audit trail but have no
-one-click revert: that is a git operation.
+one-click revert; a revert whose recorded text no longer stands at the
+recorded block (later edits covered it, or the same text now appears in
+more than one ambiguous place) is refused (409) instead of guessed.
+Whole-file records — imports, translations, AI companion changes — are
+listed as read-only audit rows: undoing them is a git operation.
 
 ### Comments
 
 A comment section at the end of each note page (mounted into
 `[data-inkbrush-slot="comments"]`, or a `.note-main .col` container as the
 fallback). Markdown + `$…$` math + code blocks; rendered server-side through
-a sanitizer (GitHub schema, plus `<mark>` and math classes); 10,000
+a sanitizer (GitHub schema plus math classes; comments render math but
+not wikilinks); 10,000
 character cap; you can delete only your own comments. Stored as flat NDJSON
 files next to the rest of the CMS state — no database.
 
@@ -206,7 +211,7 @@ export default defineInkbrushConfig({
 
 | Key | Default | Effect |
 |---|---|---|
-| `auth.dev` | `true` | Instant name+email login. Must be `false` for anything externally reachable |
+| `auth.dev` | `true` (loopback only) | Instant name+email login. The default serves loopback clients only; an explicit `true` serves every client — never on anything externally reachable |
 | `auth.google` | off | Google OAuth — [setup](#google-oauth) |
 | `auth.googleSaml` | off | Google Workspace SAML SSO — [setup](#google-workspace-saml-sso) |
 | `auth.session` | hmac defaults | Session cookie behaviour — [sessions](#sessions) |
@@ -237,7 +242,9 @@ half-works silently.
 The note language table drives locale detection, the language switcher and
 the AI translation targets. Note ids carry their locale as a path prefix;
 **exactly one entry must have `prefix: ''`** — that's the default locale,
-whose notes live unprefixed at the content root. The default table is:
+whose notes live unprefixed at the content root. Codes and prefixes must
+be unique, and a non-empty prefix is a single path segment (`en/`);
+anything else refuses to start. The default table is:
 
 ```ts
 locales: [
@@ -292,8 +299,11 @@ sessions — startup error when missing), `ADMIN_EMAILS` (identity seeding),
 
 ### Dev login
 
-`auth.dev: true` — name + email, no password, instant session. For local
-machines and trusted private networks only.
+Name + email, no password, instant session. The default (no config file,
+or `auth.dev` unset) serves **loopback clients only** — a dev server
+started with `--host` refuses dev logins from other machines. An explicit
+`auth.dev: true` opens it to every reachable client: for trusted private
+networks only, never for anything externally reachable.
 
 ### Google OAuth
 
@@ -338,7 +348,9 @@ the allowlist, new users auto-registered when the identity module is on) →
 origins must be listed in `session.trustedOrigins`. **The ACS never
 500s** — every failure degrades to `303 /?login_error=<code>` with
 `saml_config`, `saml_disabled`, `saml_response`, `saml_invalid`,
-`wrong_domain` or `saml_error`.
+`wrong_domain`, `not_member` or `saml_error`. `allowedDomains` is
+fail-closed like OAuth's: an empty list admits no one, `['*']` is the
+explicit allow-everyone.
 
 ### Sessions
 
@@ -391,15 +403,19 @@ password-gated static snapshot:
 
 1. **Create** — the popover pre-generates a 10-character password (editable;
    6 characters minimum) and offers 7 days / 30 days / no expiry. The server
-   runs a **WIKI-free `astro build`** (cached in `.wiki/share-dist`; cold
+   runs a **WIKI-free `astro build`** with the site's own installed astro
+   binary, an allowlisted environment and a 10-minute cap (cached in
+   `.wiki/share-dist`; cold
    builds take minutes, so progress streams live), extracts the route's
    `index.html` plus its complete asset closure (HTML attributes → CSS
    `url()`/`@import` → the JS import graph), rewrites references to be
    `./`-relative, injects `noindex`, and PUTs a tar.gz to the gateway. Share
    ids are 10-character base58 — no `0/O/I/l`, readable aloud.
-2. **Password** — scrypt-hashed on the engine side; the plaintext never
-   persists and never leaves the machine. It is shown exactly once, at
-   creation.
+2. **Password** — travels once from the author's browser to the editing
+   machine, is scrypt-hashed there, and only the hash reaches the gateway;
+   the plaintext never persists anywhere. It is shown exactly once, at
+   creation. One note has at most one active share: creating over a live
+   one is refused (409) with the existing link.
 3. **Revoke** — deletes the gateway directory; the link 404s immediately.
    The local record (with `revokedAt`) is kept in `.wiki/data/shares.json`
    for audit.
@@ -433,9 +449,10 @@ and holds no accounts.
 
 ## Wikilinks
 
-`[[target]]`, `[[target|label]]`, `[[target#anchor]]` — available in notes,
-the editor preview and comments alike, with `[[` autocompletion in the
-editor. `![[embeds]]` and the citation idiom `[[1]](#ref)` are deliberately
+`[[target]]`, `[[target|label]]`, `[[target#anchor]]` — available in notes
+and the editor preview, with `[[` autocompletion in the editor. Comments
+render math but not wikilinks: a comment must not mint site-internal
+links. A `\[[escaped]]` opener stays literal text everywhere. `![[embeds]]` and the citation idiom `[[1]](#ref)` are deliberately
 not wikilinks. Resolution order:
 
 1. **The source note's locale mirror** — `[[X]]` inside an `en/` note
@@ -468,29 +485,33 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `GET /meta/<id>` | public | Note metadata: file, title, `locales` (exists/current per language) |
 | `GET /notes` | public | Lightweight note list (autocomplete + link resolution) |
 | `GET /block/<id>?start&end` | signed-in | Block source `{source, hash, start, end}` (400/416) |
-| `PUT /block/<id>` | signed-in | Save `{start,end,hash,source}` (409 lock conflict / 422 MDX error) |
+| `PUT /block/<id>` | signed-in | Save `{start,end,hash,source}` (409 lock conflict / 422 build error); with autocommit on, a failed commit answers `{ok:true, git:'failed'}` |
 | `POST /render` | signed-in | `{markdown, sanitize?, note?}` → HTML (sanitizing by default; trusted path resolves wikilinks) |
 | `GET /revisions/<id>` | signed-in | Journal records for the note (most recent 100) |
 | `POST /revert/<id>` | signed-in | `{id}` → revert that block revision (404/400/409/422; whole-file records 400) |
 | `POST /claude/block` | signed-in | NDJSON stream; 300 s cap; survives client disconnect |
-| `POST /claude/ask` | signed-in | NDJSON stream; 300 s cap; killed on disconnect; resumable |
+| `POST /claude/ask` | signed-in | NDJSON stream; 300 s cap; killed on disconnect; resumable — only by the user and note the session was opened for (403 otherwise; the session registry is in-memory and resets with the server) |
 | `POST /claude/translate` | signed-in | NDJSON stream; 30 min cap; 409 if the target locale exists |
+
+AI jobs are capped at 2 in flight per user (429 beyond).
 | `GET /inbox/status` | signed-in | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | signed-in | `{path}` backfill; path confined to `inbox.dir` |
-| `GET /comments/<id>` | public | Live comments (deletions applied) |
+| `GET /comments/<id>` | public | Live comments (deletions applied); authors appear as `{name, provider}` — emails never leave the server; `canDelete` is computed per requester |
 | `POST /comments/<id>` | signed-in | New comment (413 over 10,000 chars) |
 | `DELETE /comments/<id>?cid=` | signed-in | Own comments only (403 otherwise) |
 | `GET /identity/users` | admin | Members + role vocabulary |
 | `PUT /identity/users` | admin | Full-list overwrite (validated; last admin protected) |
-| `POST /share` | signed-in | Create share — NDJSON `progress…` → `result` |
-| `GET /share?note=<id>` | signed-in | Active shares for a note |
-| `DELETE /share/<id>` | signed-in | Revoke |
+| `POST /share` | signed-in | Create share — NDJSON `progress…` → `result`; 409 when the note already has an active share |
+| `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required) |
+| `DELETE /share/<id>` | signed-in | Revoke — the share's creator, or an admin when the registry is on (403 otherwise) |
 
 Cross-cutting: JSON bodies must be sent as `application/json` and are capped
 at 1 MiB (415/413 otherwise); a state-changing request whose `Origin` (or
 `Referer`) names another site than this one or a `trustedOrigins` entry is
-refused (403) — browsers always send one, so a cookie cannot be replayed
-from a foreign page; intentional 4xx errors return `{error}` JSON, and
+refused (403) — a browser's cross-site form post carries its Origin, so a
+cookie cannot be replayed from a foreign page (a request with neither
+header is a non-browser client and passes); the SAML ACS is exempt — its
+authentication is the signed assertion; intentional 4xx errors return `{error}` JSON, and
 unexpected failures a 500 with a reference id that the server log carries.
 
 ## Architecture & state on disk
@@ -520,7 +541,7 @@ journal adds per-block audit granularity on top. All CMS state lives under
 ```
 .wiki/
   secret                    session HMAC secret (generated on first run, 0600)
-  data/comments/<id>.ndjson append-only comments (note-id slashes become __)
+  data/comments/<id>.ndjson append-only comments (note ids URL-encoded)
   data/revisions.ndjson     the edit journal
   data/inbox-sync.json      inbox watcher state (content hashes)
   data/shares.json          share records (incl. revoked, for audit)

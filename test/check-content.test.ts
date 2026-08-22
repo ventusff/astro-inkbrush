@@ -5,10 +5,13 @@
  * test/fixtures/content and test/fixtures/site-config.ts.
  */
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { checkContent, checkFrontmatter, globToRe, loadSiteConfig } from '../scripts/check-content.mjs';
+import { checkContent, checkFrontmatter, globToRe, loadSiteConfig, main } from '../scripts/check-content.mjs';
 
 const CONTENT = fileURLToPath(new URL('./fixtures/content', import.meta.url));
 const SITE_CONFIG = fileURLToPath(new URL('./fixtures/site-config.ts', import.meta.url));
@@ -71,6 +74,33 @@ test('--glob and --skip narrow the file set', async () => {
   assert.deepEqual(only.findings, []);
   const skipped = await checkContent(CONTENT, { skip: ['guard', 'math/'] });
   assert.equal(skipped.checked, 6);
+});
+
+test('a trailing valued option is a usage error', async () => {
+  for (const argv of [[CONTENT, '--config'], [CONTENT, '--glob'], ['--skip']]) {
+    assert.equal(await main(argv), 2);
+  }
+});
+
+test('the walker follows symlinks only inside the root and terminates on cycles', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-content-'));
+  const outside = mkdtempSync(join(tmpdir(), 'inkbrush-elsewhere-'));
+  try {
+    mkdirSync(join(outside, 'leak'));
+    writeFileSync(join(outside, 'leak', 'index.md'), 'text with an `**` unpaired marker\n');
+    mkdirSync(join(dir, 'note'));
+    writeFileSync(join(dir, 'note', 'index.md'), 'clean\n');
+    symlinkSync(dir, join(dir, 'zloop'));
+    symlinkSync(outside, join(dir, 'zout'));
+    const { checked, findings } = await checkContent(dir);
+    // the out-of-root symlink is not scanned: its bad note is neither
+    // checked nor a finding, and the cycle terminates
+    assert.equal(checked, 1);
+    assert.deepEqual(findings, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('a config module without plugin lists is accepted; a non-array list is rejected', async () => {

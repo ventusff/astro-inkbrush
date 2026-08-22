@@ -6,10 +6,14 @@
  * starts and the import endpoint refuses.
  *
  *  - Plain .md output (not .mdx), so prose is never parsed as JSX.
+ *  - Every syntax conversion applies to prose only (the maskNonProse view):
+ *    a spelling inside fenced/inline code, HTML or math stays literal.
  *  - `![[img|alt]]` embeds: the asset is copied from the vault (the note's
  *    `_assets/<note>/`, `_assets/` or own folder — never from outside those)
  *    into the note's directory and rewritten to a relative image reference
- *    (`./file`), which the site's Markdown pipeline resolves beside the note.
+ *    (`./file`), which the site's Markdown pipeline resolves beside the
+ *    note. When two different source files claim one basename, the later
+ *    copy carries a content-hash suffix instead of overwriting.
  *  - `[[wikilink]]` and `[[note#anchor|label]]` are parsed by the shared
  *    extractor: a target that resolves to a site note stays a wikilink, any
  *    other is flattened to italics with a warning.
@@ -28,9 +32,9 @@
 import { watch, type FSWatcher } from 'chokidar';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
-import { buildWikilinkResolver, cachedScan, extractWikilinks } from '../../lib/wikilinks.ts';
+import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type MaskOptions } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, json, readBody } from './index.ts';
@@ -96,9 +100,48 @@ function noteDate(sourcePath: string, fm: ObsidianFrontmatter): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** the note's vault-relative path with forward slashes (the basename when
+ *  the file is outside the configured vault) */
+function vaultRelPath(sourcePath: string): string {
+  const dir = inboxDir();
+  const abs = resolve(sourcePath);
+  const rel = dir !== null && isWithin(dir, abs) ? relative(dir, abs) : basename(abs);
+  return rel.split(sep).join('/');
+}
+
+/** the slug of a NEW import: date + a hash of the vault-relative path, so
+ *  same-named notes in different vault folders cannot collide. A note that
+ *  is already in the sync state keeps its recorded slug across re-imports
+ *  (importNote passes it in); this rule fires for first imports only. */
 function slugFor(sourcePath: string, fm: ObsidianFrontmatter): string {
-  const hash = createHash('sha256').update(basename(sourcePath)).digest('hex').slice(0, 8);
+  const hash = createHash('sha256').update(vaultRelPath(sourcePath)).digest('hex').slice(0, 8);
   return `${noteDate(sourcePath, fm)}-${hash}`;
+}
+
+/**
+ * A regex conversion applied only where the source is prose: matches are
+ * located in the maskNonProse view (frontmatter, code, HTML, links and —
+ * unless `mask.keepMath` — math are blanked at equal length), and a match
+ * is rewritten only when the source spells it identically, so a match
+ * straddling a masked range is left untouched.
+ */
+function replaceInProse(
+  source: string,
+  re: RegExp,
+  replacer: (...groups: (string | undefined)[]) => string,
+  mask: MaskOptions = {},
+): string {
+  const masked = maskNonProse(source, mask);
+  let out = '';
+  let last = 0;
+  for (const m of masked.matchAll(re)) {
+    const start = m.index ?? 0;
+    const end = start + m[0]!.length;
+    if (source.slice(start, end) !== m[0]) continue;
+    out += source.slice(last, start) + replacer(...(m as (string | undefined)[]));
+    last = end;
+  }
+  return out + source.slice(last);
 }
 
 /** first meaningful paragraph, markdown-stripped, for <meta description> */
@@ -126,11 +169,11 @@ export interface ConvertResult {
   warnings: string[];
 }
 
-export function convertObsidianNote(sourcePath: string): ConvertResult {
+export function convertObsidianNote(sourcePath: string, opts?: { slug?: string }): ConvertResult {
   const raw = readFileSync(sourcePath, 'utf8');
   const { fm, body } = parseObsidianNote(raw);
   const title = basename(sourcePath).replace(/\.md$/, '');
-  const slug = slugFor(sourcePath, fm);
+  const slug = opts?.slug ?? slugFor(sourcePath, fm);
   const warnings: string[] = [];
 
   // assets co-locate with the note in its directory
@@ -152,28 +195,53 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
     return null;
   };
 
+  /** copy an asset beside the note under a collision-safe name: the first
+   *  source file to claim a basename keeps it; a different source file
+   *  claiming a taken name gets a content-hash suffix, and one source file
+   *  referenced twice is copied once */
+  const copiedNames = new Map<string, string>(); // source path → output name
+  const takenNames = new Set<string>();
+  const copyAsset = (found: string): string => {
+    const prior = copiedNames.get(found);
+    if (prior !== undefined) return prior;
+    let name = basename(found);
+    if (takenNames.has(name)) {
+      const hash = createHash('sha256').update(readFileSync(found)).digest('hex').slice(0, 8);
+      const dot = name.lastIndexOf('.');
+      name = dot > 0 ? `${name.slice(0, dot)}-${hash}${name.slice(dot)}` : `${name}-${hash}`;
+    }
+    takenNames.add(name);
+    copiedNames.set(found, name);
+    mkdirSync(noteDir, { recursive: true });
+    copyFileSync(found, join(noteDir, name));
+    assetsCopied++;
+    return name;
+  };
+
   let markdown = body;
 
-  // ![[file|alt]] image/file embeds → copy asset + standard image syntax
-  markdown = markdown.replace(/!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, file: string, alt?: string) => {
-    const found = resolveAsset(file.trim());
+  // ![[file|alt]] image/file embeds (prose only — a spelling inside code
+  // stays literal) → copy asset + standard image syntax
+  markdown = replaceInProse(markdown, /!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, file, alt) => {
+    const found = resolveAsset(file!.trim());
     if (!found) {
       warnings.push(`embedded asset not found: ${file}`);
       // the surrounding spaces matter: two adjacent embeds would fuse into
       // `]**[`, and CommonMark's rule-of-three refuses to pair those markers,
       // leaking literal asterisks into the prose.
-      return ` *[missing attachment: ${file.trim()}]* `;
+      return ` *[missing attachment: ${file!.trim()}]* `;
     }
-    mkdirSync(noteDir, { recursive: true });
-    copyFileSync(found, join(noteDir, basename(found)));
-    assetsCopied++;
-    return `![${alt?.trim() ?? ''}](./${encodeURIComponent(basename(found))})`;
+    return `![${alt?.trim() ?? ''}](./${encodeURIComponent(copyAsset(found))})`;
   });
 
   // [[wikilinks]] (anchors and labels included, code spans excluded — the
   // shared extractor): a target that resolves to a site note stays a
   // wikilink; any other is flattened to italics with a warning
-  const resolveWikilink = buildWikilinkResolver({ notes: cachedScan(contentRoot()), urlFor: noteUrl });
+  const resolveWikilink = buildWikilinkResolver({
+    notes: cachedScan(contentRoot()),
+    urlFor: noteUrl,
+    locales: wikiConfig().content.locales.map((l) => ({ code: l.code, prefix: l.prefix })),
+  });
   for (const link of extractWikilinks(markdown).reverse()) {
     const res = resolveWikilink(link.target);
     let replacement: string;
@@ -188,11 +256,18 @@ export function convertObsidianNote(sourcePath: string): ConvertResult {
     markdown = markdown.slice(0, link.offset) + replacement + markdown.slice(link.offset + link.raw.length);
   }
 
-  // ==highlight== → <mark>
-  markdown = markdown.replace(/==([^=\n][^=\n]*)==/g, '<mark>$1</mark>');
+  // ==highlight== → <mark> (prose only)
+  markdown = replaceInProse(markdown, /==([^=\n][^=\n]*)==/g, (_, text) => `<mark>${text}</mark>`);
 
-  // single-line display math → three-line form (remark-math would inline it)
-  markdown = markdown.replace(/^\$\$(.+?)\$\$[^\S\n]*$/gm, (_, tex: string) => `$$\n${tex.trim()}\n$$`);
+  // single-line display math → three-line form (remark-math would inline
+  // it); keepMath keeps the `$$…$$` span visible in the mask while code and
+  // HTML stay blanked
+  markdown = replaceInProse(
+    markdown,
+    /^\$\$(.+?)\$\$[^\S\n]*$/gm,
+    (_, tex) => `$$\n${tex!.trim()}\n$$`,
+    { keepMath: true },
+  );
 
   // source attribution block
   const sourceBits: string[] = [];
@@ -247,7 +322,9 @@ export async function importNote(sourcePath: string, opts?: { force?: boolean })
     const state = readJson<SyncState>(stateFile(), {});
     const existing = state[rel];
     if (!opts?.force && existing?.hash === hash && existing.importedAt !== null) return null;
-    const converted = convertObsidianNote(abs);
+    // a re-import keeps the slug the state recorded at first import, so the
+    // note id (and its URL) never changes under a slug-rule change
+    const converted = convertObsidianNote(abs, existing?.slug ? { slug: existing.slug } : undefined);
     state[rel] = { slug: converted.slug, hash, importedAt: Date.now() };
     writeJson(stateFile(), state);
     return converted;

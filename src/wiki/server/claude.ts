@@ -9,31 +9,73 @@
  * workspace (./workspace.ts) that holds only the note's directory and the
  * companions the site's config names, its file tools are confined to that
  * directory by permission rules (Read/Edit/Write on `./**` only, no Bash, no
- * Grep/Glob, no network tools), and what it changed is carried back into
- * the project only after every changed note validates — then journaled and
- * autocommitted. A failed job, an invalid result or a change outside the
- * scope leaves the project untouched and is reported to the browser as an
- * error.
+ * Grep/Glob, no network tools), its environment is allowlisted, and what it
+ * changed is carried back into the project only after every changed note
+ * validates — under the file locks, against the workspace's creation
+ * baseline — then journaled (every applied file) and autocommitted. A
+ * failed job, an invalid result, a change outside the scope or a conflict
+ * with a concurrent edit leaves the project untouched and is reported to
+ * the browser as an error.
  *
  *  - block edit / translate: keep running server-side if the browser tab
  *    goes away; the result is applied when the job ends.
  *  - ask: read-only, killed when the client disconnects; the session id is
- *    captured so the chat panel can `--resume` follow-ups.
+ *    captured so the chat panel can `--resume` follow-ups, and a resume is
+ *    accepted only from the user and note the session was issued for.
  *
- * Jobs are serialized per note (in-memory queue) so two edits cannot race.
+ * Jobs are serialized per note (in-memory queue) so two edits cannot race,
+ * and capped per user so one user cannot monopolize the machine.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { ClaudeStreamEvent } from '../shared/types.ts';
+import { childEnv } from './child-env.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, ndjsonStream, readBody } from './index.ts';
 import { askPrompt, blockEditPrompt, translatePrompt } from './prompts.ts';
 import { autocommit, journalRevision, noteDir, noteFile, noteMeta, validateSource } from './source.ts';
-import { projectRoot } from './store.ts';
 import { createWorkspace, type Workspace, type WorkspaceChange } from './workspace.ts';
+
+/* ---------------- per-user limits & session ownership ---------------- */
+
+/** concurrent AI jobs one user may hold; beyond it the route answers 429 */
+const MAX_JOBS_PER_USER = 2;
+const inflight = new Map<string, number>();
+
+/** claim a job slot for `email`; null when the user is at the cap */
+function acquireJobSlot(email: string): (() => void) | null {
+  const count = inflight.get(email) ?? 0;
+  if (count >= MAX_JOBS_PER_USER) return null;
+  inflight.set(email, count + 1);
+  return () => {
+    const left = (inflight.get(email) ?? 1) - 1;
+    if (left <= 0) inflight.delete(email);
+    else inflight.set(email, left);
+  };
+}
+
+/** CLI session ids streamed to a user, bound to the note they were issued
+ *  for. In-memory only: a server restart forgets them, and a resume of a
+ *  forgotten session is refused (the client starts a fresh session). */
+const sessionOwners = new Map<string, { email: string; note: string }>();
+const SESSION_OWNERS_MAX = 1000;
+
+function rememberSession(sessionId: string, email: string, note: string): void {
+  if (sessionOwners.size >= SESSION_OWNERS_MAX && !sessionOwners.has(sessionId)) {
+    const oldest = sessionOwners.keys().next().value;
+    if (oldest !== undefined) sessionOwners.delete(oldest);
+  }
+  sessionOwners.set(sessionId, { email, note });
+}
+
+/** the session may be resumed by this user on this note */
+function sessionResumable(sessionId: string, email: string, note: string): boolean {
+  const owner = sessionOwners.get(sessionId);
+  return owner !== undefined && owner.email === email && owner.note === note;
+}
 
 /* ---------------- per-note job queue ---------------- */
 
@@ -120,18 +162,24 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       ...(opts.resume ? ['--resume', opts.resume] : []),
       ...(model ? ['--model', model] : []),
     ];
-    // the child is a fresh CLI, not a nested session
-    const env = { ...process.env };
-    delete env['CLAUDECODE'];
-    delete env['CLAUDE_CODE_ENTRYPOINT'];
+    // allowlisted environment: the child gets process basics, proxies and the
+    // CLI's own ANTHROPIC_*/CLAUDE_* variables — never the server's secrets.
+    // CLAUDECODE / CLAUDE_CODE_ENTRYPOINT are dropped: a fresh CLI, not a
+    // nested session.
+    const env = childEnv({
+      prefixes: ['ANTHROPIC_', 'CLAUDE_'],
+      drop: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'],
+    });
 
     let sessionId: string | null = null;
     let finished = false;
     let stderrTail = '';
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
     const finish = (result: ClaudeJobResult): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolvePromise(result);
     };
 
@@ -143,15 +191,31 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       return;
     }
 
-    const timer = setTimeout(() => {
+    /** SIGTERM, then SIGKILL after a grace window; the promise resolves only
+     *  once the child is gone (its close event, or right after SIGKILL) */
+    const KILL_GRACE_MS = 5000;
+    let pendingKill: ClaudeJobResult | null = null;
+    const terminate = (result: ClaudeJobResult): void => {
+      if (finished || pendingKill) return;
+      pendingKill = result;
       child.kill('SIGTERM');
-      finish({ ok: false, error: `Job timed out (${Math.round(opts.timeoutMs / 1000)}s) and was terminated`, sessionId });
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(result);
+      }, KILL_GRACE_MS);
+    };
+
+    const timer = setTimeout(() => {
+      terminate({
+        ok: false,
+        error: `Job timed out (${Math.round(opts.timeoutMs / 1000)}s) and was terminated`,
+        sessionId,
+      });
     }, opts.timeoutMs);
 
     if (opts.killOnDisconnect) {
       opts.clientClosed.addEventListener('abort', () => {
-        child.kill('SIGTERM');
-        finish({ ok: false, error: 'Client disconnected', sessionId });
+        terminate({ ok: false, error: 'Client disconnected', sessionId });
       });
     }
 
@@ -208,6 +272,7 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       });
     });
     child.on('close', (code) => {
+      if (pendingKill) return finish(pendingKill);
       finish({
         ok: false,
         error: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
@@ -276,7 +341,9 @@ function journalFileDiff(
 
 /**
  * Run an edit job in a workspace of `scope`, then validate, apply, journal
- * and commit its changes. Every outcome is reported on the stream.
+ * and commit its changes. Every outcome is reported on the stream: a
+ * conflict or containment refusal applies nothing, and a git failure is
+ * reported alongside the successful save.
  */
 async function runEditJob(opts: {
   noteId: string;
@@ -288,9 +355,11 @@ async function runEditJob(opts: {
   user: { email: string; name: string };
   via: 'claude' | 'translate';
   commitMessage: string;
-  /** the note the journal entry is about, and its project-relative file */
+  /** the note the journal entries are about, and its project-relative file */
   journalNote: string;
   journalFile: string;
+  /** note source files the job must not delete */
+  protectedFiles: string[];
 }): Promise<void> {
   const { stream } = opts;
   let ws: Workspace;
@@ -307,7 +376,12 @@ async function runEditJob(opts: {
       cwd: ws.dir,
       timeoutMs: opts.timeoutMs,
       killOnDisconnect: false,
-      onEvent: (event) => stream.write(event),
+      onEvent: (event) => {
+        if ((event.kind === 'init' || event.kind === 'result') && event.sessionId) {
+          rememberSession(event.sessionId, opts.user.email, opts.noteId);
+        }
+        stream.write(event);
+      },
       clientClosed: opts.clientClosed,
     });
     if (!result.ok) {
@@ -319,24 +393,53 @@ async function runEditJob(opts: {
       stream.write({ kind: 'result', ok: true, summary: result.summary || 'No change was needed.', sessionId: result.sessionId });
       return;
     }
+    const deleted = changes.find((c) => c.content === null && opts.protectedFiles.includes(c.rel));
+    if (deleted) {
+      stream.write({
+        kind: 'error',
+        message: `The job deleted the note's own file (${deleted.rel}) — nothing was changed`,
+      });
+      return;
+    }
     const problem = await validateChanges(changes);
     if (problem) {
       stream.write({ kind: 'error', message: `The result would not build — nothing was changed: ${problem}` });
       return;
     }
-    const journaled = changes.find((c) => c.rel === opts.journalFile);
-    const journalAbs = join(projectRoot(), opts.journalFile);
-    const before = journaled && existsSync(journalAbs) ? readFileSync(journalAbs, 'utf8') : '';
-    ws.apply(changes);
-    if (journaled && journaled.content !== null) {
-      journalFileDiff(opts.journalNote, before, journaled.content, opts.user.email, opts.via);
+    try {
+      await ws.apply(changes);
+    } catch (err) {
+      stream.write({ kind: 'error', message: (err as Error).message });
+      return;
     }
-    await autocommit(
-      [...new Set(changes.map((c) => dirname(c.rel)))],
+    // every applied change is journaled: the note as a line-span diff, every
+    // other file as a whole-file record (lines '*')
+    for (const change of changes) {
+      if (change.rel === opts.journalFile && change.content !== null) {
+        journalFileDiff(opts.journalNote, ws.baseline(change.rel) ?? '', change.content, opts.user.email, opts.via);
+      } else {
+        journalRevision({
+          ts: Date.now(),
+          user: opts.user.email,
+          note: opts.journalNote,
+          file: change.rel,
+          lines: '*',
+          via: opts.via,
+          before: ws.baseline(change.rel) ?? '',
+          after: change.content ?? '',
+        });
+      }
+    }
+    const git = await autocommit(
+      changes.map((c) => c.rel),
       opts.commitMessage,
       opts.user.name,
     );
-    stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
+    const summary =
+      git === 'failed'
+        ? `${result.summary}\n\nSaved, but the git commit failed — check the server log.`
+        : result.summary;
+    stream.write({ kind: 'result', ok: true, summary, sessionId: result.sessionId });
   } finally {
     ws.destroy();
   }
@@ -361,25 +464,32 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       if (start! < 1 || end! < start! || end! > lines.length) return fail(res, 416, 'line range outside the file');
       const source = lines.slice(start! - 1, end).join('\n');
       const scope = jobScope(id);
-      const stream = ndjsonStream(res);
-      const abort = new AbortController();
-      res.on('close', () => abort.abort());
-      await enqueue(id, () =>
-        runEditJob({
-          noteId: id,
-          scope,
-          prompt: blockEditPrompt({ meta, start: start!, end: end!, source, instruction: instruction!, companions: scope.filter((s) => s !== dirname(located.rel)) }),
-          timeoutMs: 300_000,
-          stream,
-          clientClosed: abort.signal,
-          user: user!,
-          via: 'claude',
-          commitMessage: `wiki: ${id} L${start}-${end} claude block edit`,
-          journalNote: id,
-          journalFile: located.rel,
-        }),
-      );
-      stream.close();
+      const release = acquireJobSlot(user!.email);
+      if (!release) return fail(res, 429, `You already have ${MAX_JOBS_PER_USER} AI jobs running — wait for one to finish`);
+      try {
+        const stream = ndjsonStream(res);
+        const abort = new AbortController();
+        res.on('close', () => abort.abort());
+        await enqueue(id, () =>
+          runEditJob({
+            noteId: id,
+            scope,
+            prompt: blockEditPrompt({ meta, start: start!, end: end!, source, instruction: instruction!, companions: scope.filter((s) => s !== dirname(located.rel)) }),
+            timeoutMs: 300_000,
+            stream,
+            clientClosed: abort.signal,
+            user: user!,
+            via: 'claude',
+            commitMessage: `wiki: ${id} L${start}-${end} claude block edit`,
+            journalNote: id,
+            journalFile: located.rel,
+            protectedFiles: [located.rel],
+          }),
+        );
+        stream.close();
+      } finally {
+        release();
+      }
     },
     { auth: true },
   );
@@ -387,19 +497,36 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
   on(
     'POST',
     '/claude/ask',
-    async ({ req, res }) => {
+    async ({ req, res, user }) => {
       const body = await readBody<{ id?: string; message?: string; sessionId?: string }>(req);
       const { id, message, sessionId } = body;
       if (!id || !message?.trim()) return fail(res, 400, 'missing id/message');
       const meta = noteMeta(id);
       if (!meta) return fail(res, 404, 'Note not found');
+      // a session may only be resumed by the user and note it was issued for
+      if (sessionId && !sessionResumable(sessionId, user!.email, id)) {
+        return fail(res, 403, 'Unknown chat session for this user and note (sessions reset when the server restarts)');
+      }
+      const release = acquireJobSlot(user!.email);
+      if (!release) return fail(res, 429, `You already have ${MAX_JOBS_PER_USER} AI jobs running — wait for one to finish`);
+      let ws: Workspace;
+      try {
+        ws = createWorkspace(jobScope(id));
+      } catch (err) {
+        release();
+        return fail(res, 500, `Could not prepare the workspace: ${(err as Error).message}`);
+      }
       const stream = ndjsonStream(res);
       const abort = new AbortController();
       res.on('close', () => abort.abort());
       // follow-ups on a resumed session skip the scaffold prompt
       const prompt = sessionId ? message! : askPrompt({ meta, message: message! });
-      const ws = createWorkspace(jobScope(id));
       try {
+        const remember = (event: ClaudeStreamEvent): void => {
+          if ((event.kind === 'init' || event.kind === 'result') && event.sessionId) {
+            rememberSession(event.sessionId, user!.email, id);
+          }
+        };
         const result = await runClaudeJob({
           prompt,
           mode: 'readonly',
@@ -407,14 +534,22 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
           resume: sessionId,
           timeoutMs: 300_000,
           killOnDisconnect: true,
-          onEvent: (event) => stream.write(event),
+          onEvent: (event) => {
+            remember(event);
+            stream.write(event);
+          },
           clientClosed: abort.signal,
         });
-        if (result.ok) stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
-        else stream.write({ kind: 'error', message: result.error });
+        if (result.ok) {
+          if (result.sessionId) rememberSession(result.sessionId, user!.email, id);
+          stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
+        } else {
+          stream.write({ kind: 'error', message: result.error });
+        }
       } finally {
         ws.destroy();
         stream.close();
+        release();
       }
     },
     { auth: true },
@@ -444,30 +579,38 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       if (!targetDirAbs) return fail(res, 400, `Invalid target id: ${target.id}`);
       const targetDirRel = join(wikiConfig().content.dir, target.id);
       const scope = jobScope(id, [targetDirRel]);
-      const stream = ndjsonStream(res);
-      const abort = new AbortController();
-      res.on('close', () => abort.abort());
-      await enqueue(id, () =>
-        runEditJob({
-          noteId: id,
-          scope,
-          prompt: translatePrompt({
-            meta,
-            targetId: target.id,
-            targetLang,
-            companions: scope.filter((s) => s !== dirname(located.rel) && s !== targetDirRel),
+      const release = acquireJobSlot(user!.email);
+      if (!release) return fail(res, 429, `You already have ${MAX_JOBS_PER_USER} AI jobs running — wait for one to finish`);
+      try {
+        const stream = ndjsonStream(res);
+        const abort = new AbortController();
+        res.on('close', () => abort.abort());
+        const journalFile = `${targetDirRel}/index.${located.rel.endsWith('.md') ? 'md' : 'mdx'}`;
+        await enqueue(id, () =>
+          runEditJob({
+            noteId: id,
+            scope,
+            prompt: translatePrompt({
+              meta,
+              targetId: target.id,
+              targetLang,
+              companions: scope.filter((s) => s !== dirname(located.rel) && s !== targetDirRel),
+            }),
+            timeoutMs: 1_800_000,
+            stream,
+            clientClosed: abort.signal,
+            user: user!,
+            via: 'translate',
+            commitMessage: `wiki: ${target.id} AI translation (from ${id})`,
+            journalNote: target.id,
+            journalFile,
+            protectedFiles: [located.rel, journalFile],
           }),
-          timeoutMs: 1_800_000,
-          stream,
-          clientClosed: abort.signal,
-          user: user!,
-          via: 'translate',
-          commitMessage: `wiki: ${target.id} AI translation (from ${id})`,
-          journalNote: target.id,
-          journalFile: `${targetDirRel}/index.${located.rel.endsWith('.md') ? 'md' : 'mdx'}`,
-        }),
-      );
-      stream.close();
+        );
+        stream.close();
+      } finally {
+        release();
+      }
     },
     { auth: true },
   );

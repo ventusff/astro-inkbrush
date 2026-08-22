@@ -16,6 +16,18 @@
  * title (case-insensitive).
  * A miss never fails the build: it renders span.wikilink-dead and fires
  * onBroken; strict checking belongs to lint.
+ *
+ * A backslash-escaped opener (`\[[x]]`, `[\[x]]`) is literal text, never a
+ * wikilink. The extractor sees the raw source and checks backslash parity
+ * directly (an odd run of `\` before `[[` escapes it). The transform sees
+ * the parsed tree, where the parser has already consumed the escape, so it
+ * maps each match back to the vfile source (walking from the text node's
+ * start offset, two source characters per escaped one) and skips matches
+ * spelled with an escape. The mapping is conservative: without a source
+ * string on the file, without a start offset on the node, or past the first
+ * point where the node's text diverges from the source (a character
+ * reference, entity or other non-literal), matches are treated as
+ * unescaped — the spelling can then no longer be read from the source.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -146,6 +158,44 @@ interface MdNode {
   data?: Record<string, unknown>;
 }
 
+/** the transformer receives whatever node shape the pipeline produces; the
+ *  source offset is read structurally so MdNode stays assignable from the
+ *  pipeline's own Node type */
+function startOffsetOf(node: MdNode): number | undefined {
+  return (node as { position?: { start?: { offset?: number } } }).position?.start?.offset;
+}
+
+/**
+ * Whether the `[[` of a match at `matchIndex` in a text node's value is
+ * spelled with a backslash escape (`\[[` or `[\[`) in the source. Walks the
+ * source from the node's start offset in lockstep with the value, consuming
+ * two source characters wherever a backslash escapes the next one. Returns
+ * false as soon as source and value diverge (a character reference or other
+ * non-literal): from there the spelling cannot be read, and an unverifiable
+ * match must stay a wikilink.
+ */
+function escapedInSource(source: string, sourceStart: number, value: string, matchIndex: number): boolean {
+  let si = sourceStart;
+  for (let vi = 0; vi <= matchIndex + 1 && vi < value.length; vi += 1) {
+    const c = value[vi]!;
+    if (source[si] === '\\' && source[si + 1] === c) {
+      if (vi === matchIndex || vi === matchIndex + 1) return true;
+      si += 2;
+    } else if (source[si] === c) {
+      si += 1;
+    } else if (c === '\n') {
+      // line-suffix whitespace and the CR of a CRLF are not part of the value
+      while (source[si] === ' ' || source[si] === '\t') si += 1;
+      if (source[si] === '\r') si += 1;
+      if (source[si] !== '\n') return false;
+      si += 1;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
 const NO_DESCEND = new Set(['link', 'linkReference', 'code', 'inlineCode', 'math', 'inlineMath']);
 
 export interface BrokenWikilink {
@@ -163,8 +213,9 @@ export function remarkWikilinks(opts: {
 }) {
   const slug = opts.slugifyAnchor ?? defaultSlugify;
 
-  return (tree: MdNode, file?: { path?: string }): void => {
+  return (tree: MdNode, file?: { path?: string; value?: unknown }): void => {
     const fromId = opts.noteIdOf?.(file?.path);
+    const source = typeof file?.value === 'string' ? file.value : null;
 
     const transformText = (node: MdNode): MdNode[] | null => {
       const value = node.value ?? '';
@@ -172,8 +223,10 @@ export function remarkWikilinks(opts: {
       if (!WIKILINK_RE.test(value)) return null;
       WIKILINK_RE.lastIndex = 0;
 
+      const nodeStart = startOffsetOf(node);
       const out: MdNode[] = [];
       let last = 0;
+      let replaced = false;
       for (const m of value.matchAll(WIKILINK_RE)) {
         const [raw, target, anchor, label] = m as unknown as [
           string,
@@ -182,6 +235,12 @@ export function remarkWikilinks(opts: {
           string | undefined,
         ];
         const idx = m.index ?? 0;
+        // an escaped opener is literal text: leave its span for the
+        // surrounding text slices
+        if (source !== null && nodeStart !== undefined && escapedInSource(source, nodeStart, value, idx)) {
+          continue;
+        }
+        replaced = true;
         if (idx > last) out.push({ type: 'text', value: value.slice(last, idx) });
         last = idx + raw.length;
 
@@ -211,6 +270,7 @@ export function remarkWikilinks(opts: {
           opts.onBroken?.({ file: file?.path, target: target.trim(), kind: res.kind });
         }
       }
+      if (!replaced) return null;
       if (last < value.length) out.push({ type: 'text', value: value.slice(last) });
       return out;
     };
@@ -406,6 +466,8 @@ interface PositionedNode {
 export interface MaskOptions {
   /** parse with the MDX grammar (JSX, expressions, ESM) — pass true for .mdx sources */
   mdx?: boolean | undefined;
+  /** leave `$…$` / `$$…$$` spans as prose — for tools that rewrite math syntax */
+  keepMath?: boolean | undefined;
 }
 
 /** the dialect's parser plus math — parse only, no transforms, reused across calls */
@@ -446,7 +508,8 @@ function proseOf(source: string, options: MaskOptions): { masked: string; cuts: 
   const walk = (node: PositionedNode): void => {
     const range = offsetsOf(node);
     if (MASKED_TYPES.has(node.type)) {
-      if (range) blankRange(chars, range[0], range[1]);
+      const kept = options.keepMath === true && (node.type === 'math' || node.type === 'inlineMath');
+      if (range && !kept) blankRange(chars, range[0], range[1]);
       return;
     }
     const children = node.children ?? [];
@@ -479,11 +542,19 @@ function proseOf(source: string, options: MaskOptions): { masked: string; cuts: 
  * indented code blocks, multi-backtick code spans, HTML blocks and inline
  * tags, `$…$` / `$$…$$` math, links, images and definitions. With
  * `mdx: true` the MDX grammar applies: ESM and expressions are blanked, JSX
- * tags are blanked and their children stay prose. MDX that does not parse
- * falls back to the CommonMark reading; masking never throws.
+ * tags are blanked and their children stay prose. With `keepMath: true`
+ * math spans stay prose (code and HTML remain blanked). MDX that does not
+ * parse falls back to the CommonMark reading; masking never throws.
  */
 export function maskNonProse(source: string, options: MaskOptions = {}): string {
   return proseOf(source, options).masked;
+}
+
+/** an odd run of `\` immediately before `index` escapes the character there */
+function escapedAt(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i -= 1) backslashes += 1;
+  return backslashes % 2 === 1;
 }
 
 /** the wikilinks the page pipeline would render from `source`, with their source offsets */
@@ -495,6 +566,8 @@ export function extractWikilinks(source: string, options: MaskOptions = {}): Ext
     const start = m.index ?? 0;
     const end = start + m[0]!.length;
     if (cuts.some((c) => c > start && c < end)) continue;
+    // `\[[` is an escaped bracket, not a wikilink opener
+    if (escapedAt(masked, start)) continue;
     out.push({
       target: m[1]!.trim(),
       anchor: m[2]?.trim(),

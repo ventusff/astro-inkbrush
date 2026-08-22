@@ -14,3 +14,5 @@ Links: [[beta]], [[beta#Second Heading]], [[beta#nope|bad anchor]], [[compost-he
 | [[torn | apart]] |
 
 `[[in-code]]` is not a link.
+
+Escaped: \[[never-a-note]] stays literal text.

@@ -122,6 +122,12 @@ export function wikiConfig(): WikiConfig {
     const defaultRole = input.identity?.defaultRole ?? 'member';
     const adminRole = input.identity?.adminRole ?? 'admin';
     const roles = input.identity?.roles ?? [...new Set([defaultRole, adminRole])];
+    if (roles.some((r) => typeof r !== 'string' || !r.trim())) {
+      throw new Error('identity.roles must be non-empty strings');
+    }
+    if (new Set(roles).size !== roles.length) {
+      throw new Error(`identity.roles contains duplicates (${roles.join(', ')})`);
+    }
     if (!roles.includes(defaultRole) || !roles.includes(adminRole)) {
       throw new Error(
         `identity.roles must include defaultRole '${defaultRole}' and adminRole '${adminRole}'`,
@@ -151,9 +157,13 @@ export function wikiConfig(): WikiConfig {
   // file sets a dir (empty dir = off, per the config contract)
   const inboxRaw = process.env['WIKI_INBOX_DIR'] ?? input.inbox?.dir ?? '';
 
+  // dev login: the default (nothing set anywhere) is loopback-only at the
+  // route; only an explicit config/env value serves non-loopback clients
+  const devFlag = envFlag('WIKI_DEV_LOGIN');
   cached = {
     auth: {
-      dev: envFlag('WIKI_DEV_LOGIN') ?? input.auth?.dev ?? true,
+      dev: devFlag ?? input.auth?.dev ?? true,
+      devExplicit: devFlag !== undefined || input.auth?.dev !== undefined,
       google,
       googleSaml,
       session,

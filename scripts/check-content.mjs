@@ -47,7 +47,7 @@
  * Exit code: 0 clean, 1 findings, 2 usage error.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { compile } from '@mdx-js/mdx';
@@ -98,22 +98,54 @@ export function globToRe(glob) {
 
 const ALWAYS_SKIPPED = ['docs', '_meta', 'node_modules', '.git', '.github'];
 
+/**
+ * Matching files under `root`. Symlinks are followed only while their real
+ * path stays inside the root's real path, and each real directory is
+ * visited once, under the first path that reaches it in name order — a
+ * symlink cycle cannot recurse and a link out of the tree is not scanned.
+ */
 export function* contentFiles(root, globs, skip = []) {
   const patterns = globs.map(globToRe);
   const skips = new Set([...skip, ...ALWAYS_SKIPPED].map((d) => d.replace(/\/+$/, '')));
-  const walk = function* (dir) {
-    for (const name of readdirSync(dir)) {
+  let rootReal;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return;
+  }
+  const insideRoot = (real) => real === rootReal || real.startsWith(rootReal + sep);
+  const visited = new Set([rootReal]);
+  const walk = function* (dir, realDir) {
+    const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const entry of entries) {
+      const name = entry.name;
       if (name.startsWith('.')) continue;
       const p = join(dir, name);
       const rel = relative(root, p).replaceAll('\\', '/');
-      if (statSync(p).isDirectory()) {
-        if (!skips.has(rel)) yield* walk(p);
-      } else if (patterns.some((re) => re.test(rel))) {
+      let real = join(realDir, name);
+      let isDirectory = entry.isDirectory();
+      let isFile = entry.isFile();
+      if (entry.isSymbolicLink()) {
+        try {
+          real = realpathSync(p);
+          const stat = statSync(real);
+          isDirectory = stat.isDirectory();
+          isFile = stat.isFile();
+        } catch {
+          continue;
+        }
+        if (!insideRoot(real)) continue;
+      }
+      if (isDirectory) {
+        if (skips.has(rel) || visited.has(real)) continue;
+        visited.add(real);
+        yield* walk(p, real);
+      } else if (isFile && patterns.some((re) => re.test(rel))) {
         yield p;
       }
     }
   };
-  yield* walk(root);
+  yield* walk(root, rootReal);
 }
 
 /* ---------------- frontmatter ---------------- */
@@ -256,6 +288,10 @@ export async function main(argv) {
   }
   const valued = new Set(['--glob', '--skip', '--config']);
   const flags = new Set(['--math']);
+  if (valued.has(argv[argv.length - 1])) {
+    console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
+    return 2;
+  }
   const positional = argv.filter((a, i) => !a.startsWith('--') && !valued.has(argv[i - 1]));
   const unknown = argv.filter((a) => a.startsWith('--') && !valued.has(a) && !flags.has(a));
   if (positional.length > 1 || unknown.length > 0) {

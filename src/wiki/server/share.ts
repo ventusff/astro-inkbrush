@@ -15,9 +15,10 @@
  * POST /share is an NDJSON stream: the underlying `astro build` can take
  * minutes cold, so progress lines flow while it runs.
  */
-import { randomBytes, scryptSync } from 'node:crypto';
+import { randomBytes, scrypt } from 'node:crypto';
 import { createReadStream, readdirSync, rmSync, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
+
 import * as tar from 'tar';
 
 import type {
@@ -28,6 +29,7 @@ import type {
   ShareStreamEvent,
 } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
+import { findUser as findIdentityUser, identityConfig } from './identity.ts';
 import type { Ctx, RouteRegistrar } from './index.ts';
 import { fail, json, ndjsonStream, readBody } from './index.ts';
 import { noteUrl } from './site.ts';
@@ -99,6 +101,20 @@ function isActive(record: ShareRecord): boolean {
   return true;
 }
 
+/** the record without its creator's email — the shape the list endpoint returns */
+function withoutCreator(record: ShareRecord): ShareRecord {
+  const { createdBy: _createdBy, ...rest } = record;
+  return rest;
+}
+
+/** the requester may manage this share: they created it, or they hold the
+ *  admin role while the identity registry is on */
+function canManage(record: ShareRecord, email: string): boolean {
+  if (record.createdBy === email) return true;
+  const identity = identityConfig();
+  return identity !== null && findIdentityUser(email)?.role === identity.adminRole;
+}
+
 /* ---------------- id + password hashing ---------------- */
 
 // base58 — no 0/O/I/l, so recipients can read the id (and password) aloud
@@ -118,14 +134,20 @@ function mintId(length = 10): string {
   return out;
 }
 
-/** gateway password format: `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` */
-function hashPassword(password: string): string {
+/** gateway password format: `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` —
+ *  derived off the event loop (async scrypt) */
+async function hashPassword(password: string): Promise<string> {
   const N = 2 ** 15;
   const r = 8;
   const p = 1;
   const salt = randomBytes(16);
-  // maxmem must exceed 128*N*r bytes — default 32 MiB throws at N=2^15
-  const hash = scryptSync(password, salt, 32, { N, r, p, maxmem: 64 * 1024 * 1024 });
+  const hash = await new Promise<Buffer>((resolve, reject) => {
+    // maxmem must exceed 128*N*r bytes — default 32 MiB throws at N=2^15
+    scrypt(password, salt, 32, { N, r, p, maxmem: 64 * 1024 * 1024 }, (err, derived) => {
+      if (err) reject(err);
+      else resolve(derived);
+    });
+  });
   return `scrypt$${N}$${r}$${p}$${salt.toString('base64url')}$${hash.toString('base64url')}`;
 }
 
@@ -163,6 +185,14 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (password.length < 6) return fail(res, 400, 'Password must be at least 6 characters');
       if (expiresDays !== null && expiresDays !== 7 && expiresDays !== 30) {
         return fail(res, 400, 'expiresDays must be 7, 30 or null');
+      }
+      // one active share per note
+      const existing = readShares().find((r) => r.note === note && isActive(r));
+      if (existing) {
+        return json(res, 409, {
+          error: 'This note already has an active share link — revoke it first',
+          share: withoutCreator(existing),
+        });
       }
 
       // the gateway is checked before the (minutes-long) build
@@ -209,7 +239,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
             headers: {
               'content-type': 'application/gzip',
               'content-length': String(size),
-              'x-share-password': hashPassword(password),
+              'x-share-password': await hashPassword(password),
               ...(expiresAt ? { 'x-share-expires': expiresAt } : {}),
               // header values are latin1 — a CJK note id travels percent-encoded
               'x-share-note': /^[\x20-\x7e]*$/.test(note) ? note : encodeURIComponent(note),
@@ -234,7 +264,25 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           expiresAt,
           revokedAt: null,
         };
-        await updateShares((shares) => shares.push(record));
+        // the local record must persist, and stay the note's only active one;
+        // otherwise the uploaded share is deleted again (compensation) so the
+        // gateway never serves a share this server has no record of
+        let lostRace = false;
+        try {
+          await updateShares((shares) => {
+            if (shares.some((r) => r.note === note && isActive(r))) {
+              lostRace = true;
+              return;
+            }
+            shares.push(record);
+          });
+          if (lostRace) throw new Error('This note already has an active share link — revoke it first');
+        } catch (err) {
+          await gatewayFetch(conf, `/admin/s/${id}`, { method: 'DELETE' }, 10_000).catch((cleanupErr: unknown) => {
+            console.error(`[wiki share] could not delete orphaned gateway share ${id}:`, cleanupErr);
+          });
+          throw err;
+        }
         stream.write({ kind: 'result', ok: true, share: record } satisfies ShareStreamEvent);
       } catch (err) {
         stream.write({
@@ -256,7 +304,10 @@ export function registerShareRoutes(on: RouteRegistrar): void {
     (ctx) => {
       if (!requireShare(ctx)) return;
       const note = ctx.query.get('note');
-      const shares = readShares().filter((r) => isActive(r) && (!note || r.note === note));
+      if (!note) return fail(ctx.res, 400, 'missing note parameter');
+      const shares = readShares()
+        .filter((r) => isActive(r) && r.note === note)
+        .map(withoutCreator);
       json(ctx.res, 200, { shares } satisfies ShareListResponse);
     },
     { auth: true },
@@ -270,6 +321,9 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (!conf) return;
       const record = readShares().find((r) => r.id === ctx.params['id'] && !r.revokedAt);
       if (!record) return fail(ctx.res, 404, 'Share not found');
+      if (!canManage(record, ctx.user!.email)) {
+        return fail(ctx.res, 403, 'Only the share creator (or an admin) can revoke it');
+      }
       try {
         const del = await gatewayFetch(conf, `/admin/s/${record.id}`, { method: 'DELETE' }, 10_000);
         // gateway 404 = already gone (expired/manually removed) — revoke anyway

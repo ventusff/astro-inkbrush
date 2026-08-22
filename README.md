@@ -48,10 +48,13 @@ the full look.
   generate a full translation of a note into another locale — via the
   `claude` CLI, streaming progress live. Every job runs in a throwaway
   workspace holding only the note (and the companion files your config
-  names), with file tools confined to it and no shell or network tools;
-  its result is validated like a manual save and carried back only then.
+  names), with file tools confined to it, no shell or network tools and an
+  allowlisted environment; its result is validated like a manual save and
+  carried back only then — and only if nothing changed under the job
+  meanwhile: a concurrent manual edit wins.
 - 💬 **Comments** — Markdown + math, server-sanitized, stored as flat
-  NDJSON files under `.wiki/data/` beside your project.
+  NDJSON files under `.wiki/data/` beside your project; author emails
+  never leave the server.
 - 📥 **Obsidian inbox** — watch a vault folder; new notes are converted
   (embeds copied beside the note and referenced relatively, wikilinks
   resolved with the same parser the pages use, highlights preserved) and
@@ -59,9 +62,10 @@ the full look.
 - 🔗 **Wikilinks** — one `[[wikilink]]` implementation shared by the page
   pipeline, the editor preview and the importer: aliases, anchors, locale
   mirrors, and dead-link spans instead of broken builds.
-- 🔐 **Sign-in options** — instant dev login, Google OAuth (PKCE, a
-  browser-bound single-use state), or Google Workspace SAML SSO (every
-  response must answer a request this server issued); HMAC-cookie or JWT
+- 🔐 **Sign-in options** — instant dev login (loopback-only by default),
+  Google OAuth (PKCE, a browser-bound single-use state), or Google
+  Workspace SAML SSO (every response must answer a request this server
+  issued); domain allowlists are fail-closed; HMAC-cookie or JWT
   sessions (cross-subdomain SSO); an optional file-based member registry —
   when it is on, only current members can edit, and only admins can manage
   it.
