@@ -1,0 +1,54 @@
+name: Deploy demo to GitHub Pages
+
+# Builds the demo notes site (reading mode — the editor is a dev-mode
+# feature; run the demo locally with `npm run wiki` to try editing) and
+# publishes it to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Guard: only the canonical repo deploys Pages (forks/mirrors skip cleanly).
+    if: github.repository == 'ventusff/astro-inkbrush'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install package deps (repo root)
+        run: npm install --no-audit --no-fund
+      - name: Install & build demo
+        working-directory: demo
+        env:
+          DEMO_SITE: https://ventusff.github.io
+          DEMO_BASE: /astro-inkbrush/
+        run: |
+          npm install
+          npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/dist
+
+  deploy:
+    if: github.repository == 'ventusff/astro-inkbrush'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

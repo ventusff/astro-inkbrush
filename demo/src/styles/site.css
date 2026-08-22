@@ -1,0 +1,171 @@
+/* Demo stylesheet — deliberately small and deliberately ours.
+ * astro-inkbrush ships no styling: this file is the whole look of the site,
+ * ~150 lines of neutral CSS. Swap it out entirely and the CMS still works
+ * (its own chrome themes itself through --color-* tokens when present). */
+
+:root {
+  --bg: #fdfdfc;
+  --ink: #1d2126;
+  --ink-soft: #4b5259;
+  --ink-faint: #8a9096;
+  --line: #e4e2dd;
+  --accent: #22665c;
+  --code-bg: #f2f1ed;
+  --measure: 44rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans',
+    'Noto Sans CJK SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+a:hover {
+  border-bottom-color: currentColor;
+}
+
+code {
+  font: 0.88em/1.5 ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  background: var(--code-bg);
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+/* -------- chrome -------- */
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 22px 20px 0;
+}
+.site-header .brand {
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--ink);
+  border-bottom: none;
+}
+.site-header .brand-sub {
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+.site-header .spacer {
+  flex: 1;
+}
+
+.site-footer {
+  max-width: var(--measure);
+  margin: 4rem auto 0;
+  padding: 18px 20px 40px;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
+  color: var(--ink-faint);
+}
+
+/* -------- index -------- */
+.note-index,
+.note-main {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+.note-index h1 {
+  margin: 2.2rem 0 0.4rem;
+}
+.note-index .lede {
+  color: var(--ink-soft);
+  margin-top: 0;
+}
+.note-list {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+}
+.note-list li {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.note-list li > a {
+  font-weight: 600;
+  font-size: 17px;
+}
+.note-list .mirror {
+  margin-left: 10px;
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+  border-bottom-color: var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.note-list p {
+  margin: 0.25em 0 0;
+  color: var(--ink-soft);
+  font-size: 14.5px;
+}
+
+/* -------- note page -------- */
+.crumbs {
+  display: flex;
+  gap: 14px;
+  margin: 2rem 0 0;
+  font-size: 13.5px;
+}
+article h1 {
+  margin: 0.8rem 0 1rem;
+  line-height: 1.25;
+}
+article h2 {
+  margin: 2rem 0 0.6rem;
+  font-size: 1.25rem;
+}
+article blockquote {
+  margin: 1rem 0;
+  padding: 2px 18px;
+  border-left: 3px solid var(--line);
+  color: var(--ink-soft);
+}
+article img {
+  max-width: 100%;
+}
+article hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 2rem 0;
+}
+
+/* wikilinks — the engine renders resolved links as a.wikilink and unresolved
+ * targets as span.wikilink-dead (hover shows why) */
+a.wikilink {
+  border-bottom-style: dashed;
+}
+.wikilink-dead {
+  color: var(--ink-faint);
+  border-bottom: 1px dashed var(--ink-faint);
+  cursor: help;
+}

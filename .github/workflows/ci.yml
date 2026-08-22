@@ -1,0 +1,26 @@
+name: CI
+
+# Type-agnostic test run: node:test over the pure library modules
+# (snapshot rewriting, content guard, wikilinks) with Node's native
+# TypeScript type stripping.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install --no-audit --no-fund
+      - run: npm test
