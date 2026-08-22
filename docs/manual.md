@@ -473,7 +473,7 @@ src/lib/        pipeline-agnostic libraries: markdown-syntax (the dialect),
                 (block ↔ source-line stamping), wikilinks
 src/wiki/shared/  cross-boundary types + locales.ts (the locale registry +
                   resolveLocales)
-scripts/        check-content.mjs / check-dist.mjs — standalone check CLIs
+scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs — standalone check CLIs
 ```
 
 Editing = writing to `<content.dir>` source files; Astro's content HMR

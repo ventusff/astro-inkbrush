@@ -43,9 +43,10 @@ npm test
 - `astro-inkbrush/wikilinks`: the single `[[wikilink]]` implementation
   (transform factory + resolver), pipeline-agnostic, shared by site
   rendering, editor preview and the inbox importer.
-- `scripts/check-content.mjs` / `scripts/check-dist.mjs`: standalone check
-  CLIs that import the dialect from the package root — zero drift from the
-  site's plugin set by construction.
+- `scripts/check-content.mjs` / `scripts/check-wikilinks.mjs` /
+  `scripts/check-dist.mjs`: standalone check CLIs that import the dialect
+  and link rules from the package root — zero drift from the site's plugin
+  set by construction.
 - `<meta name="inkbrush-note" content="<note id>">`: a note page declares
   its identity; the client never parses URLs. Optional
   `inkbrush-note-url` template for locale jumps.

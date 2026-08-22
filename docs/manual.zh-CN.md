@@ -406,7 +406,7 @@ src/lib/        与管线无关的库:markdown-syntax(方言)、markdown(处理�
                 一行接入)、content-guard、rehype-wiki-blocks(块↔源码行号)、
                 wikilinks
 src/wiki/shared/  跨界类型 + locales.ts(语言注册表 + resolveLocales)
-scripts/        check-content.mjs / check-dist.mjs——独立检查 CLI
+scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——独立检查 CLI
 ```
 
 编辑 = 改写 `<content.dir>` 下的源文件;Astro 内容热更新刷新页面。**文件即

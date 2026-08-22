@@ -257,6 +257,19 @@ function fmStringList(fm: string, field: string): string[] {
   );
 }
 
+/** parse one source string's frontmatter into a WikiNoteInfo (title falls
+ *  back to the id) — for corpora that don't follow the index.md layout,
+ *  e.g. flat card files fed to the lint CLI via --extra */
+export function noteInfoFromSource(id: string, source: string): WikiNoteInfo {
+  const fm = frontmatterBlock(source);
+  return {
+    id,
+    title: (fm && fmScalar(fm, 'title')) ?? id,
+    brand: fm ? fmScalar(fm, 'brand') : undefined,
+    aliases: fm ? fmStringList(fm, 'aliases') : [],
+  };
+}
+
 /** scan <contentDir>/**\/index.{mdx,md} → WikiNoteInfo[] (skips _meta and dot dirs) */
 export function scanNotes(contentDir: string): WikiNoteInfo[] {
   const notes: WikiNoteInfo[] = [];
@@ -283,13 +296,7 @@ export function scanNotes(contentDir: string): WikiNoteInfo[] {
       } else if (/^index\.mdx?$/.test(name)) {
         const id = relative(contentDir, dir).replaceAll('\\', '/');
         if (!id) continue;
-        const fm = frontmatterBlock(readFileSync(p, 'utf8'));
-        notes.push({
-          id,
-          title: (fm && fmScalar(fm, 'title')) ?? id,
-          brand: fm ? fmScalar(fm, 'brand') : undefined,
-          aliases: fm ? fmStringList(fm, 'aliases') : [],
-        });
+        notes.push(noteInfoFromSource(id, readFileSync(p, 'utf8')));
       }
     }
   };

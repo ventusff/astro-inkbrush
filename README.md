@@ -63,8 +63,11 @@ Inkstone for the full look.
   expressions swallowing your prose, single-line `$$x$$`, formulas KaTeX
   can't render, and more — each reported with file:line:column and a caret.
 - 🩺 **Check CLIs** — `check-content.mjs` (compile every source file with
-  the exact production dialect) and `check-dist.mjs` (broken links, dangling
-  anchors, locale doubling, nested `<a>`, KaTeX error residue in built HTML).
+  the exact production dialect), `check-wikilinks.mjs` (dead or ambiguous
+  `[[wikilinks]]`, dubious anchors — with the library's own regex and
+  resolution rules, so it can never drift) and `check-dist.mjs` (broken
+  links, dangling anchors, locale doubling, nested `<a>`, KaTeX error
+  residue in built HTML).
 - 🪶 **Zero production footprint** — the CMS activates only in dev mode.
   `astro build` output is byte-identical to a site that never installed it.
 
