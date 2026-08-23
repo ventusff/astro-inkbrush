@@ -109,9 +109,11 @@ const BADGE_CSS = `
 }
 .inkbrush-playground-badge .pg-reset { padding: 4px 8px; }
 @media (max-width: 520px) {
-  /* narrow bars keep the glyph; the label lives on in the tooltip */
-  .inkbrush-playground-badge .pg-label { display: none; }
-  .inkbrush-playground-badge button { padding: 4px 7px; }
+  /* A narrow nav bar has no seat to give: even a bare glyph squeezes the
+     breadcrumb into clipping. The entry point hides; a returning visitor's
+     local edits still apply and auto-activate (activation never depends on
+     the badge being visible). */
+  .inkbrush-playground-badge { display: none; }
 }
 `;
 
