@@ -44,7 +44,7 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
   const note = manifest.notes.find((n) => n.id === noteId);
   if (!note) return null;
 
-  const siteConfig = config.configure(manifest);
+  const siteConfig = await config.configure(manifest);
   const guestName = (await getIdentity())?.name ?? config.guestName ?? 'Playground visitor';
   const guest: WikiUser = {
     name: guestName,

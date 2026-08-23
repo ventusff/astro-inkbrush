@@ -58,8 +58,10 @@ const DEFAULT_STRINGS: PlaygroundStrings = {
 export interface PlaygroundConfig {
   /** URL of the build-time sources manifest (base-prefixed by the site) */
   manifestUrl: string;
-  /** site inputs, built once the manifest is loaded */
-  configure(manifest: PlaygroundManifest): PlaygroundSiteConfig;
+  /** site inputs, built once the manifest is loaded. May be async — a site
+   *  should dynamic-import its pipeline here, so the boot chunk every page
+   *  loads stays free of the site's plugin graph */
+  configure(manifest: PlaygroundManifest): PlaygroundSiteConfig | Promise<PlaygroundSiteConfig>;
   guestName?: string | undefined;
   strings?: Partial<PlaygroundStrings> | undefined;
 }
