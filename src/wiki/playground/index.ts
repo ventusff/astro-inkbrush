@@ -108,6 +108,11 @@ const BADGE_CSS = `
   background: var(--color-bg-soft, color-mix(in srgb, canvas 88%, canvastext 12%));
 }
 .inkbrush-playground-badge .pg-reset { padding: 4px 8px; }
+@media (max-width: 520px) {
+  /* narrow bars keep the glyph; the label lives on in the tooltip */
+  .inkbrush-playground-badge .pg-label { display: none; }
+  .inkbrush-playground-badge button { padding: 4px 7px; }
+}
 `;
 
 export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
@@ -126,8 +131,14 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
 
   const main = document.createElement('button');
   main.type = 'button';
-  main.textContent = `✎ ${s.tryIt}`;
-  main.title = s.tryItHint;
+  const label = document.createElement('span');
+  label.className = 'pg-label';
+  const setLabel = (text: string, title: string): void => {
+    label.textContent = text;
+    main.title = title;
+  };
+  main.append('✎\u00a0', label);
+  setLabel(s.tryIt, s.tryItHint);
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'pg-reset';
@@ -159,19 +170,19 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
       const { activate } = await import('./activate');
       const result = await activate(config, noteId);
       if (!result) {
-        main.textContent = s.activateFailed;
+        setLabel(s.activateFailed, s.activateFailed);
         return;
       }
       active = true;
-      main.textContent =
-        `✎ ${s.active}` +
-        (result.editedSegments > 0
+      const edits =
+        result.editedSegments > 0
           ? ` · ${s.edits.replace('#n', String(result.editedSegments))}`
-          : '');
+          : '';
+      setLabel(s.active + edits, s.active + edits);
       reset.hidden = false;
     } catch (err) {
       console.error('[playground] activation failed:', err);
-      main.textContent = s.activateFailed;
+      setLabel(s.activateFailed, s.activateFailed);
     } finally {
       main.disabled = false;
       activating = false;
