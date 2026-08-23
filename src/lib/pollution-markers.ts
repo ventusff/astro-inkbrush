@@ -6,11 +6,12 @@
  * Importable from both a package script and server code; depends on
  * nothing.
  *
- * Exemption, honored by every consumer: the `inkbrush-note` /
- * `inkbrush-note-url` meta tags are site-owned identity markup present in
- * every build by contract, and page prose may discuss the CMS — so the
- * component-name marker applies to executable and style content (scripts,
- * stylesheets, textual assets), never to page markup or prose.
+ * Only EXECUTABLE evidence counts: the client's API prefix and the block
+ * stamps. A paired design layer (astro-inkstone) ships dormant `.wiki-*`
+ * chrome skin in every build, site content and data may name the engine,
+ * and the `inkbrush-note` meta tags are site-owned identity markup — none
+ * of that is pollution, so the style and name markers exist for labeling
+ * only and drive no detection.
  */
 
 /** the inkbrush client addresses its server here; nothing else in a site does */
@@ -21,16 +22,19 @@ export const CMS_API_MARKER = '/api/wiki/';
 export const CMS_STAMP_MARKER = 'data-wiki-';
 
 /** the CMS chrome styles all live under a `.wiki-` class prefix */
+/** dormant chrome styling is NOT pollution: a site pairing a design layer
+ *  that skins the CMS chrome (astro-inkstone's `.wiki-comments` rules) ships
+ *  those selectors in every build by design — only executable markers count */
 export const CMS_STYLE_MARKER = '.wiki-';
 
 /** the component name (match case-insensitively); subject to the meta/prose
  *  exemption above */
+/** the product's name is NOT pollution either: site content and data may
+ *  discuss the engine by name — kept only for labeling, never for detection */
 export const CMS_NAME_MARKER = 'inkbrush';
 
 /** every marker, for whole-content sweeps over executable markup */
 export const POLLUTION_MARKERS: readonly string[] = [
   CMS_API_MARKER,
   CMS_STAMP_MARKER,
-  CMS_STYLE_MARKER,
-  CMS_NAME_MARKER,
 ];

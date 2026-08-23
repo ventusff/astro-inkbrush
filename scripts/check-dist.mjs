@@ -69,7 +69,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'parse5';
 
 const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
-const { CMS_API_MARKER, CMS_NAME_MARKER, CMS_STAMP_MARKER, CMS_STYLE_MARKER } = await import(
+const { CMS_API_MARKER, CMS_STAMP_MARKER } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/pollution-markers.ts')).href
 );
 
@@ -206,9 +206,7 @@ const URL_ATTRS = new Set(['href', 'src', 'poster', 'data', 'action', 'formactio
  * share-snapshot hygiene check so the two enforcers cannot drift; the
  * `inkbrush-note` meta exemption is stated there */
 const hasApiMark = (text) => text.includes(CMS_API_MARKER);
-const NAME_MARK_RE = new RegExp(CMS_NAME_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-const hasNameMark = (text) => NAME_MARK_RE.test(text);
-const hasStyleMark = (text) => text.includes(CMS_STYLE_MARKER);
+const hasStampMark = (text) => text.includes(CMS_STAMP_MARKER);
 
 function textOf(node) {
   return (node.childNodes ?? []).map((c) => c.value ?? '').join('');
@@ -281,13 +279,12 @@ export function analyzeHtml(html) {
       if (/(?:^|\s)katex-error(?:\s|$)/.test(attr('class') ?? '')) out.katexErrors += 1;
       if (tag === 'style') {
         const css = textOf(node);
-        if (hasStyleMark(css)) out.cmsStyles += 1;
         for (const u of cssUrls(css)) ref(u, 'style');
         return;
       }
       if (tag === 'script') {
         const js = textOf(node);
-        if (hasApiMark(js) || hasNameMark(js)) out.cmsScripts += 1;
+        if (hasApiMark(js) || hasStampMark(js)) out.cmsScripts += 1;
         return;
       }
       if (tag === 'template' && node.content) walk(node.content);
@@ -449,10 +446,7 @@ export function checkDist(distDir, options = {}) {
       );
     }
     if (a.cmsScripts > 0) {
-      problems.push(`${page}: CMS injection — an inline script references the inkbrush client (/api/wiki/ or "inkbrush")`);
-    }
-    if (a.cmsStyles > 0) {
-      problems.push(`${page}: CMS injection — an inline style carries .wiki- chrome selectors`);
+      problems.push(`${page}: CMS injection — an inline script references the inkbrush client (${CMS_API_MARKER} or ${CMS_STAMP_MARKER})`);
     }
     if (a.wikiStamps > 0) {
       problems.push(`${page}: CMS injection — rehypeWikiBlocks stamps (${CMS_STAMP_MARKER}*) in a static build`);
@@ -515,12 +509,8 @@ export function checkDist(distDir, options = {}) {
   function checkStylesheet(file) {
     const sheet = rel(file);
     const css = readFileSync(file, 'utf8');
-    if (hasStyleMark(css)) {
-      problems.push(`${sheet}: CMS injection — a stylesheet carries ${CMS_STYLE_MARKER} chrome selectors`);
-    }
-    if (hasNameMark(css)) {
-      problems.push(`${sheet}: CMS injection — a stylesheet carries the string "${CMS_NAME_MARKER}"`);
-    }
+    // dormant chrome selectors (.wiki-*) are a paired design layer's skin,
+    // not pollution; only executable markers count
     for (const url of cssUrls(css)) {
       counts.refs += 1;
       const target = targetOf(url, dirname(file));
@@ -532,17 +522,18 @@ export function checkDist(distDir, options = {}) {
     const js = readFileSync(file, 'utf8');
     if (hasApiMark(js)) {
       problems.push(`${rel(file)}: CMS injection — a script bundle references the inkbrush client API (${CMS_API_MARKER})`);
-    } else if (hasNameMark(js)) {
-      problems.push(`${rel(file)}: CMS injection — a script bundle carries the string "${CMS_NAME_MARKER}"`);
+    } else if (hasStampMark(js)) {
+      problems.push(`${rel(file)}: CMS injection — a script bundle carries ${CMS_STAMP_MARKER} stamps`);
     }
   }
 
-  /** textual assets (prose lives in pages, so the component name has no
-   *  business in any of them); binary files are never decoded as text */
+  /** textual assets: executable markers only — site data may name the
+   *  engine, and a paired design layer ships dormant chrome selectors */
   function checkAsset(file) {
     if (!TEXTUAL_ASSET.test(file)) return;
-    if (hasNameMark(readFileSync(file, 'utf8'))) {
-      problems.push(`${rel(file)}: CMS injection — an asset carries the string "${CMS_NAME_MARKER}"`);
+    const text = readFileSync(file, 'utf8');
+    if (hasApiMark(text) || hasStampMark(text)) {
+      problems.push(`${rel(file)}: CMS injection — an asset references the inkbrush client (${CMS_API_MARKER} or ${CMS_STAMP_MARKER})`);
     }
   }
 

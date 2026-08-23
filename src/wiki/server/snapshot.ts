@@ -289,10 +289,8 @@ function resolveRef(ref: string, fromDir: string, outDir: string): string | null
   return abs;
 }
 
-// the shared CMS markers plus what only a dev-server leak can carry; the
-// exempted site-owned `inkbrush-note` meta tags are stripped before the scan
+// the shared executable CMS markers plus what only a dev-server leak can carry
 const POLLUTION = [...POLLUTION_MARKERS, '/api/wiki', '@vite/client', 'astro-dev-toolbar'];
-const EXEMPT_TAG = /<meta\s[^>]*name=["']inkbrush-note(?:-url)?["'][^>]*>/gi;
 
 /**
  * One start tag beginning at `at`, or null if `at` is not one.
@@ -973,7 +971,7 @@ export async function buildSnapshot(
 
     const pageDir = relative(outDir, dirname(htmlPath)).split(sep).join('/');
     const rewritten = rewriteHtml(html, pageDir);
-    assertClean(executableMarkup(rewritten).replace(EXEMPT_TAG, ''), 'index.html');
+    assertClean(executableMarkup(rewritten), 'index.html');
     writeFileSync(join(snapDir, 'index.html'), rewritten);
     mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });
     writeFileSync(join(snapDir, PRELOAD_SHIM), PRELOAD_SHIM_SOURCE);
