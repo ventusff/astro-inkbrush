@@ -23,6 +23,11 @@
  * Astro component — so an edited segment whose source still carries JSX is
  * shown as its markdown rendering under an explanatory note, with a fresh
  * anchor keeping it editable, until Reset restores the built version.
+ *
+ * The frontmatter is a segment too (its anchor, bound by the client to the
+ * layout's frontmatter slot): it edits as YAML, the visitor's version is
+ * kept and reopened, and since a static page head cannot re-render from it
+ * the slot carries an explanatory note until Reset.
  */
 
 export interface StampedRange {
@@ -30,6 +35,8 @@ export interface StampedRange {
   end: number;
   /** component name when the stamp is a JSX `<template>` anchor */
   jsx: string | null;
+  /** the note's frontmatter anchor */
+  frontmatter: boolean;
 }
 
 export interface Segment extends StampedRange {
@@ -60,20 +67,21 @@ export function hasJsxSource(source: string): boolean {
   return /<[A-Z][\w]*[\s/>]/.test(source);
 }
 
-/** the stamped nodes — markdown elements and JSX anchors — in document order.
- *  The frontmatter anchor is not a body block: the static page head cannot
- *  re-render from an edited frontmatter, so the playground leaves it out. */
+/** the stamped nodes — markdown elements, JSX anchors and the frontmatter
+ *  anchor — in document order */
 export function stampedNodes(root: Document | HTMLElement = document): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>('[data-wiki-src]:not([data-wiki-frontmatter])')];
+  return [...root.querySelectorAll<HTMLElement>('[data-wiki-src]')];
 }
 
 export function rangeOf(node: HTMLElement): StampedRange | null {
   const [start, end] = (node.dataset['wikiSrc'] ?? '').split('-').map(Number);
   if (!start || !end) return null;
+  const frontmatter = node.tagName === 'TEMPLATE' && 'wikiFrontmatter' in node.dataset;
   return {
     start,
     end,
-    jsx: node.tagName === 'TEMPLATE' ? (node.dataset['wikiJsx'] ?? 'component') : null,
+    jsx: node.tagName === 'TEMPLATE' && !frontmatter ? (node.dataset['wikiJsx'] ?? 'component') : null,
+    frontmatter,
   };
 }
 
@@ -153,6 +161,8 @@ export function buildOverlay(
 export interface ApplyOptions {
   /** shown above an edited segment whose source still carries JSX */
   jsxEditedNote: string;
+  /** shown under the frontmatter slot once the frontmatter is edited */
+  frontmatterEditedNote: string;
   /** elements that end the content area — the DOM span of a trailing JSX
    *  segment must never swallow the layout's own chrome after the note body */
   contentEndSelector?: string | undefined;
@@ -211,6 +221,21 @@ export async function applyOverlayToDom(
     const node = nodes[i]!;
     if (!seg.edited) {
       node.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      continue;
+    }
+
+    if (seg.frontmatter) {
+      // the anchor moves to current coordinates (the editor keeps working on
+      // the saved YAML); the page head is the layout's build-time rendering
+      // and cannot follow, so the slot says so until Reset
+      node.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      const slot = document.querySelector('[data-inkbrush-slot="frontmatter"]');
+      if (slot) {
+        const note = document.createElement('div');
+        note.className = 'pg-jsx-note';
+        note.textContent = opts.frontmatterEditedNote;
+        slot.insertAdjacentElement('afterend', note);
+      }
       continue;
     }
 

@@ -79,10 +79,13 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
     wikilinks: { resolve, ...(siteConfig.noteIdOf ? { noteIdOf: siteConfig.noteIdOf } : {}) },
   });
 
-  // stamps — markdown elements and JSX anchors alike (component blocks edit
-  // at the source level, exactly like dev)
+  // stamps — markdown elements, JSX anchors and the frontmatter anchor alike
+  // (component blocks and the frontmatter edit at the source level, exactly
+  // like dev)
   const nodes = stampedNodes();
-  const ranges = nodes.map((el) => rangeOf(el) ?? { start: 0, end: 0, jsx: null });
+  const ranges = nodes.map(
+    (el) => rangeOf(el) ?? { start: 0, end: 0, jsx: null, frontmatter: false },
+  );
   const overrides = (await getOverrides(noteId))?.segments ?? {};
   const overlay = buildOverlay(note.source, ranges, overrides);
   if (!overlay) return null;
@@ -92,7 +95,7 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
     overlay,
     nodes,
     (source, curStart) => renderer.renderBlock(source, curStart, `/${note.file}`),
-    { jsxEditedNote: strings.jsxEditedNote },
+    { jsxEditedNote: strings.jsxEditedNote, frontmatterEditedNote: strings.frontmatterEditedNote },
   );
 
   setWikiTransport(

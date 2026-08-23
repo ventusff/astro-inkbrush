@@ -47,6 +47,9 @@ export interface PlaygroundStrings {
   /** note above an edited component block — a static page cannot re-render
    *  an Astro component, so the display degrades honestly until Reset */
   jsxEditedNote: string;
+  /** note under the frontmatter slot once the frontmatter is edited — the
+   *  static page head keeps the built rendering until Reset */
+  frontmatterEditedNote: string;
   active: string;
   /** shown next to `active` when local edits exist; #n is the count */
   edits: string;
@@ -61,6 +64,8 @@ export const DEFAULT_STRINGS: PlaygroundStrings = {
   activeHint: 'Hover any paragraph to edit it — on a touch screen, tap it',
   jsxEditedNote:
     'Component block edited locally — a static page cannot re-render Astro components, so the display below is a plain rendering (or the built version). Your source is kept; Reset restores the page.',
+  frontmatterEditedNote:
+    'Frontmatter edited locally — a static page head cannot re-render from it, so the display keeps the built version. Your YAML is kept; Reset restores the page.',
   active: 'Editing locally',
   edits: '#n local edit(s)',
   reset: 'Reset',
