@@ -61,30 +61,40 @@ function isBlank(line: string | undefined): boolean {
   return line === undefined || line.trim() === '';
 }
 
+async function readRaw(path: string): Promise<string | null> {
+  try {
+    // lazy: the plugin also runs in browser bundles (the playground renders
+    // patched fragments with it), where the vfile carries no path and fs
+    // must never be resolved at module load
+    const fs = await import('node:fs');
+    return fs.readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 export function rehypeWikiBlocks() {
   return async (tree: Root, file: VFile): Promise<void> => {
-    const value = String(file.value);
-    const sourceLines = value.split('\n');
     const children = tree.children as unknown as AnyNode[];
 
     // Stamps must be RAW file lines — the server reads and writes blocks by
-    // them. A pipeline that strips the frontmatter before parsing (Astro's
-    // own .md path) yields body-relative positions and a body-only vfile
-    // value; the raw file on disk tells the difference, and the stamp then
-    // carries the frontmatter offset. A pipeline whose positions already
-    // count the frontmatter (MDX) needs none. node:fs loads lazily inside
-    // the branch: the plugin also runs in browser bundles (the playground
-    // renders patched blocks with it), where the vfile carries no path and
-    // fs must never be resolved at module load.
+    // them. Three pipeline shapes reach this plugin:
+    //  - value present WITH frontmatter (MDX dev): positions count raw
+    //    lines — no offset;
+    //  - value present WITHOUT frontmatter (Astro's .md path): positions
+    //    and value are body-relative — the raw file on disk supplies the
+    //    frontmatter offset;
+    //  - value ABSENT (the MDX build pipeline hands over no vfile value):
+    //    positions still count raw lines — no offset; the raw file is read
+    //    only so gap-filling can trim against real source lines. A missing
+    //    value must never be mistaken for "no frontmatter" — that added the
+    //    offset to already-raw positions.
     let offset = 0;
-    if (!splitFrontmatter(value).present && file.path) {
-      let raw: string | null = null;
-      try {
-        const fs = await import('node:fs');
-        raw = fs.readFileSync(file.path, 'utf8');
-      } catch {
-        raw = null;
-      }
+    let value = typeof file.value === 'string' ? file.value : '';
+    if (value === '') {
+      value = (file.path ? await readRaw(file.path) : null) ?? '';
+    } else if (!splitFrontmatter(value).present && file.path) {
+      const raw = await readRaw(file.path);
       if (raw !== null) {
         const fm = splitFrontmatter(raw);
         // the body starts on the line after the closing fence: the offset is
@@ -92,6 +102,7 @@ export function rehypeWikiBlocks() {
         if (fm.present) offset = raw.slice(0, fm.end).split('\n').length;
       }
     }
+    const sourceLines = value.split('\n');
 
     // pass 1: resolve a position for every stampable top-level node
     const resolved: (Pos | null)[] = children.map((node) => {
