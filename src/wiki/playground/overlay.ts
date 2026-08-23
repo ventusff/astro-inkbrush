@@ -1,32 +1,40 @@
 /**
  * The overlay: how visitor edits meet the static page.
  *
- * Coordinate systems. The static build stamped every top-level markdown
- * block with its ORIGINAL source line range (`data-wiki-src="start-end"`) —
- * those stamps are identical on every visit and form the stable key space.
- * A visitor's edits are per-segment source overrides keyed by that original
- * range (store.ts). The CURRENT source of the note is reconstructed
- * deterministically: original text outside the stamped segments (frontmatter,
- * blank lines, JSX component blocks) verbatim, each segment's override — or
- * its original slice — in place. Current line ranges follow from the walk.
+ * Coordinate systems. The static build stamped every top-level block of a
+ * note with its ORIGINAL source line range (`data-wiki-src="start-end"`) —
+ * markdown blocks on the element itself, JSX components on an invisible
+ * `<template>` anchor before their rendered output. Those stamps are
+ * identical on every visit and form the stable key space. A visitor's edits
+ * are per-segment source overrides keyed by that original range (store.ts).
+ * The CURRENT source of the note is reconstructed deterministically:
+ * original text outside the stamped segments (frontmatter, blank lines)
+ * verbatim, each segment's override — or its original slice — in place.
+ * Current line ranges follow from the walk.
  *
  * On boot the overlay re-stamps the page into CURRENT coordinates (so the
  * editor reads and writes the reconstructed source exactly like the dev
  * server reads and writes the file) and swaps edited segments' DOM for
  * locally rendered HTML.
  *
- * JSX component blocks are read-only here: their `<template>` anchors lose
- * the stamp before block discovery runs. Rendering an Astro island in the
- * browser is not something a static bundle can do, so the playground does
- * not pretend otherwise (the dev-mode editor has the matching boundary: it
- * edits their source but previews nothing).
+ * JSX components edit at the source level, exactly like dev mode (where the
+ * editor shows their source with no preview). What differs is the page
+ * after a save: dev re-renders server-side, a static bundle cannot run an
+ * Astro component — so an edited segment whose source still carries JSX is
+ * shown as its markdown rendering under an explanatory note, with a fresh
+ * anchor keeping it editable, until Reset restores the built version.
  */
 
-export interface Segment {
+export interface StampedRange {
+  start: number;
+  end: number;
+  /** component name when the stamp is a JSX `<template>` anchor */
+  jsx: string | null;
+}
+
+export interface Segment extends StampedRange {
   /** "start-end" in ORIGINAL build coordinates — the override key */
   key: string;
-  origStart: number;
-  origEnd: number;
   /** current source of the segment (override ?? original slice) */
   source: string;
   edited: boolean;
@@ -46,29 +54,37 @@ export interface NoteOverlay {
 
 const linesOf = (s: string): string[] => s.split('\n');
 
-/** strip the stamps off JSX `<template>` anchors — read-only in the playground */
-export function disableJsxAnchors(root: Document | HTMLElement = document): void {
-  for (const t of root.querySelectorAll('template[data-wiki-src]')) {
-    t.removeAttribute('data-wiki-src');
-    t.removeAttribute('data-wiki-jsx');
-  }
+/** does this source contain a JSX component tag? (the editor preview uses
+ *  the same reading to decide "no preview") */
+export function hasJsxSource(source: string): boolean {
+  return /<[A-Z][\w]*[\s/>]/.test(source);
 }
 
-/** the stamped block elements, in document order (JSX anchors already stripped) */
-export function stampedElements(root: Document | HTMLElement = document): HTMLElement[] {
+/** the stamped nodes — markdown elements and JSX anchors — in document order */
+export function stampedNodes(root: Document | HTMLElement = document): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>('[data-wiki-src]')];
+}
+
+export function rangeOf(node: HTMLElement): StampedRange | null {
+  const [start, end] = (node.dataset['wikiSrc'] ?? '').split('-').map(Number);
+  if (!start || !end) return null;
+  return {
+    start,
+    end,
+    jsx: node.tagName === 'TEMPLATE' ? (node.dataset['wikiJsx'] ?? 'component') : null,
+  };
 }
 
 export function buildOverlay(
   baseSource: string,
-  origRanges: { start: number; end: number }[],
+  ranges: StampedRange[],
   overrides: Record<string, string>,
 ): NoteOverlay | null {
   const baseLines = linesOf(baseSource);
-  const ranges = [...origRanges].sort((a, b) => a.start - b.start);
+  const ordered = [...ranges].sort((a, b) => a.start - b.start);
   // malformed stamps (out of bounds, overlapping) → no overlay, page stays read-only
   let prevEnd = 0;
-  for (const r of ranges) {
+  for (const r of ordered) {
     if (r.start < 1 || r.end < r.start || r.end > baseLines.length || r.start <= prevEnd) return null;
     prevEnd = r.end;
   }
@@ -77,7 +93,7 @@ export function buildOverlay(
   const parts: string[] = [];
   let cursor = 0; // count of current-source lines emitted so far
   let baseAt = 1; // next unconsumed ORIGINAL line
-  for (const r of ranges) {
+  for (const r of ordered) {
     const gap = baseLines.slice(baseAt - 1, r.start - 1);
     if (gap.length > 0) parts.push(gap.join('\n'));
     cursor += gap.length;
@@ -86,9 +102,8 @@ export function buildOverlay(
     const source = override ?? baseLines.slice(r.start - 1, r.end).join('\n');
     const segLines = linesOf(source);
     segments.push({
+      ...r,
       key,
-      origStart: r.start,
-      origEnd: r.end,
       source,
       edited: override !== undefined,
       curStart: cursor + 1,
@@ -133,41 +148,117 @@ export function buildOverlay(
   };
 }
 
+export interface ApplyOptions {
+  /** shown above an edited segment whose source still carries JSX */
+  jsxEditedNote: string;
+  /** elements that end the content area — the DOM span of a trailing JSX
+   *  segment must never swallow the layout's own chrome after the note body */
+  contentEndSelector?: string | undefined;
+}
+
+const CONTENT_END = 'aside.backlinks, nav.pagination, footer';
+
+/** the DOM nodes a segment owns: its stamped node, plus (for a JSX anchor)
+ *  the component's rendered output — the following siblings up to the next
+ *  segment's node, the content end, or the parent's end. `nested` reports a
+ *  span member that CONTAINS another segment's node: a section-wrapping
+ *  component (a chapter Hero) folds later blocks into its own output, and
+ *  removing that span would take innocent content with it. */
+function spanOf(
+  node: HTMLElement,
+  others: Set<HTMLElement>,
+  next: HTMLElement | undefined,
+  contentEnd: string,
+): { span: ChildNode[]; nested: boolean } {
+  const span: ChildNode[] = [node];
+  let nested = false;
+  if (node.tagName !== 'TEMPLATE') return { span, nested };
+  for (let n = node.nextSibling; n; n = n.nextSibling) {
+    if (n === next) break;
+    if (n instanceof Element) {
+      if (n.matches(contentEnd)) break;
+      for (const o of others) {
+        if (n === o || n.contains(o)) {
+          nested = true;
+          break;
+        }
+      }
+      if (nested) break;
+    }
+    span.push(n);
+  }
+  return { span, nested };
+}
+
 /**
  * Re-stamp the page into current coordinates and swap edited segments for
- * locally rendered HTML. `elements` are the stamped blocks in document order
- * — they correspond 1:1 to `overlay.segments` (both derive from the same
+ * locally rendered HTML. `nodes` are the stamped nodes in document order —
+ * they correspond 1:1 to `overlay.segments` (both derive from the same
  * original stamps).
  */
 export async function applyOverlayToDom(
   overlay: NoteOverlay,
-  elements: HTMLElement[],
+  nodes: HTMLElement[],
   renderBlock: (source: string, curStart: number) => Promise<string>,
+  opts: ApplyOptions,
 ): Promise<void> {
-  if (elements.length !== overlay.segments.length) return;
+  if (nodes.length !== overlay.segments.length) return;
+  const contentEnd = opts.contentEndSelector ?? CONTENT_END;
   for (let i = 0; i < overlay.segments.length; i++) {
     const seg = overlay.segments[i]!;
-    const el = elements[i]!;
+    const node = nodes[i]!;
     if (!seg.edited) {
-      el.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      node.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
       continue;
     }
+
+    const othersSet = new Set(nodes.filter((n) => n !== node));
+    const { span, nested } = spanOf(node, othersSet, nodes[i + 1], contentEnd);
+
+    if (nested) {
+      // a section-wrapping component: its output folds later blocks in, so
+      // the built rendering stays on the page. The anchor moves to current
+      // coordinates (the editor keeps working on the saved source) and a
+      // note says the display still shows the built version until Reset.
+      node.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      const note = document.createElement('div');
+      note.className = 'pg-jsx-note';
+      note.textContent = opts.jsxEditedNote;
+      node.parentNode?.insertBefore(note, node.nextSibling);
+      continue;
+    }
+
     const html = await renderBlock(seg.source, seg.curStart);
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
-    const nodes = [...tpl.content.children] as HTMLElement[];
-    if (nodes.length === 0) {
-      // the visitor deleted the whole segment: nothing to show, nothing to
-      // grab — the segment comes back with the reset button
-      el.remove();
-      continue;
+    const rendered = [...tpl.content.children] as HTMLElement[];
+
+    const replacement: (HTMLElement | Text)[] = [];
+    if (hasJsxSource(seg.source)) {
+      // dev re-renders the component server-side after a save; a static page
+      // cannot, so the segment keeps a fresh anchor (still editable) and its
+      // markdown rendering sits under an explanatory note until Reset
+      const anchor = document.createElement('template');
+      anchor.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      anchor.dataset['wikiJsx'] = seg.jsx ?? 'component';
+      const note = document.createElement('div');
+      note.className = 'pg-jsx-note';
+      note.textContent = opts.jsxEditedNote;
+      replacement.push(anchor, note, ...rendered);
+    } else if (rendered.length > 0) {
+      // the fragment renderer stamps its own top-level blocks (shifted to
+      // current lines); a first node left unstamped still needs the segment
+      // range so the block stays reachable
+      if (!rendered[0]!.hasAttribute('data-wiki-src')) {
+        rendered[0]!.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
+      }
+      replacement.push(...rendered);
     }
-    // the fragment renderer stamps its own top-level blocks (shifted to
-    // current lines); a first node left unstamped still needs the segment
-    // range so the block stays reachable
-    if (!nodes[0]!.hasAttribute('data-wiki-src')) {
-      nodes[0]!.dataset['wikiSrc'] = `${seg.curStart}-${seg.curEnd}`;
-    }
-    el.replaceWith(...nodes);
+    // an emptied segment (the visitor deleted everything) leaves no nodes:
+    // it comes back with the reset button
+
+    const first = span[0]!;
+    for (const n of replacement) first.parentNode?.insertBefore(n, first);
+    for (const n of span) (n as ChildNode).remove();
   }
 }

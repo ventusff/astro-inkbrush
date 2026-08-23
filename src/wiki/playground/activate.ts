@@ -15,7 +15,7 @@ import {
   type PlaygroundManifest,
   type ManifestNote,
 } from './backend';
-import { applyOverlayToDom, buildOverlay, disableJsxAnchors, stampedElements } from './overlay';
+import { applyOverlayToDom, buildOverlay, rangeOf, stampedNodes } from './overlay';
 import { createRenderer } from './render';
 import { getIdentity, getOverrides } from './store';
 import { DEFAULT_STRINGS, type PlaygroundConfig } from './index';
@@ -27,11 +27,23 @@ import { DEFAULT_STRINGS, type PlaygroundConfig } from './index';
 // editor chrome then renders as raw unstyled markup.
 import wikiCss from '../client/wiki.css?inline';
 
+/* the note above an edited component block (token colors, host fallbacks) */
+const PLAYGROUND_CSS = `
+.pg-jsx-note {
+  margin: 10px 0; padding: 8px 12px;
+  border: 1px dashed var(--color-line, rgba(128,128,128,0.4));
+  border-radius: 6px;
+  font: 500 12px/1.5 system-ui, sans-serif;
+  color: var(--color-ink-soft, color-mix(in srgb, canvastext 70%, canvas));
+  background: var(--color-bg-soft, transparent);
+}
+`;
+
 function injectStyles(): void {
   if (document.getElementById('inkbrush-playground-style')) return;
   const el = document.createElement('style');
   el.id = 'inkbrush-playground-style';
-  el.textContent = wikiCss;
+  el.textContent = wikiCss + PLAYGROUND_CSS;
   document.head.append(el);
 }
 
@@ -67,19 +79,20 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
     wikilinks: { resolve, ...(siteConfig.noteIdOf ? { noteIdOf: siteConfig.noteIdOf } : {}) },
   });
 
-  // stamps: strip the JSX anchors first (read-only here), then collect
-  disableJsxAnchors();
-  const elements = stampedElements();
-  const ranges = elements.map((el) => {
-    const [start, end] = (el.dataset['wikiSrc'] ?? '').split('-').map(Number);
-    return { start: start ?? 0, end: end ?? 0 };
-  });
+  // stamps — markdown elements and JSX anchors alike (component blocks edit
+  // at the source level, exactly like dev)
+  const nodes = stampedNodes();
+  const ranges = nodes.map((el) => rangeOf(el) ?? { start: 0, end: 0, jsx: null });
   const overrides = (await getOverrides(noteId))?.segments ?? {};
   const overlay = buildOverlay(note.source, ranges, overrides);
   if (!overlay) return null;
 
-  await applyOverlayToDom(overlay, elements, (source, curStart) =>
-    renderer.renderBlock(source, curStart, `/${note.file}`),
+  const strings = { ...DEFAULT_STRINGS, ...config.strings };
+  await applyOverlayToDom(
+    overlay,
+    nodes,
+    (source, curStart) => renderer.renderBlock(source, curStart, `/${note.file}`),
+    { jsxEditedNote: strings.jsxEditedNote },
   );
 
   setWikiTransport(
@@ -110,7 +123,6 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
 
   // the block toolbar is a hover/tap affordance — say so, or the page looks
   // inert to a visitor who just clicked "try editing"
-  const strings = { ...DEFAULT_STRINGS, ...config.strings };
   const { toast } = await import('../client/ui');
   toast(strings.activeHint);
 
