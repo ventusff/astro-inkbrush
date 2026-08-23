@@ -21,7 +21,6 @@
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
 
-import { splitFrontmatter } from './frontmatter.ts';
 
 interface Pos {
   start: number;
@@ -78,28 +77,24 @@ export function rehypeWikiBlocks() {
     const children = tree.children as unknown as AnyNode[];
 
     // Stamps must be RAW file lines — the server reads and writes blocks by
-    // them. Three pipeline shapes reach this plugin:
-    //  - value present WITH frontmatter (MDX dev): positions count raw
-    //    lines — no offset;
-    //  - value present WITHOUT frontmatter (Astro's .md path): positions
-    //    and value are body-relative — the raw file on disk supplies the
-    //    frontmatter offset;
-    //  - value ABSENT (the MDX build pipeline hands over no vfile value):
-    //    positions still count raw lines — no offset; the raw file is read
-    //    only so gap-filling can trim against real source lines. A missing
-    //    value must never be mistaken for "no frontmatter" — that added the
-    //    offset to already-raw positions.
+    // them. Positions are relative to the vfile value the pipeline parsed,
+    // and pipelines differ in what that is: the raw file, the raw file with
+    // the frontmatter blanked line-for-line (MDX), the body alone (Astro's
+    // .md path), or no value at all. The offset is therefore MEASURED, not
+    // inferred from frontmatter markers: it is the number of lines the
+    // pipeline stripped from the front, i.e. raw lines minus value lines
+    // (zero when they match, zero when the raw file is unreadable — the
+    // browser playground renders fragments with no file behind them).
     let offset = 0;
     let value = typeof file.value === 'string' ? file.value : '';
-    if (value === '') {
-      value = (file.path ? await readRaw(file.path) : null) ?? '';
-    } else if (!splitFrontmatter(value).present && file.path) {
+    if (file.path) {
       const raw = await readRaw(file.path);
       if (raw !== null) {
-        const fm = splitFrontmatter(raw);
-        // the body starts on the line after the closing fence: the offset is
-        // the number of raw lines the block (and anything before it) occupies
-        if (fm.present) offset = raw.slice(0, fm.end).split('\n').length;
+        if (value === '') value = raw;
+        else {
+          const delta = raw.split('\n').length - value.split('\n').length;
+          if (delta > 0) offset = delta;
+        }
       }
     }
     const sourceLines = value.split('\n');
