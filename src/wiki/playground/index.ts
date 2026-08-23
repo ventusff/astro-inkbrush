@@ -15,9 +15,10 @@
  * browser-local backend — IndexedDB holds their per-segment edits; the
  * repo, the deployed site and other visitors never see them.
  *
- * bootPlayground() is the light entry: it draws the corner badge and probes
- * IndexedDB; the pipeline + editor chunk loads only for a visitor who has
- * local edits or clicks the badge.
+ * bootPlayground() is the light entry: it seats the badge in the site's
+ * chrome (the account slot; fixed corner only when no slot exists) and
+ * probes IndexedDB; the pipeline + editor chunk loads only for a visitor
+ * who has local edits or clicks the badge.
  */
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 import type { SitePluginSet } from '../../lib/render-pipeline.ts';
@@ -37,7 +38,10 @@ export interface PlaygroundSiteConfig {
 }
 
 export interface PlaygroundStrings {
+  /** chip label before activation — keep it nav-bar short */
   tryIt: string;
+  /** tooltip carrying the full promise */
+  tryItHint: string;
   active: string;
   /** shown next to `active` when local edits exist; #n is the count */
   edits: string;
@@ -47,8 +51,9 @@ export interface PlaygroundStrings {
 }
 
 const DEFAULT_STRINGS: PlaygroundStrings = {
-  tryIt: 'Try editing — stays in your browser',
-  active: 'Local editing on',
+  tryIt: 'Try editing',
+  tryItHint: 'Edit this page — everything stays in your browser',
+  active: 'Editing locally',
   edits: '#n local edit(s)',
   reset: 'Reset',
   resetConfirm: 'Discard every local edit on this demo (all pages)?',
@@ -72,31 +77,37 @@ function noteIdFromPage(): string | null {
   return id ? id : null;
 }
 
-/* The badge drinks the page's own ink: on a site with the shared token
- * vocabulary it paints in the theme's card/ink/line colors (and follows the
- * dark flip); the system-color fallbacks cover any other host. Never an
- * off-palette ground — text scrolling behind a fixed overlay is measured
- * against the overlay's pixels by contrast tooling, so the overlay must sit
- * on a surface the palette already proves. */
+/* The badge docks into the site's own chrome when it can: the account
+ * slot ([data-inkbrush-slot="account"]) is the CMS chip's contractual seat
+ * and is unoccupied here (the playground never mounts the auth chip). In
+ * the nav it is ordinary sticky-band chrome. Only a host with no slot gets
+ * the fixed-corner fallback — a permanently visible overlay is a ground
+ * for the text scrolling behind it, so flow placement is the default.
+ * Colors are the shared token vocabulary with system-color fallbacks. */
 const BADGE_CSS = `
 .inkbrush-playground-badge {
-  position: fixed; right: 14px; bottom: 14px; z-index: 2147482000;
-  display: flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 6px;
   font: 500 12px/1 system-ui, sans-serif;
+}
+.inkbrush-playground-badge.pg-floating {
+  position: fixed; right: 14px; bottom: 14px; z-index: 2147482000;
 }
 .inkbrush-playground-badge button {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--color-line, rgba(128,128,128,0.35));
   border-radius: 999px;
-  padding: 7px 12px; cursor: pointer;
+  padding: 4px 10px; cursor: pointer; white-space: nowrap;
   background: var(--color-bg-card, canvas);
   color: var(--color-ink, canvastext); font: inherit;
+}
+.inkbrush-playground-badge.pg-floating button {
+  padding: 7px 12px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.12);
 }
 .inkbrush-playground-badge button:hover {
   background: var(--color-bg-soft, color-mix(in srgb, canvas 88%, canvastext 12%));
 }
-.inkbrush-playground-badge .pg-reset { padding: 7px 10px; }
+.inkbrush-playground-badge .pg-reset { padding: 4px 8px; }
 `;
 
 export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
@@ -116,6 +127,7 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
   const main = document.createElement('button');
   main.type = 'button';
   main.textContent = `✎ ${s.tryIt}`;
+  main.title = s.tryItHint;
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'pg-reset';
@@ -124,7 +136,13 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
   const badge = document.createElement('div');
   badge.className = 'inkbrush-playground-badge';
   badge.append(main, reset);
-  document.body.append(badge);
+  const slot = document.querySelector('[data-inkbrush-slot="account"]');
+  if (slot) {
+    slot.append(badge);
+  } else {
+    badge.classList.add('pg-floating');
+    document.body.append(badge);
+  }
 
   reset.addEventListener('click', () => {
     if (!window.confirm(s.resetConfirm)) return;
