@@ -12,6 +12,13 @@
  *    the one thing that could notice it is a CSS adjacency selector
  *    (`X + Y`) between top-level blocks, which sites should avoid in
  *    WIKI mode.
+ *  - the frontmatter is rendered by the site's layout (title, description,
+ *    taxonomy), never by this pipeline, so it gets a `<template
+ *    data-wiki-src="1-N" data-wiki-frontmatter>` anchor as the first child
+ *    of the body; the client binds it to the site's
+ *    `[data-inkbrush-slot="frontmatter"]` element (the page head). Emitted
+ *    only when the processed value is the note file itself (or its body),
+ *    read from disk — a fragment render has no frontmatter of its own.
  *
  * Position fallbacks (in order): the node's own position → first/last
  * positioned descendant (e.g. div.tbl-wrap wrappers) → the gap between the
@@ -20,6 +27,8 @@
  */
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
+
+import { splitFrontmatter } from './frontmatter.ts';
 
 
 interface Pos {
@@ -79,19 +88,31 @@ export function rehypeWikiBlocks() {
     // Stamps must be RAW file lines — the server reads and writes blocks by
     // them. Positions are relative to the vfile value the pipeline parsed,
     // and pipelines differ in what that is: the raw file, the raw file with
-    // the frontmatter blanked line-for-line (MDX), the body alone (Astro's
-    // .md path), or no value at all. The offset is therefore MEASURED, not
-    // inferred from frontmatter markers: it is the number of lines the
-    // pipeline stripped from the front, i.e. raw lines minus value lines
-    // (zero when they match, zero when the raw file is unreadable — the
-    // browser playground renders fragments with no file behind them).
+    // the frontmatter blanked line-for-line (MDX), the body alone with its
+    // leading and trailing blank lines trimmed (Astro's .md content entries),
+    // or no value at all. The offset is therefore MEASURED against the file
+    // on disk: same line count → none; otherwise the value is located inside
+    // the raw text and the lines before it are the offset (a line-count
+    // difference would miscount the trimmed tail). Zero when the raw file is
+    // unreadable — the browser playground renders fragments with no file
+    // behind them.
     let offset = 0;
     let value = typeof file.value === 'string' ? file.value : '';
-    if (file.path) {
-      const raw = await readRaw(file.path);
-      if (raw !== null) {
-        if (value === '') value = raw;
-        else {
+    const raw = file.path ? await readRaw(file.path) : null;
+    /** the value is the file, or the file's body (its tail modulo blanks) */
+    let wholeNote = false;
+    if (raw !== null) {
+      if (value === '') {
+        value = raw;
+        wholeNote = true;
+      } else if (raw.split('\n').length === value.split('\n').length) {
+        wholeNote = true;
+      } else {
+        const at = raw.indexOf(value);
+        if (at >= 0) {
+          offset = raw.slice(0, at).split('\n').length - 1;
+          wholeNote = raw.slice(at + value.length).trim() === '';
+        } else {
           const delta = raw.split('\n').length - value.split('\n').length;
           if (delta > 0) offset = delta;
         }
@@ -154,5 +175,31 @@ export function rehypeWikiBlocks() {
         });
       }
     }
+
+    // pass 4: the frontmatter anchor — only for the whole note, so a fragment
+    // rendered against a note path gets none unless it is the note's tail,
+    // where the inert template is harmless
+    const frontmatter = raw !== null && wholeNote ? frontmatterLines(raw) : null;
+    if (frontmatter) {
+      children.unshift({
+        type: 'element',
+        tagName: 'template',
+        properties: {
+          'data-wiki-src': `${frontmatter.start}-${frontmatter.end}`,
+          'data-wiki-frontmatter': '',
+        },
+        children: [],
+      });
+    }
   };
+}
+
+/** 1-based raw line range of the frontmatter block, opening fence to closing
+ *  fence; null when the source has none */
+export function frontmatterLines(raw: string): Pos | null {
+  const fm = splitFrontmatter(raw);
+  if (!fm.present) return null;
+  const lineAt = (offset: number): number => raw.slice(0, offset).split('\n').length;
+  // `end` is the offset just past the closing fence, on the fence's own line
+  return { start: lineAt(fm.start), end: lineAt(fm.end) };
 }

@@ -60,9 +60,11 @@ export function hasJsxSource(source: string): boolean {
   return /<[A-Z][\w]*[\s/>]/.test(source);
 }
 
-/** the stamped nodes — markdown elements and JSX anchors — in document order */
+/** the stamped nodes — markdown elements and JSX anchors — in document order.
+ *  The frontmatter anchor is not a body block: the static page head cannot
+ *  re-render from an edited frontmatter, so the playground leaves it out. */
 export function stampedNodes(root: Document | HTMLElement = document): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>('[data-wiki-src]')];
+  return [...root.querySelectorAll<HTMLElement>('[data-wiki-src]:not([data-wiki-frontmatter])')];
 }
 
 export function rangeOf(node: HTMLElement): StampedRange | null {

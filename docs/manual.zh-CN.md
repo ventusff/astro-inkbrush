@@ -65,6 +65,12 @@ integrations: [inkbrush({
 
 保存成功后 Astro 内容热更新自动刷新页面,滚动位置原地保留。
 
+**页面元信息(frontmatter)** 同样就地改:rehype-wiki-blocks 把它锚到页头,
+悬停标题(布局里标了 `[data-inkbrush-slot="frontmatter"]` 的那个元素,没标
+就取页面第一个 `h1`)就出现 ✎,改的是整个 YAML 块——标题、描述、标签,
+凡是布局从它渲染出来的都在这里改。YAML 没有预览(保存后页头随页面重绘),
+保存关卡要求它能解析。这里不提供 ✦。
+
 ### AI 协作(✦)
 
 需要跑 dev server 的机器上装有 [`claude` CLI](https://claude.com/claude-code)

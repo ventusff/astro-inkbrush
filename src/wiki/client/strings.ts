@@ -108,8 +108,10 @@ interface Strings {
   };
   editor: {
     title: (jsx: string | null) => string;
+    frontmatterTitle: string;
     shortcutHint: string;
     placeholder: string;
+    frontmatterPlaceholder: string;
     save: string;
     cancel: string;
     validating: string;
@@ -120,6 +122,7 @@ interface Strings {
     empty: string;
     previewFailed: string;
     jsxNoPreview: (name: string | null) => string;
+    frontmatterNoPreview: string;
   };
   ai: {
     title: (start: number, end: number) => string;
@@ -297,8 +300,10 @@ const en: Strings = {
   },
   editor: {
     title: (jsx) => (jsx ? `Edit · ${jsx} component block` : 'Edit · Markdown block'),
+    frontmatterTitle: 'Edit · frontmatter (YAML)',
     shortcutHint: '⌘/Ctrl + Enter to save · Esc to cancel',
     placeholder: 'MDX source…',
+    frontmatterPlaceholder: 'YAML frontmatter…',
     save: 'Save',
     cancel: 'Cancel',
     validating: 'Validating…',
@@ -310,6 +315,8 @@ const en: Strings = {
     previewFailed: 'Preview failed',
     jsxNoPreview: (name) =>
       `⟨${name ?? 'component'}⟩ component blocks have no standalone preview — the page hot-reloads right after save`,
+    frontmatterNoPreview:
+      'Frontmatter has no preview — title, description and the rest of the page head re-render from it right after save',
   },
   ai: {
     title: (start, end) => `Claude · edit block L${start}–${end}`,
@@ -530,8 +537,10 @@ const zh: Strings = {
   },
   editor: {
     title: (jsx) => (jsx ? `编辑 · ${jsx} 组件块` : '编辑 · Markdown 块'),
+    frontmatterTitle: '编辑 · 页面元信息(frontmatter,YAML)',
     shortcutHint: '⌘/Ctrl + Enter 保存 · Esc 取消',
     placeholder: 'MDX 源码…',
+    frontmatterPlaceholder: 'YAML 元信息…',
     save: '保存',
     cancel: '取消',
     validating: '校验中…',
@@ -542,6 +551,7 @@ const zh: Strings = {
     empty: '（空）',
     previewFailed: '预览失败',
     jsxNoPreview: (name) => `⟨${name ?? '组件'}⟩ 组件块没有独立预览 — 保存后页面即时热更新`,
+    frontmatterNoPreview: '页面元信息没有预览 — 标题、描述等页头内容保存后随页面即时重绘',
   },
   ai: {
     title: (start, end) => `Claude · 修改块 L${start}–${end}`,

@@ -61,7 +61,10 @@ npm test
   `data-wiki-role="account"` — the stable client-side hook) (falls back to fixed top-right, tunable via
   `--wiki-chip-top/right`), `[data-inkbrush-slot="share"]` (required for
   the share button), `[data-inkbrush-slot="comments"]` for the comment
-  section mount (falls back to a `.note-main .col` container).
+  section mount (falls back to a `.note-main .col` container),
+  `[data-inkbrush-slot="frontmatter"]` on the page head that renders the
+  frontmatter — the ✎ handle for the YAML block binds there (falls back to
+  the page's first `h1`).
 - `inkbrush.config.ts` (site root, per-machine, gitignored) +
   `defineInkbrushConfig`: auth / identity / inbox / autocommit / autopush /
   claude / content / share. CMS concerns only — no site business.

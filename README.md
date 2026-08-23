@@ -39,7 +39,8 @@ the full look.
   plugins, `[[` autocompletion, optimistic locking (a block changed by
   someone else is refused, never overwritten), and a whole-file build gate —
   the dialect, the content guard, your plugins, MDX compilation — before
-  anything is written.
+  anything is written. The frontmatter is a block too, edited as YAML from
+  the page head.
 - 🕘 **Block-level revision history** — every save is journaled with a
   unique id; browse a block's history and revert a block edit in one click
   (whole-file operations — imports, translations — are journaled for the

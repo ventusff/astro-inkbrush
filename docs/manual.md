@@ -77,6 +77,13 @@ Esc to cancel. Two gates protect every save:
 On success, Astro's content HMR reloads the page and your scroll position is
 restored.
 
+The **frontmatter** edits the same way: rehype-wiki-blocks anchors it to the
+page head, so hovering the title (the element your layout marks
+`[data-inkbrush-slot="frontmatter"]`, else the page's first `h1`) offers
+the ✎ handle over the YAML block — title, description, tags, whatever your
+layout renders from it. YAML gets no preview (the page head re-renders from
+it on save); the save gate requires it to parse. The ✦ is not offered there.
+
 ### AI assist (✦)
 
 Requires a local [`claude` CLI](https://claude.com/claude-code) on the

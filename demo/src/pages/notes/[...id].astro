@@ -41,7 +41,8 @@ const mirror = (await getCollection('notes')).find((n) => n.id === mirrorId);
       )}
     </nav>
     <article>
-      <h1>{note.data.title}</h1>
+      {/* the frontmatter slot: the ✎ handle for the YAML block binds here */}
+      <h1 data-inkbrush-slot="frontmatter">{note.data.title}</h1>
       <Content />
     </article>
     <div data-inkbrush-slot="comments"></div>

@@ -4,9 +4,13 @@
  * rehype-wiki-blocks stamped every top-level block: markdown blocks carry
  * `data-wiki-src="start-end"` themselves; JSX components are preceded by an
  * invisible `<template data-wiki-src … data-wiki-jsx>` anchor bound here to
- * its next element sibling. One shared handle (a toolbar) follows the active
- * block; ✎ opens the in-place source editor, ✦ opens the Claude popover, ⟲
- * opens the revision-history popover (view diffs / one-click revert).
+ * its next element sibling; the frontmatter's `<template data-wiki-src …
+ * data-wiki-frontmatter>` anchor binds to the site's
+ * `[data-inkbrush-slot="frontmatter"]` element (the page head that renders
+ * title and description), falling back to the page's first `h1`. One shared
+ * handle (a toolbar) follows the active block; ✎ opens the in-place source
+ * editor, ✦ opens the Claude popover (markdown blocks only), ⟲ opens the
+ * revision-history popover (view diffs / one-click revert).
  *
  * Activation paths: hovering a block (fine pointer), tapping a block (coarse
  * pointer), or focusing a block / a control inside it (keyboard). Keyboard
@@ -26,6 +30,17 @@ export interface BlockRef {
   end: number;
   /** component name when the block is a JSX island (Hero, DemoMount, …) */
   jsx: string | null;
+  /** the note's frontmatter (YAML), bound to the page head */
+  frontmatter: boolean;
+}
+
+/** the element the frontmatter anchor binds to: the site's declared slot,
+ *  else the page's first heading (the title is frontmatter nearly everywhere) */
+function frontmatterHost(): HTMLElement | null {
+  return (
+    document.querySelector<HTMLElement>('[data-inkbrush-slot="frontmatter"]') ??
+    document.querySelector<HTMLElement>('h1')
+  );
 }
 
 function collectBlocks(): BlockRef[] {
@@ -37,7 +52,11 @@ function collectBlocks(): BlockRef[] {
     if (!start || !end) continue;
     let el: HTMLElement | null;
     let jsx: string | null = null;
-    if (node.tagName === 'TEMPLATE') {
+    let frontmatter = false;
+    if (node.tagName === 'TEMPLATE' && 'wikiFrontmatter' in node.dataset) {
+      frontmatter = true;
+      el = frontmatterHost();
+    } else if (node.tagName === 'TEMPLATE') {
       jsx = node.dataset['wikiJsx'] ?? 'component';
       el = node.nextElementSibling as HTMLElement | null;
       // skip fellow anchors (two adjacent JSX components)
@@ -47,7 +66,7 @@ function collectBlocks(): BlockRef[] {
     }
     if (!el || seen.has(el)) continue;
     seen.add(el);
-    refs.push({ el, start, end, jsx });
+    refs.push({ el, start, end, jsx, frontmatter });
   }
   return refs;
 }
@@ -134,10 +153,11 @@ export function mountBlocks(ctx: PageContext): void {
 
   // revision history is editor-only on the server: the control exists only
   // for signed-in users. The ✦ exists only where the deployment can run
-  // claude jobs (/me.ai — absent means yes).
+  // claude jobs (/me.ai — absent means yes), and never on the frontmatter
+  // block — the block-edit job revises prose, not YAML.
   const syncAvailability = (): void => {
     historyBtn.hidden = !currentUser();
-    aiBtn.hidden = aiAvailability() === 'off';
+    aiBtn.hidden = aiAvailability() === 'off' || active?.frontmatter === true;
     if ((historyBtn.hidden && historyBtn.tabIndex === 0) || (aiBtn.hidden && aiBtn.tabIndex === 0)) {
       historyBtn.tabIndex = -1;
       aiBtn.tabIndex = -1;
@@ -197,6 +217,7 @@ export function mountBlocks(ctx: PageContext): void {
     active?.el.classList.remove('wiki-block-hover');
     active = block;
     setTabStop(block);
+    syncAvailability();
     block.el.classList.add('wiki-block-hover');
     if (positionHandle(block)) {
       handle.classList.add('show');

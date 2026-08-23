@@ -1,7 +1,9 @@
 /**
  * In-place block editor: the rendered block collapses and a CodeMirror source
  * editor (with a live server-rendered preview) expands in its place —
- * Wikipedia section editing, one block at a time.
+ * Wikipedia section editing, one block at a time. The frontmatter block
+ * edits as YAML (no preview: the page head re-renders from it after save);
+ * component blocks have no preview either.
  *
  * Save = PUT /block (optimistic lock via slice hash + whole-file MDX compile
  * gate on the server). On success astro's content HMR reloads the page; the
@@ -9,6 +11,7 @@
  */
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { yaml } from '@codemirror/lang-yaml';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 
 import type { BlockSource } from '../shared/types';
@@ -55,7 +58,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   const saveBtn = h('button', { type: 'button', class: 'wiki-btn wiki-btn-primary' }, S.editor.save);
   const cancelBtn = h('button', { type: 'button', class: 'wiki-btn' }, S.editor.cancel);
   const cmHost = h('div', { class: 'wiki-editor-cm' });
-  const title = S.editor.title(block.jsx);
+  const title = block.frontmatter ? S.editor.frontmatterTitle : S.editor.title(block.jsx);
 
   const shell = h(
     'div',
@@ -95,6 +98,10 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   const refreshPreview = (source: string): void => {
     cancelPreview();
     const generation = previewGeneration;
+    if (block.frontmatter) {
+      previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.frontmatterNoPreview));
+      return;
+    }
     if (hasJsx(source)) {
       previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
       return;
@@ -195,12 +202,11 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         ...defaultKeymap,
         ...historyKeymap,
       ]),
-      markdown(),
-      wikilinkCompletion(),
+      ...(block.frontmatter ? [yaml()] : [markdown(), wikilinkCompletion()]),
       EditorView.lineWrapping,
       cmTheme,
       EditorView.contentAttributes.of({ 'aria-label': title }),
-      placeholder(S.editor.placeholder),
+      placeholder(block.frontmatter ? S.editor.frontmatterPlaceholder : S.editor.placeholder),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) refreshPreview(update.state.doc.toString());
       }),
