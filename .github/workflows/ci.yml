@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   verify:
+    # Guard: the canonical repo runs CI; a mirror absorbing this tree does not.
+    if: github.repository == 'ventusff/astro-inkbrush'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
