@@ -18,8 +18,12 @@
  * neighbouring positioned siblings (e.g. KaTeX display blocks, whose nodes
  * carry no position), trimmed to non-empty source lines.
  */
+import { readFileSync } from 'node:fs';
+
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
+
+import { splitFrontmatter } from './frontmatter.ts';
 
 interface Pos {
   start: number;
@@ -61,8 +65,31 @@ function isBlank(line: string | undefined): boolean {
 
 export function rehypeWikiBlocks() {
   return (tree: Root, file: VFile): void => {
-    const sourceLines = String(file.value).split('\n');
+    const value = String(file.value);
+    const sourceLines = value.split('\n');
     const children = tree.children as unknown as AnyNode[];
+
+    // Stamps must be RAW file lines — the server reads and writes blocks by
+    // them. A pipeline that strips the frontmatter before parsing (Astro's
+    // own .md path) yields body-relative positions and a body-only vfile
+    // value; the raw file on disk tells the difference, and the stamp then
+    // carries the frontmatter offset. A pipeline whose positions already
+    // count the frontmatter (MDX) needs none.
+    let offset = 0;
+    if (!splitFrontmatter(value).present && file.path) {
+      let raw: string | null = null;
+      try {
+        raw = readFileSync(file.path, 'utf8');
+      } catch {
+        raw = null;
+      }
+      if (raw !== null) {
+        const fm = splitFrontmatter(raw);
+        // the body starts on the line after the closing fence: the offset is
+        // the number of raw lines the block (and anything before it) occupies
+        if (fm.present) offset = raw.slice(0, fm.end).split('\n').length;
+      }
+    }
 
     // pass 1: resolve a position for every stampable top-level node
     const resolved: (Pos | null)[] = children.map((node) => {
@@ -103,7 +130,7 @@ export function rehypeWikiBlocks() {
       const node = children[i]!;
       const pos = resolved[i];
       if (!pos) continue;
-      const value = `${pos.start}-${pos.end}`;
+      const value = `${pos.start + offset}-${pos.end + offset}`;
       if (node.type === 'element') {
         node.properties ??= {};
         node.properties['data-wiki-src'] = value;
