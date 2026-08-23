@@ -267,6 +267,12 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
     for (const candidate of assetsBasenameCandidates(join(dirname(sourcePath), '_assets'), name)) {
       if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     }
+    // assets published by a previous import of this note: an edit surface
+    // that round-trips the note may rewrite embeds to bare file names, and
+    // the vault copy may have moved — the co-located copies keep re-imports
+    // resolving forever once an asset has been imported
+    const published = containedPath(join(contentRoot(), 'inbox', slug), name);
+    if (published && existsSync(published) && statSync(published).isFile()) return published;
     return null;
   };
 
