@@ -77,3 +77,40 @@ test('a bin that cannot be spawned reports a start failure', async () => {
   assert.match((result as { error: string }).error, /Could not start the claude CLI/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('an oversized unterminated output line kills the job with a clear message', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
+  // 9 MB without a newline — over the 8 MB stdout line-buffer bound
+  const bin = fakeBin(
+    dir,
+    `process.stdout.write('x'.repeat(9 * 1024 * 1024));\nsetInterval(() => {}, 1000);`,
+  );
+  const result = await runClaudeJob(jobOpts(bin, dir, { timeoutMs: 30_000, killGraceMs: 500 }));
+  assert.equal(result.ok, false);
+  assert.match((result as { error: string }).error, /oversized output line/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('non-JSON protocol lines are counted and surfaced on a failure', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
+  const bin = fakeBin(
+    dir,
+    `console.log('not json at all');\nconsole.log('{broken');\nprocess.exit(3);`,
+  );
+  const result = await runClaudeJob(jobOpts(bin, dir));
+  assert.equal(result.ok, false);
+  assert.match((result as { error: string }).error, /exited unexpectedly \(code 3\)/);
+  assert.match((result as { error: string }).error, /2 non-JSON protocol line\(s\) ignored/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('non-JSON lines around a valid result do not break a successful job', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
+  const bin = fakeBin(
+    dir,
+    `console.log('warning: something');\nconsole.log('${RESULT_LINE.replace(/'/g, "\\'")}');\nprocess.exit(0);`,
+  );
+  const result = await runClaudeJob(jobOpts(bin, dir));
+  assert.deepEqual(result, { ok: true, summary: 'done', sessionId: 's1' });
+  rmSync(dir, { recursive: true, force: true });
+});

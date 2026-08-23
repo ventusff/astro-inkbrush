@@ -9,7 +9,9 @@
  * refuse — and house style for everything else. A site's own conventions
  * (component vocabulary, heading attributes, generated numbering, …) from
  * `inkbrush.config.ts → claude.rules` join the house-style tier, and
- * `claude.companions` names the files a job may change beside the note.
+ * `claude.companions` names the files a block-edit job may change beside
+ * the note (a translation writes the target file and nothing else —
+ * companions stay read-only context).
  */
 import type { LocaleDef } from '../shared/locales.ts';
 import type { NoteMeta } from '../shared/types.ts';
@@ -99,10 +101,8 @@ export function translatePrompt(opts: {
   meta: NoteMeta;
   targetId: string;
   targetLang: string;
-  /** project-relative companion paths the job may change */
-  companions: string[];
 }): string {
-  const { meta, targetId, targetLang, companions } = opts;
+  const { meta, targetId, targetLang } = opts;
   const name = langName(targetLang);
   const targetFile = `${wikiConfig().content.dir}/${targetId}/index.${meta.file.endsWith('.md') ? 'md' : 'mdx'}`;
   return `You are the author of the note "${meta.title}". Rewrite the article in ${name} — as its author, not as a translator. You are working in a copy of the relevant files; paths are relative to the current directory.
@@ -121,7 +121,8 @@ Invariants (check each one):
 - Image paths unchanged; captions translated.
 - JSX component tags and their prop structure stay unchanged; reader-facing copy props (title, kicker, caption slots, …) are translated, machine props (id, demo, canvas, …) are not.
 - Reference entries: paper titles, authors and venues stay in their original language; descriptive text is translated.
-- Every frontmatter copy field (title, description and the like) is rewritten in ${name}; structural fields are preserved verbatim.${companionNote(companions)}
+- Every frontmatter copy field (title, description and the like) is rewritten in ${name}; structural fields are preserved verbatim.
+- You write exactly one file: the target. Files beside the note are read-only context; a change to any other file is refused as a whole.
 
 ${rules()}
 

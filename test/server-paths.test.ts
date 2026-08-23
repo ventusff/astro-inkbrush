@@ -23,3 +23,18 @@ test('containment compares whole path components and follows symlinks', () => {
   assert.equal(containedPath(root, 'inside/new-note/index.md'), realpathDeep(join(root, 'inside/new-note/index.md')));
   rmSync(base, { recursive: true });
 });
+
+test('a directory symlink is followed: outside the root refused, inside resolved', () => {
+  // the shape of a symlinked content.dir — the source layer refuses a
+  // content root whose real path escapes the project through this check
+  const base = mkdtempSync(join(tmpdir(), 'inkbrush-paths-'));
+  const project = join(base, 'project');
+  mkdirSync(join(project, 'real-content'), { recursive: true });
+  mkdirSync(join(base, 'elsewhere'));
+  symlinkSync(join(base, 'elsewhere'), join(project, 'escaping-content'));
+  symlinkSync(join(project, 'real-content'), join(project, 'content'));
+
+  assert.equal(containedPath(project, 'escaping-content'), null);
+  assert.equal(containedPath(project, 'content'), realpathDeep(join(project, 'real-content')));
+  rmSync(base, { recursive: true });
+});

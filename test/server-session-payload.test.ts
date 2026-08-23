@@ -16,8 +16,10 @@ test('a well-formed unexpired payload yields the user', () => {
   assert.equal(withPicture?.picture, 'https://example.com/a.png');
 });
 
-test('expiry must be a finite future number', () => {
+test('expiry must be a finite future number, exclusive at the boundary', () => {
   assert.equal(sessionPayloadUser({ user, exp: NOW - 1 }, NOW), null);
+  // at exactly exp the session is dead
+  assert.equal(sessionPayloadUser({ user, exp: NOW }, NOW), null);
   assert.equal(sessionPayloadUser({ user, exp: Number.NaN }, NOW), null);
   assert.equal(sessionPayloadUser({ user, exp: Number.POSITIVE_INFINITY }, NOW), null);
   assert.equal(sessionPayloadUser({ user, exp: '9999999999999' }, NOW), null);

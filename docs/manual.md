@@ -48,6 +48,10 @@ integrations: [inkbrush({
 })],
 ```
 
+A site that also passes `guard` options or `remark-rehype` options to
+`markdownProcessor` hands the same values here (`markdown.guard`,
+`markdown.remarkRehype`) so the save gate runs them too.
+
 The integration only runs under `astro dev`; in any other command it logs a
 warning and does nothing. In WIKI mode it also turns off Astro's dev toolbar
 (editors don't need island-audit instrumentation) while keeping the error
@@ -509,15 +513,15 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `GET /identity/users` | admin | Members + role vocabulary |
 | `PUT /identity/users` | admin | Full-list overwrite (validated; last admin protected) |
 | `POST /share` | signed-in | Create share — NDJSON `progress…` → `result`; 409 when the note already has an active share |
-| `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required) |
+| `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required); each record carries `canRevoke` for the requester |
 | `DELETE /share/<id>` | signed-in | Revoke — the share's creator, or an admin when the registry is on (403 otherwise) |
 
 AI jobs are capped at 2 in flight per user and 4 machine-wide (429
 beyond); queued jobs hold no capacity. Each job kind carries a
 postcondition: a block edit may change nothing in the note outside the
-selected block (companions stay free), and a translation must create
-exactly the target file while leaving the source untouched — a result
-violating its postcondition is refused whole.
+selected block (companions stay free), and a translation may change
+nothing but its target file — a result violating its postcondition is
+refused whole.
 
 Cross-cutting: JSON bodies must be sent as `application/json` and are capped
 at 1 MiB (415/413 otherwise); a state-changing request whose `Origin` (or
@@ -564,6 +568,15 @@ and identity records carry emails and roles.
   data/shares.json          share records (incl. revoked, for audit)
   share-dist/               cached WIKI-free build for snapshots
 ```
+
+Trust model, stated plainly: **membership is code trust.** Notes are
+Markdown/MDX — a member can author components, expressions and raw HTML
+that the site build and the editor preview execute, on the same origin as
+the CMS. That is the nature of an MDX wiki: adding someone to the
+registry means trusting them the way you trust a committer, admins
+included. The CMS's authorization tiers (member/admin, share creator)
+gate its API, not what authored content can do once rendered. Keep the
+registry short and human.
 
 Security posture: Claude jobs run in a throwaway workspace with file tools
 confined to it and no shell or network tools, and their output passes the

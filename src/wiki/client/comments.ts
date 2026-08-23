@@ -124,7 +124,9 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
             {
               type: 'button',
               onclick: () => {
-                document.querySelector<HTMLButtonElement>('.wiki-chip')?.click();
+                // the account chip specifically — `.wiki-chip` alone can hit
+                // the share chip first
+                document.querySelector<HTMLButtonElement>('.wiki-chip[data-wiki-role="account"]')?.click();
               },
             },
             S.comments.signIn,

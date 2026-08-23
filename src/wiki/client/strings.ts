@@ -201,6 +201,7 @@ interface Strings {
     revoke: string;
     revoked: string;
     revokeFailed: string;
+    revokeNotAllowed: string;
     copy: string;
     copied: (label: string) => string;
     copyFailed: string;
@@ -419,6 +420,7 @@ const en: Strings = {
     revoke: 'Revoke',
     revoked: 'Share revoked',
     revokeFailed: 'Revoke failed',
+    revokeNotAllowed: 'Only the creator of this link (or an admin) can revoke it',
     copy: 'Copy',
     copied: (label) => `${label} copied`,
     copyFailed: 'Copy failed — select and copy manually',
@@ -645,6 +647,7 @@ const zh: Strings = {
     revoke: '撤销',
     revoked: '已撤销分享',
     revokeFailed: '撤销失败',
+    revokeNotAllowed: '只有此链接的创建者（或管理员）能撤销',
     copy: '复制',
     copied: (label) => `${label}已复制`,
     copyFailed: '复制失败，请手动选择复制',

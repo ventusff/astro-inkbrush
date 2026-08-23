@@ -42,6 +42,10 @@ integrations: [inkbrush({
 })],
 ```
 
+站点若还给 `markdownProcessor` 传了守门(guard)或 remark-rehype 选项,
+把同样的值也传进来(`markdown.guard`、`markdown.remarkRehype`),保存关卡
+就跑同一套。
+
 集成只在 `astro dev` 下运行;其他命令下只打一行警告、什么都不做。WIKI 模式
 还会关掉 Astro 的 dev 工具条(编辑者不需要开发仪表),但保留错误浮层——
 内容写坏时,它就是编辑者的报错界面。
@@ -429,13 +433,12 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `GET /identity/users` | 管理员 | 成员表 + 角色词汇表 |
 | `PUT /identity/users` | 管理员 | 全表覆盖写(校验;保护最后一名管理员) |
 | `POST /share` | 需登录 | 创建分享——NDJSON 流:`progress…` → `result`;该笔记已有活跃分享时 409 |
-| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填) |
+| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填);每条记录带按请求者算的 `canRevoke` |
 | `DELETE /share/<id>` | 需登录 | 撤销——只有创建者本人,或注册表开启时的管理员(否则 403) |
 
 AI 任务每用户最多同时 2 个、全机最多 4 个(超出 429);排队中的任务不占
 名额。每类任务还有形状约束:块编辑不得改动笔记里选中块之外的任何内容
-(伴随文件不受限),翻译必须恰好创建目标文件、源文件一字不动——违反约束的
-结果整体作废。
+(伴随文件不受限),翻译除目标文件外什么都不能动——违反约束的结果整体作废。
 
 通用规则:JSON 请求体必须以 `application/json` 发送、上限 1 MiB(否则
 415/413);改状态的请求若 `Origin`(或 `Referer`)指向本站和 `trustedOrigins`
@@ -478,6 +481,12 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
   data/shares.json          分享记录(含已撤销的,作审计)
   share-dist/               快照用的 WIKI-free 构建缓存
 ```
+
+信任模型,直说:**入册即托付代码。**笔记是 Markdown/MDX——成员写的组件、
+表达式、原生 HTML,站点构建和编辑器预览都会在与 CMS 同源的页面上执行。
+这是 MDX wiki 的本性:把一个人加进注册表,就等于像信任提交者一样信任
+此人,对管理员也一样。CMS 的权限分层(成员/管理员、分享创建者)管的是
+它的 API,不管渲染后的内容能做什么。注册表保持短小、都是活人。
 
 安全姿态:Claude 任务在临时工作副本里跑,文件工具限制在副本内、没有 shell
 与网络工具,产出先过构建关再写入;评论 HTML 服务端消毒;笔记、附件、收件箱

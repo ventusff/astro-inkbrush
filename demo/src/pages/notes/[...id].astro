@@ -5,9 +5,10 @@
  *                                    never parses URLs — routing belongs
  *                                    to the site)
  *   <meta name="inkbrush-note-url">  URL template for locale jumps
- *   .note-main                       the reading column
  *   [data-inkbrush-slot="comments"]  where the comment section mounts
- * Everything else is plain Astro.
+ * Everything else is plain Astro (.note-main is the demo's own reading
+ * column; the engine reads `.note-main .col` only as the comments fallback
+ * on sites without the explicit slot).
  */
 import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';

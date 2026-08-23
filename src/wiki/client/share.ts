@@ -76,11 +76,16 @@ interface PanelCtx {
 }
 
 function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTMLElement {
+  // the server computes revoke permission per requester (creator or admin);
+  // an absent flag means an older server — keep the button usable
+  const mayRevoke = record.canRevoke !== false;
   const revokeBtn = h(
     'button',
     {
       type: 'button',
       class: 'wiki-btn wiki-share-revoke',
+      disabled: !mayRevoke,
+      ...(mayRevoke ? {} : { title: S.share.revokeNotAllowed }),
       onclick: async () => {
         revokeBtn.disabled = true;
         try {
@@ -107,6 +112,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
       : null,
     h('div', { class: 'wiki-share-meta' }, expiryLabel(record.expiresAt)),
     revokeBtn,
+    mayRevoke ? null : h('div', { class: 'wiki-share-hint' }, S.share.revokeNotAllowed),
   );
 }
 

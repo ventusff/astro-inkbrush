@@ -116,8 +116,9 @@ export default defineConfig({
       rehypePlugins: [...rehypePlugins, ...(WIKI_MODE ? [rehypeWikiBlocks] : [])],
     }),
   },
-  // 同一份插件交给 CMS:预览与保存校验就和页面渲染一模一样
-  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins } })] : [])],
+  // 同一份插件交给 CMS:预览与保存校验就和页面渲染一模一样;urlFor 是
+  // 「笔记 id → URL」规则——不传则引擎默认 `/${id}/`
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` } })] : [])],
 });
 ```
 

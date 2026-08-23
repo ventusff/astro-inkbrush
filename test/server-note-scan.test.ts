@@ -30,8 +30,8 @@ test('within one root the short-TTL cache is reused', () => {
   const root = contentRoot('Stable');
   const scan = createRootedScanner();
   const first = scan(root);
-  // a note added now is invisible until the TTL expires — proof the second
-  // read came from the cache, not a rescan
+  // within the TTL a newly added note is invisible: the second read is
+  // served from the cache, not a rescan
   mkdirSync(join(root, 'later'), { recursive: true });
   writeFileSync(join(root, 'later', 'index.md'), '---\ntitle: Later\n---\n');
   assert.deepEqual(scan(root), first);

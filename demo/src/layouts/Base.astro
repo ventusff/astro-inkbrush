@@ -1,10 +1,11 @@
 ---
 /**
- * Site shell. Everything visual here belongs to the demo, not the engine —
- * astro-inkbrush ships no styling and no layout. The only engine touchpoints
- * in this file are the two optional DOM slots:
+ * Site shell. Everything visual here belongs to the demo — astro-inkbrush
+ * ships no page layout and styles only its own chrome (wiki.css, injected
+ * in WIKI mode only). The one engine touchpoint in this file is an optional
+ * DOM slot:
  *   [data-inkbrush-slot="account"]  → the sign-in chip mounts in the header
- *   (the comments slot lives on note pages; see pages/notes/[...id].astro)
+ * (the comments slot lives on note pages; see pages/notes/[...id].astro)
  */
 import '../styles/site.css';
 

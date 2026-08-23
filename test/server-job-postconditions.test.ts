@@ -70,7 +70,7 @@ test('a block edit may change companions only, and never delete the note', () =>
   );
 });
 
-test('a translation must not touch the source and must produce the target', () => {
+test('a translation may change exactly the target file, nothing else', () => {
   const sourceRel = 'notes/a/index.md';
   const targetRel = 'notes/en/a/index.md';
   assert.equal(
@@ -96,12 +96,28 @@ test('a translation must not touch the source and must produce the target', () =
     translateViolation({ sourceRel, targetRel, changes: [{ rel: sourceRel, content: null }] }) ?? '',
     /modified the source note/,
   );
+  // a companion change refuses the whole result even with a valid target
+  assert.match(
+    translateViolation({
+      sourceRel,
+      targetRel,
+      changes: [
+        { rel: targetRel, content: 'x' },
+        { rel: 'notes/a/companion.ts', content: 'y' },
+      ],
+    }) ?? '',
+    /besides the target/,
+  );
   assert.match(
     translateViolation({ sourceRel, targetRel, changes: [{ rel: 'notes/en/a/other.md', content: 'x' }] }) ?? '',
-    /did not produce the target file/,
+    /besides the target/,
   );
   assert.match(
     translateViolation({ sourceRel, targetRel, changes: [{ rel: targetRel, content: null }] }) ?? '',
+    /did not produce the target file/,
+  );
+  assert.match(
+    translateViolation({ sourceRel, targetRel, changes: [] }) ?? '',
     /did not produce the target file/,
   );
 });

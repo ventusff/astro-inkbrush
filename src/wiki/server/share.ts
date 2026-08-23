@@ -196,7 +196,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (existing) {
         return json(res, 409, {
           error: 'This note already has an active share link — revoke it first',
-          share: withoutCreator(existing),
+          share: { ...withoutCreator(existing), canRevoke: canManage(existing, user!.email) },
         });
       }
       // reserve the note before any building starts; released in finally
@@ -298,7 +298,8 @@ export function registerShareRoutes(on: RouteRegistrar): void {
             });
             throw err;
           }
-          stream.write({ kind: 'result', ok: true, share: record } satisfies ShareStreamEvent);
+          // the creator can always revoke what they just created
+          stream.write({ kind: 'result', ok: true, share: { ...record, canRevoke: true } } satisfies ShareStreamEvent);
         } catch (err) {
           stream.write({
             kind: 'error',
@@ -325,7 +326,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (!note) return fail(ctx.res, 400, 'missing note parameter');
       const shares = readShares()
         .filter((r) => isActive(r) && r.note === note)
-        .map(withoutCreator);
+        .map((r) => ({ ...withoutCreator(r), canRevoke: canManage(r, ctx.user!.email) }));
       json(ctx.res, 200, { shares } satisfies ShareListResponse);
     },
     { auth: true },

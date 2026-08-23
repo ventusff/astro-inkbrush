@@ -138,8 +138,9 @@ export default defineConfig({
     }),
   },
   // the same plugins go to the CMS, so its preview and its save-time
-  // validation render a note the way your pages do
-  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins } })] : [])],
+  // validation render a note the way your pages do; urlFor is your
+  // note-id → URL rule — without it the engine assumes `/${id}/`
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` } })] : [])],
 });
 ```
 

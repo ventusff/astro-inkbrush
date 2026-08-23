@@ -39,6 +39,19 @@ test('broken frontmatter YAML fails validation with its file line', async () => 
   assert.equal(await validateSource('a/index.md', '---\ntitle: fine\n---\n\nbody\n'), null);
 });
 
+test("the site's guard options gate the save the way they gate its build", async () => {
+  const numbered = '## 1. Pillars\n\ntext\n';
+  // default guard: hand-written heading numbers pass
+  assert.equal(await validateSource('a/index.md', numbered), null);
+  setSiteHooks({ guard: { autoNumberedHeadings: true } });
+  assert.match((await validateSource('a/index.md', numbered)) ?? '', /hand-written number/);
+  assert.match((await validateSource('a/index.mdx', numbered)) ?? '', /hand-written number/);
+  // guard options alone keep the pipeline bare (math still mounts)
+  assert.equal(await validateSource('a/index.md', 'inline $x$ math\n'), null);
+  setSiteHooks(undefined);
+  assert.equal(await validateSource('a/index.md', numbered), null);
+});
+
 test("the site's rehype plugins run for both .md and .mdx", async () => {
   setSiteHooks({
     rehypePlugins: [

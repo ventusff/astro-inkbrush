@@ -61,7 +61,8 @@ export type WikilinkResolution =
 export type WikilinkResolver = (target: string, fromNoteId?: string) => WikilinkResolution;
 
 // the uninjected fallback locale table; the registry of record is
-// src/wiki/shared/locales.ts — the two must agree
+// src/wiki/shared/locales.ts — the code/prefix pairs must agree (the
+// default locale's '' prefix names no mirror and is not listed here)
 const DEFAULT_LOCALES = [
   { code: 'en', prefix: 'en/' },
   { code: 'de', prefix: 'de/' },

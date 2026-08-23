@@ -219,6 +219,9 @@ export async function mountAuthChip(): Promise<void> {
   const chip = h('button', {
     type: 'button',
     class: 'wiki-chip',
+    // stable hook for other modules (the comment section's sign-in action
+    // opens this chip); `.wiki-chip` alone also matches the share chip
+    'data-wiki-role': 'account',
     'aria-label': S.auth.chipLabel,
     'aria-haspopup': 'dialog',
     'aria-expanded': 'false',

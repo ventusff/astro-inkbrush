@@ -57,7 +57,8 @@ npm test
   its identity; the client never parses URLs. Optional
   `inkbrush-note-url` template for locale jumps.
 - DOM slots (all optional): `[data-inkbrush-slot="account"]` for the
-  account chip (falls back to fixed top-right, tunable via
+  account chip (the mounted chip itself carries
+  `data-wiki-role="account"` — the stable client-side hook) (falls back to fixed top-right, tunable via
   `--wiki-chip-top/right`), `[data-inkbrush-slot="share"]` (required for
   the share button), `[data-inkbrush-slot="comments"]` for the comment
   section mount (falls back to a `.note-main .col` container).
@@ -77,8 +78,7 @@ npm test
   lock). AI jobs never work in the project: they run in a `workspace.ts`
   copy against a start-of-job snapshot, their changes pass `validate.ts`
   plus a per-job postcondition (a block edit changes nothing in the note
-  outside its block; a translation creates exactly the target and leaves
-  the source untouched), and a file that changed in the project meanwhile
+  outside its block; a translation changes nothing but its target), and a file that changed in the project meanwhile
   refuses the whole application — a concurrent manual edit always wins.
 - Child processes (claude jobs, snapshot builds) receive an allowlisted
   environment — deployment secrets never reach them. API responses never

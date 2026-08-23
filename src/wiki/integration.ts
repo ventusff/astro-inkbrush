@@ -24,8 +24,9 @@ import type { SiteMarkdownHooks } from './server/site.ts';
 
 export interface InkbrushOptions {
   /** the site's Markdown pipeline beyond the dialect: the remark/rehype
-   *  plugins its pages use and its note-id → URL rule. The editor preview,
-   *  the save-time validation and the AI gate run them too. */
+   *  plugins its pages use, its guard and remark-rehype options, and its
+   *  note-id → URL rule. The editor preview, the save-time validation and
+   *  the AI gate run them too. */
   markdown?: SiteMarkdownHooks;
 }
 

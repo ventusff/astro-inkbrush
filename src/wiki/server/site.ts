@@ -7,13 +7,24 @@
  * astro.config and hands them to the server module on every request and at
  * init; nothing here is read from disk.
  */
+import type { Options as RemarkRehypeOptions } from 'remark-rehype';
 import type { PluggableList } from 'unified';
+
+import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 
 export interface SiteMarkdownHooks {
   /** the site's remark plugins, mounted after the dialect (as in its pipeline) */
   remarkPlugins?: PluggableList | undefined;
   /** the site's rehype plugins, mounted before sanitising/stringifying */
   rehypePlugins?: PluggableList | undefined;
+  /** the site's content-guard options (the `guard` it passes to
+   *  markdownProcessor), so the save gate refuses exactly what the build
+   *  refuses; omitted = the guard's defaults */
+  guard?: ContentGuardOptions | undefined;
+  /** the site's remark-rehype bridge options (markdownProcessor's
+   *  `remarkRehype`), applied by the preview and the save-time validation
+   *  of .md notes */
+  remarkRehype?: RemarkRehypeOptions | undefined;
   /** note id → the URL the site routes it to (default `/${id}/`) */
   urlFor?: ((id: string) => string) | undefined;
 }

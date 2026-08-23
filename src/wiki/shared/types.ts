@@ -146,6 +146,10 @@ export interface ShareRecord {
   /** set when revoked (record kept for audit; the list endpoint only returns
    *  shares that are neither revoked nor expired) */
   revokedAt: string | null;
+  /** the requesting user may revoke this share (its creator, or an admin
+   *  while the identity registry is on) — computed per response, never
+   *  persisted; absent on the stored record */
+  canRevoke?: boolean;
 }
 
 /** POST /api/wiki/share request body — the snapshotted route derives from
@@ -165,7 +169,7 @@ export type ShareStreamEvent =
 
 /** GET /api/wiki/share?note=<id> — active (not revoked, not expired) shares
  *  of that note only; the note parameter is required (400 without), and the
- *  records omit createdBy */
+ *  records omit createdBy and carry canRevoke for the requester */
 export interface ShareListResponse {
   shares: ShareRecord[];
 }

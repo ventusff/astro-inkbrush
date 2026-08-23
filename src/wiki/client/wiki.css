@@ -15,6 +15,14 @@
    never reads prefers-color-scheme itself. Raw color values are
    allowed only inside these two token blocks.
 
+   --wiki-on-accent is the text color on accent / AI fills
+   (primary buttons, the chat send button, avatar fallbacks) and
+   defaults to the surface color. It is host-settable, and paired:
+   a host that overrides the accent (or --color-accent /
+   --color-accent2) to something surface-like must set
+   --wiki-on-accent alongside it, or primary-control text loses
+   contrast against its fill.
+
    Layout contract: --wiki-content-max sets the width of the
    comment column (it falls back to the host's --maxw, then to
    820px).
@@ -34,7 +42,8 @@
   --wiki-overlay: rgba(31, 32, 36, 0.12);
   /* raised field surface: buttons, inputs, editor paper */
   --wiki-field: color-mix(in srgb, var(--wiki-surface) 40%, white);
-  /* text on accent / ai fills */
+  /* text on accent / ai fills — host-settable, set it together with a
+     custom accent (see the header) */
   --wiki-on-accent: var(--wiki-surface);
   --wiki-code-bg: var(--color-code-bg, color-mix(in srgb, var(--wiki-on-surface) 6%, var(--wiki-surface)));
   --wiki-brand-google: #4285f4;

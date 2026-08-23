@@ -2,7 +2,9 @@
  * Save-time validation of a note's full source. The pipeline is the
  * dialect plus the site's own plugins — the same plugin sets the preview
  * renders with (./markdown.ts) — with two additions the page pipeline does
- * not have: the content guard, and (for .mdx) an MDX compile. Math
+ * not have: the content guard (with the site's own guard options from the
+ * hooks, so the save gate refuses exactly what the build refuses), and
+ * (for .mdx) an MDX compile. Math
  * (remark-math) follows the same rule as the preview: mounted only when the
  * site hands over no plugins of its own — a site with hooks brings its own
  * math or has none. The frontmatter must parse as YAML. This approximates
@@ -11,6 +13,8 @@
  * before any write.
  */
 import { resolve } from 'node:path';
+
+import type { PluggableList } from 'unified';
 
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { siteHooks } from './site.ts';
@@ -39,9 +43,9 @@ export async function validateSource(file: string, source: string): Promise<stri
   // math follows the preview's bare-vs-hooks rule: a bare pipeline (no site
   // plugins at all) gets remark-math; a site with hooks brings its own
   const bare = site.remarkPlugins === undefined && site.rehypePlugins === undefined;
-  const remark = [
+  const remark: PluggableList = [
     ...markdownSyntax(),
-    remarkContentGuard,
+    [remarkContentGuard, site.guard ?? {}],
     ...(bare ? [remarkMath] : []),
     ...(site.remarkPlugins ?? []),
   ];
@@ -59,10 +63,12 @@ export async function validateSource(file: string, source: string): Promise<stri
         import('remark-rehype').then((m) => m.default),
         import('vfile'),
       ]);
+      // the site's remark-rehype bridge options apply as in its build;
+      // allowDangerousHtml stays on — the build pipeline handles raw HTML
       const processor = unified()
         .use(remarkParse)
         .use(remark)
-        .use(remarkRehype, { allowDangerousHtml: true })
+        .use(remarkRehype, { ...site.remarkRehype, allowDangerousHtml: true })
         .use(rehype);
       const vfile = new VFile({ value: body, path });
       await processor.run(processor.parse(vfile), vfile);

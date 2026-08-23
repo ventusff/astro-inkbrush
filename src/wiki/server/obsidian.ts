@@ -20,7 +20,10 @@
  *  - `==x==` → <mark>; single-line `$$x$$` display math normalized to the
  *    three-line form.
  *  - Obsidian frontmatter (author/source/url/saved) becomes a "Source" quote
- *    block at the top of the article.
+ *    block at the top of the article. Vault-derived strings are escaped per
+ *    interpolation context (./markdown-escape.ts): frontmatter values via
+ *    the yaml serializer, labels and prose backslash-escaped, link URLs
+ *    percent-encoded.
  *  - `inbox.ignore` (config) skips files by vault-relative path or basename
  *    prefix.
  *
@@ -66,6 +69,7 @@ import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, HttpError, json, readBody } from './index.ts';
+import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from './markdown-escape.ts';
 import { assetsBasenameCandidates, containedPath, isWithin, vaultPathCandidates } from './paths.ts';
 import { noteUrl } from './site.ts';
 import { autocommit, contentRoot, journalRevision, validateSource } from './source.ts';
@@ -84,9 +88,9 @@ interface SyncState {
     /** content hash of the vault source at last import */
     hash: string;
     /** content hash of the note the importer published — the re-import
-     *  baseline: a published note that no longer matches was edited by
-     *  hand and is never overwritten (absent on records from before this
-     *  field existed; such notes also refuse re-import until reconciled) */
+     *  baseline: a published note that does not match it carries a manual
+     *  edit and is never overwritten. A record without this field cannot
+     *  prove its note untouched and refuses re-import until reconciled. */
     noteHash?: string;
     importedAt: number | null;
   };
@@ -308,9 +312,9 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
       // the surrounding spaces matter: two adjacent embeds would fuse into
       // `]**[`, and CommonMark's rule-of-three refuses to pair those markers,
       // leaking literal asterisks into the prose.
-      return ` *[missing attachment: ${file!.trim()}]* `;
+      return ` *[missing attachment: ${escapeMarkdownText(file!)}]* `;
     }
-    return `![${alt?.trim() ?? ''}](./${encodeURIComponent(copyAsset(found))})`;
+    return `![${escapeMarkdownText(alt ?? '')}](./${encodeURIComponent(copyAsset(found))})`;
   });
 
   // [[wikilinks]] (anchors and labels included, code spans excluded — the
@@ -330,7 +334,7 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
       replacement = `[[${res.id}${anchor}${shown}]]`;
     } else {
       warnings.push(`unresolved wikilink: ${link.target}`);
-      replacement = `*${link.label ?? link.target}*`;
+      replacement = `*${escapeMarkdownText(link.label ?? link.target)}*`;
     }
     markdown = markdown.slice(0, link.offset) + replacement + markdown.slice(link.offset + link.raw.length);
   }
@@ -348,26 +352,25 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
     { keepMath: true },
   );
 
-  // source attribution block
+  // source attribution block — every vault-derived piece is escaped for its
+  // context (label text, link destination, plain prose)
   const sourceBits: string[] = [];
   if (fm.source || fm.author) {
-    const label = [fm.source, fm.author].filter(Boolean).join(' · ');
-    sourceBits.push(fm.url ? `[${label}](${fm.url})` : label);
+    const label = escapeMarkdownText([fm.source, fm.author].filter(Boolean).join(' · '));
+    sourceBits.push(fm.url ? `[${label}](${escapeLinkUrl(fm.url)})` : label);
   } else if (fm.url) {
-    sourceBits.push(`[Original link](${fm.url})`);
+    sourceBits.push(`[Original link](${escapeLinkUrl(fm.url)})`);
   }
-  if (fm.saved) sourceBits.push(fm.saved.slice(0, 10));
+  if (fm.saved) sourceBits.push(escapeMarkdownText(fm.saved.slice(0, 10)));
   const attribution = sourceBits.length > 0 ? `> Source: ${sourceBits.join(' · ')}\n\n` : '';
 
   const description = deriveDescription(markdown, title);
-  const frontmatter = [
-    '---',
-    `title: ${JSON.stringify(title)}`,
-    `description: ${JSON.stringify(description)}`,
-    `brand: ${JSON.stringify('Inbox')}`,
-    `subtitle: ${JSON.stringify(`Obsidian sync · ${noteDate(sourcePath, fm)}`)}`,
-    '---',
-  ].join('\n');
+  const frontmatter = yamlFrontmatter({
+    title,
+    description,
+    brand: 'Inbox',
+    subtitle: `Obsidian sync · ${noteDate(sourcePath, fm)}`,
+  });
 
   return {
     slug,

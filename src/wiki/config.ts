@@ -54,7 +54,8 @@ export interface GoogleSamlAuthConfig {
 export interface SessionConfig {
   /** 'hmac' (default: cookie signed with `.wiki/secret`, single-site
    *  deployments) | 'jwt' (jose HS256, secret from the AUTH_SECRET env var —
-   *  startup error when missing; for cross-site/cross-subdomain SSO) */
+   *  startup error when missing; for cross-subdomain SSO: sibling apps
+   *  sharing the secret and a cookie Domain share the session) */
   format?: 'hmac' | 'jwt';
   /** cookie name (default 'wiki_session') */
   cookieName?: string;

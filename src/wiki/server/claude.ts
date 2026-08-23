@@ -508,7 +508,6 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
               meta: meta2,
               targetId: target2.id,
               targetLang,
-              companions: scope.filter((s) => s !== dirname(located2.rel) && s !== targetDirRel),
             }),
           };
         } catch (err) {

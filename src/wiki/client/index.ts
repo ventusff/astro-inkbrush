@@ -38,6 +38,16 @@ export function rememberScroll(): void {
   sessionStorage.setItem(`wiki:scroll:${window.location.pathname}`, String(window.scrollY));
 }
 
+/** One feature's mount failure never blocks the remaining features: the
+ *  failure is logged and initialization continues. */
+async function mountSafely(name: string, mount: () => void | Promise<void>): Promise<void> {
+  try {
+    await mount();
+  } catch (err) {
+    console.error(`[wiki] ${name} failed to initialize:`, err);
+  }
+}
+
 async function init(): Promise<void> {
   // Mount guard: the entry may be evaluated more than once (Vite HMR, double
   // injection); the chrome mounts into the document exactly once.
@@ -45,7 +55,7 @@ async function init(): Promise<void> {
   document.documentElement.dataset['inkbrushMounted'] = '1';
 
   restoreScroll();
-  await mountAuthChip();
+  await mountSafely('account chip', () => mountAuthChip());
 
   const id = noteIdFromPage();
   if (!id) return;
@@ -58,16 +68,12 @@ async function init(): Promise<void> {
   const ctx: PageContext = { meta };
 
   // feature modules load lazily so the base bundle stays light
-  const { mountBlocks } = await import('./blocks');
-  mountBlocks(ctx);
-  const { mountChatPanel } = await import('./chat-panel');
-  mountChatPanel(ctx);
-  const { mountComments } = await import('./comments');
-  mountComments(ctx);
+  await mountSafely('block editing', async () => (await import('./blocks')).mountBlocks(ctx));
+  await mountSafely('chat panel', async () => (await import('./chat-panel')).mountChatPanel(ctx));
+  await mountSafely('comments', async () => (await import('./comments')).mountComments(ctx));
   // share module (config-driven): off ⇒ the module isn't even loaded
   if (shareAvailability() !== 'off') {
-    const { mountShare } = await import('./share');
-    mountShare(ctx);
+    await mountSafely('share', async () => (await import('./share')).mountShare(ctx));
   }
 }
 

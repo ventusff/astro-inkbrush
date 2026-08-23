@@ -87,7 +87,9 @@ async function buildProcessor(sanitize: boolean): Promise<Processor> {
       }),
       noteIdOf: noteIdOfPath,
     });
-    p.use(remarkRehype, { allowDangerousHtml: true });
+    // the site's remark-rehype bridge options apply as in its build;
+    // allowDangerousHtml stays on — trusted repo content
+    p.use(remarkRehype, { ...site.remarkRehype, allowDangerousHtml: true });
     p.use(site.rehypePlugins ?? []);
     if (bare) p.use(rehypeKatex, { output: 'htmlAndMathml' });
   }

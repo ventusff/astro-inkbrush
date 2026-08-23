@@ -73,6 +73,11 @@ const DENIED_TOOLS = 'Bash,Grep,Glob,WebSearch,WebFetch,NotebookEdit,Agent,Task'
 
 const DEFAULT_KILL_GRACE_MS = 5000;
 
+/** upper bound on the stdout line buffer: no stream-json protocol line is
+ *  anywhere near this size, so exceeding it means a runaway or non-protocol
+ *  child — the job is killed instead of buffering without limit */
+const MAX_STDOUT_BUFFER = 8 * 1024 * 1024;
+
 /** Run one job; never rejects — every failure is a result with `ok: false`. */
 export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
   return new Promise((resolvePromise) => {
@@ -182,8 +187,23 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
     };
 
     let buffer = '';
+    /** stdout lines that are not JSON — a nonzero count is surfaced on the
+     *  job failure message and in the server log */
+    let malformedLines = 0;
+    let overflowed = false;
     child.stdout!.on('data', (chunk: Buffer) => {
+      if (overflowed) return;
       buffer += chunk.toString();
+      if (buffer.length > MAX_STDOUT_BUFFER) {
+        overflowed = true;
+        buffer = '';
+        terminate({
+          ok: false,
+          error: `claude produced an oversized output line (over ${MAX_STDOUT_BUFFER / (1024 * 1024)} MB of unterminated stream-json) — job terminated`,
+          sessionId,
+        });
+        return;
+      }
       let nl: number;
       while ((nl = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, nl).trim();
@@ -193,6 +213,7 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
         try {
           parsed = JSON.parse(line) as StreamJsonLine;
         } catch {
+          malformedLines += 1;
           continue;
         }
         handleLine(parsed);
@@ -211,13 +232,19 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       if (child.pid === undefined) finish(result);
     });
     child.on('close', (code) => {
-      finish(
+      if (malformedLines > 0) {
+        console.warn(`[wiki claude] ${malformedLines} non-JSON line(s) on the stream-json stdout were ignored`);
+      }
+      let result =
         outcome ?? {
           ok: false,
           error: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
           sessionId,
-        },
-      );
+        };
+      if (!result.ok && malformedLines > 0) {
+        result = { ...result, error: `${result.error} (${malformedLines} non-JSON protocol line(s) ignored)` };
+      }
+      finish(result);
     });
   });
 }

@@ -4,8 +4,8 @@
  * write; these postconditions confine WHAT a job may change:
  *  - a block edit may rewrite only the selected line span of the note file
  *    (companion files remain free);
- *  - a translation must leave the source note untouched and must produce
- *    the exact target file.
+ *  - a translation's change set contains exactly the target file — the
+ *    source note and every other file stay untouched.
  * Also the revision-span rule the journal uses: a change whose baseline
  * file does not exist, and a change that spans the whole file, journals as
  * lines '*' — an audit row the one-click revert refuses.
@@ -56,9 +56,10 @@ export function blockEditViolation(opts: {
 }
 
 /**
- * A translation must not touch the source note in any way, and the changes
- * must contain the target file with content. Returns a violation message,
- * or null when both hold.
+ * A translation's change set may contain only the target file, and must
+ * contain it with content: any change to the source note or to any other
+ * path refuses the whole result. Returns a violation message, or null when
+ * the change set is exactly the target.
  */
 export function translateViolation(opts: {
   /** project-relative path of the source note's file */
@@ -67,8 +68,12 @@ export function translateViolation(opts: {
   targetRel: string;
   changes: WorkspaceChange[];
 }): string | null {
-  const source = opts.changes.find((c) => c.rel === opts.sourceRel);
-  if (source) return `The job modified the source note (${opts.sourceRel})`;
+  const stray = opts.changes.find((c) => c.rel !== opts.targetRel);
+  if (stray) {
+    return stray.rel === opts.sourceRel
+      ? `The job modified the source note (${opts.sourceRel})`
+      : `The job changed a file besides the target (${stray.rel})`;
+  }
   const target = opts.changes.find((c) => c.rel === opts.targetRel);
   if (!target || target.content === null) {
     return `The job did not produce the target file (${opts.targetRel})`;
