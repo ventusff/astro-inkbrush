@@ -6,7 +6,7 @@ import { crossSiteBlocked } from '../src/wiki/server/csrf.ts';
 const base = {
   method: 'POST',
   path: '/comments/a',
-  ownOrigin: 'https://wiki.example.com',
+  ownOrigins: ['https://wiki.example.com'],
   trustedOrigins: [] as string[],
 };
 
@@ -36,4 +36,13 @@ test('the SAML ACS route is exempt — the IdP posts it cross-origin by design',
     crossSiteBlocked({ ...base, path: '/auth/saml/callback/extra', origin: 'https://accounts.google.com' }),
     true,
   );
+});
+
+test('every own origin counts — a pinned identity base URL does not displace the served host', () => {
+  // an editing machine that borrows another host's SAML SP identity still
+  // serves its own pages on its own subdomain
+  const both = { ...base, ownOrigins: ['https://labs.example.com', 'https://hub.example.com'] };
+  assert.equal(crossSiteBlocked({ ...both, origin: 'https://labs.example.com' }), false);
+  assert.equal(crossSiteBlocked({ ...both, origin: 'https://hub.example.com' }), false);
+  assert.equal(crossSiteBlocked({ ...both, origin: 'https://evil.example' }), true);
 });

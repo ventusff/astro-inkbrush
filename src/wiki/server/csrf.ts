@@ -21,12 +21,15 @@ export function crossSiteBlocked(opts: {
   path: string;
   /** the request's Origin header (or the Referer's origin); null when absent */
   origin: string | null;
-  /** the request's own origin as the browser would send it */
-  ownOrigin: string;
+  /** the request's own origins as a browser would send them: the origin
+   *  derived from the request (its public host), and the configured base
+   *  URL when auth pins one — a deployment that borrows another origin's
+   *  SP identity is still its own origin for its own pages */
+  ownOrigins: string[];
   trustedOrigins: string[];
 }): boolean {
   if (opts.method === 'GET' || opts.method === 'HEAD' || opts.method === 'OPTIONS') return false;
   if (opts.path === '/auth/saml/callback') return false;
   if (!opts.origin) return false;
-  return !new Set([opts.ownOrigin, ...opts.trustedOrigins]).has(opts.origin);
+  return !new Set([...opts.ownOrigins, ...opts.trustedOrigins]).has(opts.origin);
 }

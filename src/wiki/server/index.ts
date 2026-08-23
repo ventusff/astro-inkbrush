@@ -447,24 +447,31 @@ export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): voi
   }
 }
 
-/** the request's own origin: the configured external base URL when auth
- *  pins one (the canonical origin of the deployment); otherwise derived
- *  from the request — x-forwarded-host/-proto count only under
- *  `server.trustProxy`, since without a proxy those headers are client
- *  input and would let anyone mint their own "own origin" */
-function requestOrigin(req: IncomingMessage): string {
+/** the request's own origins — both of them, when both exist:
+ *  - the origin derived from the request (its public host): x-forwarded-host
+ *    and -proto count only under `server.trustProxy`, since without a proxy
+ *    those headers are client input and would let anyone mint an "own
+ *    origin";
+ *  - the configured external base URL when auth pins one (the canonical
+ *    origin of the deployment's identity). It is NOT always where this
+ *    server's pages are served from — an editing machine may borrow another
+ *    host's SAML SP identity and still serve its own pages on its own
+ *    subdomain, whose browser Origin must count as its own. */
+function requestOrigins(req: IncomingMessage): string[] {
+  const trustProxy = wikiConfig().server.trustProxy;
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host = ((trustProxy ? req.headers['x-forwarded-host'] : undefined) ?? req.headers.host ?? '') as string;
+  const derived = `${proto}://${host.split(',')[0]!.trim()}`;
   const configured = configuredBaseUrl();
   if (configured) {
     try {
-      return new URL(configured).origin;
+      const pinned = new URL(configured).origin;
+      return pinned === derived ? [derived] : [derived, pinned];
     } catch {
       /* malformed baseUrl is rejected at config resolution; fall through */
     }
   }
-  const trustProxy = wikiConfig().server.trustProxy;
-  const proto = isSecureRequest(req) ? 'https' : 'http';
-  const host = ((trustProxy ? req.headers['x-forwarded-host'] : undefined) ?? req.headers.host ?? '') as string;
-  return `${proto}://${host.split(',')[0]!.trim()}`;
+  return [derived];
 }
 
 /** the request's Origin header, falling back to the Referer's origin;
@@ -496,7 +503,7 @@ export async function handleApi(
         method: req.method ?? 'GET',
         path,
         origin: originOf(req),
-        ownOrigin: requestOrigin(req),
+        ownOrigins: requestOrigins(req),
         trustedOrigins: wikiConfig().auth.session.trustedOrigins,
       })
     ) {
