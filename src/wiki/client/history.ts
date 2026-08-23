@@ -16,7 +16,7 @@ import { api } from './api';
 import { currentUser } from './auth';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
-import { rememberScroll } from './index';
+import { rememberScroll } from './scroll';
 import { S } from './strings';
 import { h, popover, time, toast } from './ui';
 

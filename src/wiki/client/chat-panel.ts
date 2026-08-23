@@ -11,7 +11,7 @@
 import { api, stream } from './api';
 import { currentUser } from './auth';
 import type { PageContext } from './index';
-import { rememberScroll } from './index';
+import { rememberScroll } from './scroll';
 import { S } from './strings';
 import { h, icon, toast } from './ui';
 

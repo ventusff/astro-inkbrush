@@ -16,7 +16,7 @@ import { wikilinkCompletion } from './autocomplete';
 import { api, ApiError } from './api';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
-import { rememberScroll } from './index';
+import { rememberScroll } from './scroll';
 import { S } from './strings';
 import { h, toast } from './ui';
 

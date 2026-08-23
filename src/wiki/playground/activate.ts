@@ -8,6 +8,7 @@ import { buildWikilinkResolver } from '../../lib/wikilinks.ts';
 import { api, setWikiTransport } from '../client/api';
 import { primeSession } from '../client/auth';
 import { mountBlocks } from '../client/blocks';
+import { restoreScroll } from '../client/scroll';
 import type { NoteMeta, WikiUser } from '../shared/types';
 import {
   createLocalBackend,
@@ -32,17 +33,6 @@ function injectStyles(): void {
   el.id = 'inkbrush-playground-style';
   el.textContent = wikiCss;
   document.head.append(el);
-}
-
-/** scroll restore across the reload that follows a saved edit (the same
- *  sessionStorage key the dev client uses) */
-function restoreScroll(): void {
-  const key = `wiki:scroll:${window.location.pathname}`;
-  const saved = sessionStorage.getItem(key);
-  if (saved !== null) {
-    sessionStorage.removeItem(key);
-    window.scrollTo({ top: Number(saved) });
-  }
 }
 
 export interface Activation {
@@ -111,6 +101,10 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
   });
 
   restoreScroll();
+  // client/index.ts boots on import behind this once-guard; stamping it here
+  // keeps any value import of the entry from mounting the dev chrome
+  // (account chip, chat, comments) on top of the playground
+  document.documentElement.dataset['inkbrushMounted'] = '1';
   const meta = await api.get<NoteMeta>(`/meta/${note.id}`);
   mountBlocks({ meta });
 

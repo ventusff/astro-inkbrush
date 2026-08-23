@@ -7,7 +7,7 @@
 import { stream } from './api';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
-import { rememberScroll } from './index';
+import { rememberScroll } from './scroll';
 import { S } from './strings';
 import { h, icon, popover, toast } from './ui';
 

@@ -10,6 +10,7 @@ import './wiki.css';
 import type { NoteMeta } from '../shared/types';
 import { api } from './api';
 import { mountAuthChip, shareAvailability } from './auth';
+import { restoreScroll } from './scroll';
 
 export interface PageContext {
   meta: NoteMeta;
@@ -24,19 +25,6 @@ function noteIdFromPage(): string | null {
   return id ? id : null;
 }
 
-/** scroll restore across the HMR full-reload that follows a saved edit */
-function restoreScroll(): void {
-  const key = `wiki:scroll:${window.location.pathname}`;
-  const saved = sessionStorage.getItem(key);
-  if (saved !== null) {
-    sessionStorage.removeItem(key);
-    window.scrollTo({ top: Number(saved) });
-  }
-}
-
-export function rememberScroll(): void {
-  sessionStorage.setItem(`wiki:scroll:${window.location.pathname}`, String(window.scrollY));
-}
 
 /** One feature's mount failure never blocks the remaining features: the
  *  failure is logged and initialization continues. */
