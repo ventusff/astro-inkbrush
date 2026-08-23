@@ -15,7 +15,7 @@
  * buttons rove the same way with ←/→/↑/↓), Escape returns it. Host-set
  * tabindex / aria-describedby values are preserved and restored on unmount.
  */
-import { currentUser, onAuthChange } from './auth';
+import { aiAvailability, currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
 import { S } from './strings';
 import { h, icon, toast } from './ui';
@@ -132,16 +132,20 @@ export function mountBlocks(ctx: PageContext): void {
   };
   for (const b of allButtons) b.tabIndex = b === editBtn ? 0 : -1;
 
-  // revision history is editor-only on the server: the control exists only for signed-in users
-  const syncHistory = (): void => {
+  // revision history is editor-only on the server: the control exists only
+  // for signed-in users. The ✦ exists only where the deployment can run
+  // claude jobs (/me.ai — absent means yes).
+  const syncAvailability = (): void => {
     historyBtn.hidden = !currentUser();
-    if (historyBtn.hidden && historyBtn.tabIndex === 0) {
+    aiBtn.hidden = aiAvailability() === 'off';
+    if ((historyBtn.hidden && historyBtn.tabIndex === 0) || (aiBtn.hidden && aiBtn.tabIndex === 0)) {
       historyBtn.tabIndex = -1;
+      aiBtn.tabIndex = -1;
       editBtn.tabIndex = 0;
     }
   };
-  syncHistory();
-  onAuthChange(syncHistory);
+  syncAvailability();
+  onAuthChange(syncAvailability);
 
   const hideHandle = (): void => {
     handle.classList.remove('show');

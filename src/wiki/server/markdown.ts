@@ -21,7 +21,8 @@
 import { relative, sep } from 'node:path';
 import type { Processor } from 'unified';
 
-import { buildWikilinkResolver, cachedScan, remarkWikilinks } from '../../lib/wikilinks.ts';
+import { buildRenderProcessor } from '../../lib/render-pipeline.ts';
+import { buildWikilinkResolver, cachedScan } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
 import { noteUrl, siteHooks } from './site.ts';
 import { contentRoot, noteFile } from './source.ts';
@@ -49,67 +50,25 @@ function noteIdOfPath(path: string | undefined): string | undefined {
 let sanitizing: Processor | null = null;
 let trusted: Processor | null = null;
 
+/** the pipeline factory is lib/render-pipeline.ts (shared with the
+ *  playground); this wrapper supplies the deployment-derived inputs */
 async function buildProcessor(sanitize: boolean): Promise<Processor> {
-  const [
-    { unified },
-    remarkParse,
-    { markdownSyntax },
-    remarkMath,
-    remarkRehype,
-    rehypeSanitizeMod,
-    rehypeKatex,
-    rehypeStringify,
-  ] = await Promise.all([
-    import('unified'),
-    import('remark-parse').then((m) => m.default),
-    import('../../lib/markdown-syntax.ts'),
-    import('remark-math').then((m) => m.default),
-    import('remark-rehype').then((m) => m.default),
-    import('rehype-sanitize'),
-    import('rehype-katex').then((m) => m.default),
-    import('rehype-stringify').then((m) => m.default),
-  ]);
-
-  const site = siteHooks();
-  const bare = site.remarkPlugins === undefined && site.rehypePlugins === undefined;
-  const p = unified().use(remarkParse).use(markdownSyntax());
-
-  if (sanitize) {
-    p.use(remarkMath).use(remarkRehype);
-  } else {
-    if (bare) p.use(remarkMath);
-    p.use(site.remarkPlugins ?? []);
-    p.use(remarkWikilinks, {
-      resolve: buildWikilinkResolver({
-        notes: cachedScan(contentRoot()),
-        urlFor: noteUrl,
-        locales: resolverLocales(),
-      }),
-      noteIdOf: noteIdOfPath,
-    });
-    // the site's remark-rehype bridge options apply as in its build;
-    // allowDangerousHtml stays on — trusted repo content
-    p.use(remarkRehype, { ...site.remarkRehype, allowDangerousHtml: true });
-    p.use(site.rehypePlugins ?? []);
-    if (bare) p.use(rehypeKatex, { output: 'htmlAndMathml' });
-  }
-
-  if (sanitize) {
-    // default GitHub schema + keep the class names remark-math emits so
-    // rehype-katex (which runs after sanitize) can still find math nodes.
-    // Raw HTML never reaches this pipeline (remark-rehype runs without
-    // allowDangerousHtml), so the schema needs no extra tag names.
-    const schema = structuredClone(rehypeSanitizeMod.defaultSchema);
-    schema.attributes ??= {};
-    schema.attributes['code'] = [
-      ...(schema.attributes['code'] ?? []),
-      ['className', 'language-math', 'math-inline', 'math-display'],
-    ];
-    p.use(rehypeSanitizeMod.default, schema).use(rehypeKatex, { output: 'htmlAndMathml' });
-  }
-
-  p.use(rehypeStringify, { allowDangerousHtml: !sanitize });
-  return p as unknown as Processor;
+  return buildRenderProcessor({
+    sanitize,
+    site: siteHooks(),
+    ...(sanitize
+      ? {}
+      : {
+          wikilinks: {
+            resolve: buildWikilinkResolver({
+              notes: cachedScan(contentRoot()),
+              urlFor: noteUrl,
+              locales: resolverLocales(),
+            }),
+            noteIdOf: noteIdOfPath,
+          },
+        }),
+  });
 }
 
 export async function renderMarkdown(markdown: string, opts: RenderOptions): Promise<string> {

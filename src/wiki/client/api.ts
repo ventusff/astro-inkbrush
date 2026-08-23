@@ -16,12 +16,31 @@ export interface RequestOptions {
   signal?: AbortSignal | undefined;
 }
 
+/**
+ * The client's one data seam. Every feature module calls `api.*`; by default
+ * requests go over HTTP to the dev server's `/api/wiki` middleware. A
+ * playground/testing host may install a transport that serves the same
+ * surface from somewhere else (e.g. browser-local storage) — it must resolve
+ * with the parsed response body or throw ApiError, exactly like HTTP does.
+ * Never installed in normal WIKI mode.
+ */
+export interface WikiTransport {
+  request(method: string, path: string, body?: unknown, opts?: RequestOptions): Promise<unknown>;
+}
+
+let transport: WikiTransport | null = null;
+
+export function setWikiTransport(next: WikiTransport | null): void {
+  transport = next;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
   opts?: RequestOptions,
 ): Promise<T> {
+  if (transport) return (await transport.request(method, path, body, opts)) as T;
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: body !== undefined ? { 'content-type': 'application/json' } : {},

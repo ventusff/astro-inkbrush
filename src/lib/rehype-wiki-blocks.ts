@@ -18,8 +18,6 @@
  * neighbouring positioned siblings (e.g. KaTeX display blocks, whose nodes
  * carry no position), trimmed to non-empty source lines.
  */
-import { readFileSync } from 'node:fs';
-
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
 
@@ -64,7 +62,7 @@ function isBlank(line: string | undefined): boolean {
 }
 
 export function rehypeWikiBlocks() {
-  return (tree: Root, file: VFile): void => {
+  return async (tree: Root, file: VFile): Promise<void> => {
     const value = String(file.value);
     const sourceLines = value.split('\n');
     const children = tree.children as unknown as AnyNode[];
@@ -74,12 +72,16 @@ export function rehypeWikiBlocks() {
     // own .md path) yields body-relative positions and a body-only vfile
     // value; the raw file on disk tells the difference, and the stamp then
     // carries the frontmatter offset. A pipeline whose positions already
-    // count the frontmatter (MDX) needs none.
+    // count the frontmatter (MDX) needs none. node:fs loads lazily inside
+    // the branch: the plugin also runs in browser bundles (the playground
+    // renders patched blocks with it), where the vfile carries no path and
+    // fs must never be resolved at module load.
     let offset = 0;
     if (!splitFrontmatter(value).present && file.path) {
       let raw: string | null = null;
       try {
-        raw = readFileSync(file.path, 'utf8');
+        const fs = await import('node:fs');
+        raw = fs.readFileSync(file.path, 'utf8');
       } catch {
         raw = null;
       }

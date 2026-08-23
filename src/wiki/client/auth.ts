@@ -29,6 +29,21 @@ export function shareAvailability(): GoogleAuthState {
   return me.share;
 }
 
+/** AI availability as reported by /me — absent means available (see MeResponse.ai) */
+export function aiAvailability(): 'off' | 'ready' {
+  return me.ai ?? 'ready';
+}
+
+/**
+ * Seed the session store without fetching /me — for hosts whose identity is
+ * synthetic and local (the browser playground). Normal WIKI mode never calls
+ * this; mountAuthChip owns the store there.
+ */
+export function primeSession(next: MeResponse): void {
+  me = next;
+  notify();
+}
+
 export function onAuthChange(fn: (user: WikiUser | null) => void): void {
   listeners.add(fn);
 }

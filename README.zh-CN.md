@@ -68,6 +68,10 @@ Inkstone 配套获得完整观感。
   任何 CMS 注入痕迹)。
 - 🪶 **生产构建零残留** —— 本集成在 `astro dev` 之外什么都不做,
   `check-dist` 会让带了它任何字节的构建失败。
+- 🧪 **纯浏览器体验场**(`astro-inkbrush/playground`)—— 只给 demo 站的
+  显式可选面:同一套块编辑器跑在静态构建上,保存进访客自己的 IndexedDB。
+  一切都不出浏览器;消费站永不挂载(挂载它的构建用
+  `check-dist --playground` 自我声明)。
 
 ## 工作方式
 

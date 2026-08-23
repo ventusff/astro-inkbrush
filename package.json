@@ -32,7 +32,9 @@
     "./config": "./src/wiki/config.ts",
     "./session": "./src/wiki/server/session.ts",
     "./wikilinks": "./src/lib/wikilinks.ts",
-    "./markdown": "./src/lib/markdown.ts"
+    "./markdown": "./src/lib/markdown.ts",
+    "./render-pipeline": "./src/lib/render-pipeline.ts",
+    "./playground": "./src/wiki/playground/index.ts"
   },
   "files": [
     "src",

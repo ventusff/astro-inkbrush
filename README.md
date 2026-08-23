@@ -86,6 +86,11 @@ the full look.
   `<a>`, KaTeX error residue, and any CMS injection in built HTML).
 - 🪶 **Zero production footprint** — the integration does nothing outside
   `astro dev`, and `check-dist` fails a build that carries any of its bytes.
+- 🧪 **Browser-local playground** (`astro-inkbrush/playground`) — an opt-in
+  surface for demo sites only: the same block editor on a static build,
+  saving to the visitor's own IndexedDB. Nothing leaves the browser;
+  consumer sites never mount it (the build that does declares itself with
+  `check-dist --playground`).
 
 ## How it works
 

@@ -45,6 +45,10 @@ export interface MeResponse {
    *  · 'ready' = usable · 'unconfigured' = enabled but gatewayUrl /
    *  publicBase / SHARE_GATEWAY_TOKEN missing (button greyed out) */
   share: GoogleAuthState;
+  /** AI (claude) availability. Absent = available (the dev-server deployment
+   *  shape); 'off' hides the block toolbar's ✦ — a transport that cannot run
+   *  claude jobs (the browser-local playground) says so here. */
+  ai?: 'off' | 'ready';
 }
 
 /** GET /api/wiki/identity/users (admin) — PUT on the same route submits

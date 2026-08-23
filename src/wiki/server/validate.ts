@@ -14,9 +14,8 @@
  */
 import { resolve } from 'node:path';
 
-import type { PluggableList } from 'unified';
-
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
+import { validateNoteSource } from '../../lib/render-pipeline.ts';
 import { siteHooks } from './site.ts';
 import { projectRoot } from './store.ts';
 
@@ -28,53 +27,15 @@ export function withoutFrontmatter(source: string): string {
 
 /** an error message, or null when `source` (of `file` — project-relative or
  *  absolute, judged by extension) passes; the absolute path is the vfile
- *  path, as in the build */
+ *  path, as in the build. The pipeline itself is lib/render-pipeline.ts
+ *  (shared with the playground); this wrapper supplies the deployment's
+ *  hooks and resolves the path. */
 export async function validateSource(file: string, source: string): Promise<string | null> {
-  const fm = splitFrontmatter(source);
-  if (fm.error) {
-    return `frontmatter${fm.error.line ? ` (line ${fm.error.line})` : ''}: ${fm.error.message}`;
-  }
-  const [remarkMath, { markdownSyntax }, { remarkContentGuard }] = await Promise.all([
-    import('remark-math').then((m) => m.default),
-    import('../../lib/markdown-syntax.ts'),
-    import('../../lib/content-guard.ts'),
-  ]);
   const site = siteHooks();
-  // math follows the preview's bare-vs-hooks rule: a bare pipeline (no site
-  // plugins at all) gets remark-math; a site with hooks brings its own
-  const bare = site.remarkPlugins === undefined && site.rehypePlugins === undefined;
-  const remark: PluggableList = [
-    ...markdownSyntax(),
-    [remarkContentGuard, site.guard ?? {}],
-    ...(bare ? [remarkMath] : []),
-    ...(site.remarkPlugins ?? []),
-  ];
-  const rehype = site.rehypePlugins ?? [];
-  const body = fm.body;
-  const path = resolve(projectRoot(), file);
-  try {
-    if (file.endsWith('.mdx')) {
-      const { compile } = await import('@mdx-js/mdx');
-      await compile({ value: body, path }, { remarkPlugins: remark, rehypePlugins: rehype });
-    } else {
-      const [{ unified }, remarkParse, remarkRehype, { VFile }] = await Promise.all([
-        import('unified'),
-        import('remark-parse').then((m) => m.default),
-        import('remark-rehype').then((m) => m.default),
-        import('vfile'),
-      ]);
-      // the site's remark-rehype bridge options apply as in its build;
-      // allowDangerousHtml stays on — the build pipeline handles raw HTML
-      const processor = unified()
-        .use(remarkParse)
-        .use(remark)
-        .use(remarkRehype, { ...site.remarkRehype, allowDangerousHtml: true })
-        .use(rehype);
-      const vfile = new VFile({ value: body, path });
-      await processor.run(processor.parse(vfile), vfile);
-    }
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
+  return validateNoteSource(source, {
+    site,
+    guard: site.guard ?? {},
+    mdx: file.endsWith('.mdx'),
+    path: resolve(projectRoot(), file),
+  });
 }

@@ -93,6 +93,15 @@ npm test
   git operations there; never read, modify or commit `inbox/**`.
 - Zero static pollution is the bottom line: non-WIKI builds must not
   contain a single injected byte.
+- The browser-local playground (`astro-inkbrush/playground`) is the one
+  sanctioned exception, and only by a site's explicit opt-in: a DEMO build
+  that imports it ships the block editor against an IndexedDB-backed
+  transport — every edit stays in the visitor's browser, nothing reaches
+  the repo or other visitors. It is never part of the integration, never
+  injected, and consumer sites must not mount it. A build that does mount
+  it also ships block stamps and a sources manifest, and declares the shape
+  to check-dist with `--playground`; default builds keep the full check and
+  stay byte-identical.
 - UI strings live in `src/wiki/client/strings.ts` (English + Chinese,
   selected by the page's `<html lang>`); server messages are English.
 - Comments and documentation are English; the README and manual ship in

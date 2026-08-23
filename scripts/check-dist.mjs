@@ -59,6 +59,11 @@
  *   --allow-empty    accept a build output that holds no files at all
  *                    (without it, an empty dist fails — it certifies
  *                    nothing)
+ *   --playground     the operator's declaration that this build DELIBERATELY
+ *                    ships the browser-local playground (demo sites only):
+ *                    rehypeWikiBlocks stamps and script/asset references to
+ *                    the client API stop counting as CMS injection. Every
+ *                    other check stays. Never pass this for a consumer site.
  *   --help           print this usage
  *
  * Exit code: 0 clean, 1 findings (a nonexistent or — without --allow-empty —
@@ -319,6 +324,7 @@ export function checkDist(distDir, options = {}) {
   // co-deploying the editor may link into its sign-in from static pages);
   // the built-in /api/ default never does
   const explicitAllow = options.allow ?? [];
+  const playground = options.playground === true;
   const allow = [...explicitAllow, '/api/'];
   const skips = new Set((options.skip ?? []).map((d) => d.replace(/\/+$/, '')));
   const problems = [];
@@ -453,10 +459,10 @@ export function checkDist(distDir, options = {}) {
         `${page}: <a href="${href}"> is closed by the parser, not by its own </a> — a nested <a>, or one left open across a block boundary`,
       );
     }
-    if (a.cmsScripts > 0) {
+    if (a.cmsScripts > 0 && !playground) {
       problems.push(`${page}: CMS injection — an inline script references the inkbrush client (${CMS_API_MARKER} or ${CMS_STAMP_MARKER})`);
     }
-    if (a.wikiStamps > 0) {
+    if (a.wikiStamps > 0 && !playground) {
       problems.push(`${page}: CMS injection — rehypeWikiBlocks stamps (${CMS_STAMP_MARKER}*) in a static build`);
     }
     const cmsAttrs = a.cmsAttrs.filter((v) => !explicitAllow.some((p) => v.includes(p)));
@@ -528,6 +534,7 @@ export function checkDist(distDir, options = {}) {
   }
 
   function checkScript(file) {
+    if (playground) return;
     const js = readFileSync(file, 'utf8');
     if (hasApiMark(js)) {
       problems.push(`${rel(file)}: CMS injection — a script bundle references the inkbrush client API (${CMS_API_MARKER})`);
@@ -539,7 +546,7 @@ export function checkDist(distDir, options = {}) {
   /** textual assets: executable markers only — site data may name the
    *  engine, and a paired design layer ships dormant chrome selectors */
   function checkAsset(file) {
-    if (!TEXTUAL_ASSET.test(file)) return;
+    if (playground || !TEXTUAL_ASSET.test(file)) return;
     const text = readFileSync(file, 'utf8');
     if (hasApiMark(text) || hasStampMark(text)) {
       problems.push(`${rel(file)}: CMS injection — an asset references the inkbrush client (${CMS_API_MARKER} or ${CMS_STAMP_MARKER})`);
@@ -601,7 +608,7 @@ export function main(argv) {
     return 0;
   }
   const valued = new Set(['--base', '--allow', '--skip']);
-  const flags = new Set(['--allow-empty']);
+  const flags = new Set(['--allow-empty', '--playground']);
   if (valued.has(argv[argv.length - 1])) {
     console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
     return 2;
@@ -619,6 +626,7 @@ export function main(argv) {
     allow: many('allow'),
     skip: many('skip'),
     allowEmpty: argv.includes('--allow-empty'),
+    playground: argv.includes('--playground'),
   });
   const scope = `${result.pages} pages / ${result.stylesheets} stylesheets / ${result.scripts} scripts / ${result.assets} assets / ${result.refs} references`;
   if (result.problems.length > 0) {
