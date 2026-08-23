@@ -5,8 +5,8 @@
  * `/root-other` pass as `/root`, and a symlink inside the root pointing
  * elsewhere would escape it.
  */
-import { existsSync, realpathSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 
 /** real path of `path`, or of its nearest existing ancestor joined with the rest */
 export function realpathDeep(path: string): string {
@@ -47,6 +47,26 @@ export function vaultPathCandidates(watchDir: string | null, name: string): stri
   const out: string[] = [];
   for (let i = 1; i < segments.length; i += 1) {
     const candidate = containedPath(watchDir, segments.slice(i).join('/'));
+    if (candidate) out.push(candidate);
+  }
+  return out;
+}
+
+/**
+ * Basename matches under every subfolder of an _assets dir. A clipper's
+ * bookkeeping and a file's real home can diverge — folder names created with
+ * trailing dots stripped, or the attachment location switched mid-history —
+ * so the embed path stops resolving even though the file is right there.
+ * Content-hash file names make a basename match unambiguous in practice;
+ * callers order this after the exact-path lookups.
+ */
+export function assetsBasenameCandidates(assetsDir: string, name: string): string[] {
+  if (!existsSync(assetsDir)) return [];
+  const base = basename(name);
+  const out: string[] = [];
+  for (const entry of readdirSync(assetsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const candidate = containedPath(join(assetsDir, entry.name), base);
     if (candidate) out.push(candidate);
   }
   return out;

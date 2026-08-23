@@ -66,7 +66,7 @@ import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, HttpError, json, readBody } from './index.ts';
-import { containedPath, isWithin, vaultPathCandidates } from './paths.ts';
+import { assetsBasenameCandidates, containedPath, isWithin, vaultPathCandidates } from './paths.ts';
 import { noteUrl } from './site.ts';
 import { autocommit, contentRoot, journalRevision, validateSource } from './source.ts';
 import { projectRoot, readJson, wikiDataDir, withLock, writeFileAtomic, writeJson } from './store.ts';
@@ -262,6 +262,9 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
       if (candidate && existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     }
     for (const candidate of vaultPathCandidates(inboxDir(), name)) {
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    }
+    for (const candidate of assetsBasenameCandidates(join(dirname(sourcePath), '_assets'), name)) {
       if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
     }
     return null;
