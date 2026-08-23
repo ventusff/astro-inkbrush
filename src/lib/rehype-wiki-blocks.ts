@@ -70,12 +70,21 @@ function isBlank(line: string | undefined): boolean {
   return line === undefined || line.trim() === '';
 }
 
-async function readRaw(path: string): Promise<string | null> {
+/**
+ * The raw file behind the vfile, null when unreadable. fs is reached through
+ * `process.getBuiltinModule`, never an import: the module also runs in
+ * browser bundles (the playground renders patched fragments with it), where
+ * there is no `process` and no file behind the vfile; and under Vite a
+ * workspace-linked copy of this package is evaluated by the module runner,
+ * whose dynamic `import()` is dead once config loading has finished while the
+ * pipeline keeps running.
+ */
+function readRaw(path: string): string | null {
+  const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } })
+    .process?.getBuiltinModule;
+  if (typeof getBuiltin !== 'function') return null;
   try {
-    // lazy: the plugin also runs in browser bundles (the playground renders
-    // patched fragments with it), where the vfile carries no path and fs
-    // must never be resolved at module load
-    const fs = await import('node:fs');
+    const fs = getBuiltin('node:fs') as typeof import('node:fs');
     return fs.readFileSync(path, 'utf8');
   } catch {
     return null;
@@ -83,7 +92,7 @@ async function readRaw(path: string): Promise<string | null> {
 }
 
 export function rehypeWikiBlocks() {
-  return async (tree: Root, file: VFile): Promise<void> => {
+  return (tree: Root, file: VFile): void => {
     const children = tree.children as unknown as AnyNode[];
 
     // Stamps must be RAW file lines — the server reads and writes blocks by
@@ -99,7 +108,7 @@ export function rehypeWikiBlocks() {
     // behind them.
     let offset = 0;
     let value = typeof file.value === 'string' ? file.value : '';
-    const raw = file.path ? await readRaw(file.path) : null;
+    const raw = file.path ? readRaw(file.path) : null;
     /** the value is the file, or the file's body (its tail modulo blanks) */
     let wholeNote = false;
     if (raw !== null) {

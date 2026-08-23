@@ -1,10 +1,9 @@
 /**
- * Stamps are RAW file lines. The transform is async (fs loads lazily so
- * browser bundles never resolve it) — direct calls await it. A pipeline that
- * strips the frontmatter before parsing (body-relative positions, body-only
- * vfile value — trimmed or not) gets the offset measured from where that
- * body sits in the raw file on disk; a pipeline whose positions already
- * count the frontmatter gets none.
+ * Stamps are RAW file lines. A pipeline that strips the frontmatter before
+ * parsing (body-relative positions, body-only vfile value — trimmed or not)
+ * gets the offset measured from where that body sits in the raw file on
+ * disk; a pipeline whose positions already count the frontmatter gets none.
+ * (The transform is synchronous; the `await`s below are harmless.)
  */
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
