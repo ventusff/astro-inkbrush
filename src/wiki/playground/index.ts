@@ -42,6 +42,8 @@ export interface PlaygroundStrings {
   tryIt: string;
   /** tooltip carrying the full promise */
   tryItHint: string;
+  /** toast shown right after activation — how to reach the block toolbar */
+  activeHint: string;
   active: string;
   /** shown next to `active` when local edits exist; #n is the count */
   edits: string;
@@ -50,9 +52,10 @@ export interface PlaygroundStrings {
   activateFailed: string;
 }
 
-const DEFAULT_STRINGS: PlaygroundStrings = {
+export const DEFAULT_STRINGS: PlaygroundStrings = {
   tryIt: 'Try editing',
   tryItHint: 'Edit this page — everything stays in your browser',
+  activeHint: 'Hover any paragraph to edit it — on a touch screen, tap it',
   active: 'Editing locally',
   edits: '#n local edit(s)',
   reset: 'Reset',

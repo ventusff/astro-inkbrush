@@ -17,9 +17,22 @@ import {
 import { applyOverlayToDom, buildOverlay, disableJsxAnchors, stampedElements } from './overlay';
 import { createRenderer } from './render';
 import { getIdentity, getOverrides } from './store';
-import type { PlaygroundConfig } from './index';
+import { DEFAULT_STRINGS, type PlaygroundConfig } from './index';
 
-import '../client/wiki.css';
+// The CMS stylesheet travels INSIDE this chunk as a string and is injected
+// at activation. A bare `import '../client/wiki.css'` is only honoured by
+// the dev server: a static host's build collects page-graph CSS at build
+// time and gives a lazily imported chunk's stylesheet to no page — the
+// editor chrome then renders as raw unstyled markup.
+import wikiCss from '../client/wiki.css?inline';
+
+function injectStyles(): void {
+  if (document.getElementById('inkbrush-playground-style')) return;
+  const el = document.createElement('style');
+  el.id = 'inkbrush-playground-style';
+  el.textContent = wikiCss;
+  document.head.append(el);
+}
 
 /** scroll restore across the reload that follows a saved edit (the same
  *  sessionStorage key the dev client uses) */
@@ -38,6 +51,7 @@ export interface Activation {
 }
 
 export async function activate(config: PlaygroundConfig, noteId: string): Promise<Activation | null> {
+  injectStyles();
   const res = await fetch(config.manifestUrl);
   if (!res.ok) return null;
   const manifest = (await res.json()) as PlaygroundManifest;
@@ -99,6 +113,12 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
   restoreScroll();
   const meta = await api.get<NoteMeta>(`/meta/${note.id}`);
   mountBlocks({ meta });
+
+  // the block toolbar is a hover/tap affordance — say so, or the page looks
+  // inert to a visitor who just clicked "try editing"
+  const strings = { ...DEFAULT_STRINGS, ...config.strings };
+  const { toast } = await import('../client/ui');
+  toast(strings.activeHint);
 
   return { note, editedSegments: overlay.segments.filter((s) => s.edited).length };
 }
