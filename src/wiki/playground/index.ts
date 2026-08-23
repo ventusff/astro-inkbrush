@@ -107,6 +107,7 @@ const BADGE_CSS = `
 .inkbrush-playground-badge button:hover {
   background: var(--color-bg-soft, color-mix(in srgb, canvas 88%, canvastext 12%));
 }
+.inkbrush-playground-badge .pg-label { white-space: nowrap; }
 .inkbrush-playground-badge .pg-reset { padding: 4px 8px; }
 @media (max-width: 520px) {
   /* A narrow nav bar has no seat to give: even a bare glyph squeezes the
