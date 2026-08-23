@@ -87,6 +87,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
                 '@codemirror/autocomplete',
                 '@codemirror/commands',
                 '@codemirror/lang-markdown',
+                '@codemirror/lang-yaml',
                 '@codemirror/language',
                 '@codemirror/state',
                 '@codemirror/view',
