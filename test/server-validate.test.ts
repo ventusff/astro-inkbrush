@@ -64,3 +64,9 @@ test("the site's rehype plugins run for both .md and .mdx", async () => {
   assert.match((await validateSource('a/index.mdx', 'text')) ?? '', /site rehype refused/);
   setSiteHooks(undefined);
 });
+
+test('the message names the file project-relative, never by its absolute path', async () => {
+  const problem = await validateSource('a/index.md', 'an **unclosed marker\n');
+  assert.match(problem ?? '', /(^|\s)a\/index\.md:\d+:\d+/);
+  assert.doesNotMatch(problem ?? '', new RegExp(process.cwd().replaceAll('\\', '\\\\')));
+});

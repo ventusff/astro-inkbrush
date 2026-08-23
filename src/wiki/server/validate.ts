@@ -12,7 +12,7 @@
  * a site mounts elsewhere are outside it. A note that fails is refused
  * before any write.
  */
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { validateNoteSource } from '../../lib/render-pipeline.ts';
@@ -29,13 +29,17 @@ export function withoutFrontmatter(source: string): string {
  *  absolute, judged by extension) passes; the absolute path is the vfile
  *  path, as in the build. The pipeline itself is lib/render-pipeline.ts
  *  (shared with the playground); this wrapper supplies the deployment's
- *  hooks and resolves the path. */
+ *  hooks and resolves the path. The message names files project-relative:
+ *  the editor shows it in the browser, where the server's directory layout
+ *  is noise. */
 export async function validateSource(file: string, source: string): Promise<string | null> {
   const site = siteHooks();
-  return validateNoteSource(source, {
+  const root = projectRoot();
+  const problem = await validateNoteSource(source, {
     site,
     guard: site.guard ?? {},
     mdx: file.endsWith('.mdx'),
-    path: resolve(projectRoot(), file),
+    path: resolve(root, file),
   });
+  return problem === null ? null : problem.split(root + sep).join('');
 }
