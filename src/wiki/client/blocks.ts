@@ -6,11 +6,13 @@
  * invisible `<template data-wiki-src … data-wiki-jsx>` anchor bound here to
  * its next element sibling; the frontmatter's `<template data-wiki-src …
  * data-wiki-frontmatter>` anchor binds to the site's
- * `[data-inkbrush-slot="frontmatter"]` element (the page head that renders
- * title and description), falling back to the page's first `h1`. One shared
- * handle (a toolbar) follows the active block; ✎ opens the in-place source
- * editor, ✦ opens the Claude popover (markdown blocks only), ⟲ opens the
- * revision-history popover (view diffs / one-click revert).
+ * `[data-inkbrush-slot="frontmatter"]` element — the page head, meta strip
+ * or whatever the layout renders from the frontmatter (no slot, no
+ * frontmatter block: a heading guessed from the page could be a stamped
+ * body block already). One shared handle (a toolbar) follows the active
+ * block; ✎ opens the in-place source editor, ✦ opens the Claude popover
+ * (markdown blocks only), ⟲ opens the revision-history popover (view diffs /
+ * one-click revert).
  *
  * Activation paths: hovering a block (fine pointer), tapping a block (coarse
  * pointer), or focusing a block / a control inside it (keyboard). Keyboard
@@ -34,13 +36,9 @@ export interface BlockRef {
   frontmatter: boolean;
 }
 
-/** the element the frontmatter anchor binds to: the site's declared slot,
- *  else the page's first heading (the title is frontmatter nearly everywhere) */
+/** the element the frontmatter anchor binds to: the site's declared slot */
 function frontmatterHost(): HTMLElement | null {
-  return (
-    document.querySelector<HTMLElement>('[data-inkbrush-slot="frontmatter"]') ??
-    document.querySelector<HTMLElement>('h1')
-  );
+  return document.querySelector<HTMLElement>('[data-inkbrush-slot="frontmatter"]');
 }
 
 function collectBlocks(): BlockRef[] {

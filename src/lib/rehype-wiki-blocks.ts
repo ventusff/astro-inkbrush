@@ -16,9 +16,10 @@
  *    taxonomy), never by this pipeline, so it gets a `<template
  *    data-wiki-src="1-N" data-wiki-frontmatter>` anchor as the first child
  *    of the body; the client binds it to the site's
- *    `[data-inkbrush-slot="frontmatter"]` element (the page head). Emitted
- *    only when the processed value is the note file itself (or its body),
- *    read from disk — a fragment render has no frontmatter of its own.
+ *    `[data-inkbrush-slot="frontmatter"]` element (the page head or meta
+ *    strip). Emitted only when the processed value is the note file itself
+ *    (or its body), read from disk — a fragment render has no frontmatter
+ *    of its own.
  *
  * Position fallbacks (in order): the node's own position → first/last
  * positioned descendant (e.g. div.tbl-wrap wrappers) → the gap between the

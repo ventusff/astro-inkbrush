@@ -62,9 +62,9 @@ npm test
   `--wiki-chip-top/right`), `[data-inkbrush-slot="share"]` (required for
   the share button), `[data-inkbrush-slot="comments"]` for the comment
   section mount (falls back to a `.note-main .col` container),
-  `[data-inkbrush-slot="frontmatter"]` on the page head that renders the
-  frontmatter — the ✎ handle for the YAML block binds there (falls back to
-  the page's first `h1`).
+  `[data-inkbrush-slot="frontmatter"]` on the element that renders the
+  frontmatter (page head, meta strip) — the ✎ handle for the YAML block
+  binds there (required: no slot, no frontmatter block).
 - `inkbrush.config.ts` (site root, per-machine, gitignored) +
   `defineInkbrushConfig`: auth / identity / inbox / autocommit / autopush /
   claude / content / share. CMS concerns only — no site business.

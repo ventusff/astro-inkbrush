@@ -78,11 +78,13 @@ On success, Astro's content HMR reloads the page and your scroll position is
 restored.
 
 The **frontmatter** edits the same way: rehype-wiki-blocks anchors it to the
-page head, so hovering the title (the element your layout marks
-`[data-inkbrush-slot="frontmatter"]`, else the page's first `h1`) offers
-the ✎ handle over the YAML block — title, description, tags, whatever your
-layout renders from it. YAML gets no preview (the page head re-renders from
-it on save); the save gate requires it to parse. The ✦ is not offered there.
+element your layout marks `[data-inkbrush-slot="frontmatter"]` — the page
+head, the meta strip, whatever renders title, description, tags from it —
+so hovering that element offers the ✎ handle over the YAML block. The slot
+is required (no slot, no frontmatter block: a heading guessed from the page
+could be a body block already). YAML gets no preview (the page head
+re-renders from it on save); the save gate requires it to parse. The ✦ is
+not offered there.
 
 ### AI assist (✦)
 
