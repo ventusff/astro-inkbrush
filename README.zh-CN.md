@@ -28,7 +28,11 @@ git 提交。没有数据库、没有管理后台、没有独立的写作应用�
 它与 [**astro-inkstone**](https://github.com/ventusff/astro-inkstone)(砚)是
 姊妹项目——一个纸墨质感的设计层。Inkbrush 只给自己的编辑 chrome 上样式(颜色
 取自你页面的 token),不带任何页面样式与布局:接到你自己的站上用,或与
-Inkstone 配套获得完整观感。
+Inkstone 配套获得完整观感。**想看编辑器动起来的样子**——公式、表格、`[[双链]]`、
+frontmatter 原地编辑,守门拒绝一次坏的保存——见
+[Inkstone 的 README](https://github.com/ventusff/astro-inkstone/blob/main/README.zh-CN.md),
+也可以直接在 [Inkstone 示范站](https://ventusff.github.io/astro-inkstone/zh/kitchen-sink/)
+的浏览器里试。
 
 ## 特性
 

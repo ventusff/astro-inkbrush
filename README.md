@@ -30,7 +30,11 @@ It is the sibling of [**astro-inkstone**](https://github.com/ventusff/astro-inks
 (砚 — the ink stone), a paper-and-ink design layer. Inkbrush styles only its
 own editing chrome (through tokens it takes from your page) and ships no page
 styling and no layout — bring your own site, or pair it with Inkstone for
-the full look.
+the full look. **See the editor in motion** — formulas, tables, `[[wikilinks]]`
+and the frontmatter edited in place, the guard refusing a broken save — in the
+[Inkstone README](https://github.com/ventusff/astro-inkstone#readme), and try it
+yourself in the browser on the
+[Inkstone demo](https://ventusff.github.io/astro-inkstone/kitchen-sink/).
 
 ## Features
 
