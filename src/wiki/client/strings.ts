@@ -163,6 +163,8 @@ interface Strings {
     signInToRevert: string;
     noRecords: string;
     loadFailed: string;
+    /** load-more control under the first page of the revision list */
+    showMore: (n: number) => string;
   };
   comments: {
     sectionTitle: string;
@@ -287,7 +289,7 @@ const en: Strings = {
     edit: 'Edit this block (opens the source)',
     ai: 'Ask Claude to edit this block',
     history: 'Revision history / revert',
-    signInFirst: 'Sign in first (top right) to edit',
+    signInFirst: 'Sign in to edit',
     editorLoadFailed: 'Editor failed to load — refresh the page and retry',
     aiLoadFailed: 'AI panel failed to load — refresh the page and retry',
     historyLoadFailed: 'History panel failed to load — refresh the page and retry',
@@ -353,7 +355,7 @@ const en: Strings = {
     thinking: 'Claude is thinking…',
     emptyHint: 'Ask about this note; Claude reads the source file directly on the server.',
     newChatStarted: 'Started a new conversation',
-    signInFirst: 'Sign in first (top right)',
+    signInFirst: 'Sign in first',
     translateConfirm: (label) =>
       `Generate the ${label} version with Claude?\nThe whole note is re-told in the target language (structure and formulas preserved) and any demo language tables are updated. This takes a few minutes.`,
     translateAction: (label) => `✦ Generate the ${label} version (full re-telling translation)`,
@@ -376,9 +378,10 @@ const en: Strings = {
     revertTitle: 'Restore the content from before this change',
     reverted: 'Reverted — reloading…',
     revertFailed: 'Revert failed',
-    signInToRevert: 'Sign in first (top right) to revert',
+    signInToRevert: 'Sign in to revert',
     noRecords: 'No revisions recorded for this block yet',
     loadFailed: 'Failed to load revision history',
+    showMore: (n) => (n === 1 ? 'Show 1 older revision' : `Show ${n} older revisions`),
   },
   comments: {
     sectionTitle: 'Comments',
@@ -437,11 +440,17 @@ const en: Strings = {
 const ZH_TOOL_VERBS: Record<string, string> = {
   Read: '读取',
   Edit: '编辑',
+  MultiEdit: '批量编辑',
   Write: '写入',
+  NotebookEdit: '编辑笔记本',
   Grep: '检索',
   Glob: '列文件',
   Bash: '命令',
+  WebSearch: '搜索网页',
+  WebFetch: '抓取网页',
+  TodoWrite: '更新待办',
   Task: '子任务',
+  Agent: '子任务',
 };
 
 const ZH_LOGIN_ERRORS: Record<string, string> = {
@@ -512,7 +521,7 @@ const zh: Strings = {
     edit: '编辑此块（点击展开源码）',
     ai: '让 Claude 修改此块',
     history: '本块修订历史 / 回滚',
-    signInFirst: '请先登录（右上角）再编辑',
+    signInFirst: '请先登录再编辑',
     editorLoadFailed: '编辑器加载失败，请刷新页面重试',
     aiLoadFailed: 'AI 面板加载失败，请刷新页面重试',
     historyLoadFailed: '历史面板加载失败，请刷新页面重试',
@@ -573,7 +582,7 @@ const zh: Strings = {
     thinking: 'Claude 思考中…',
     emptyHint: '针对本篇笔记提问；Claude 会在服务器上直接阅读源文件作答。',
     newChatStarted: '已开启新对话',
-    signInFirst: '请先登录（右上角）',
+    signInFirst: '请先登录',
     translateConfirm: (label) =>
       `用 Claude 生成${label}版？\n整篇笔记会在目标语言下重述（结构与公式保持不变），并同步更新 demo 的多语言标示，耗时数分钟。`,
     translateAction: (label) => `✦ 生成${label}版（整篇重述式翻译）`,
@@ -596,9 +605,10 @@ const zh: Strings = {
     revertTitle: '把这次修改撤销回改动前的内容',
     reverted: '已回滚，页面即将刷新',
     revertFailed: '回滚失败',
-    signInToRevert: '请先登录（右上角）再回滚',
+    signInToRevert: '请先登录再回滚',
     noRecords: '此块还没有修订记录',
     loadFailed: '加载修订历史失败',
+    showMore: (n) => `展开更早的 ${n} 条修订`,
   },
   comments: {
     sectionTitle: '讨论',

@@ -2,6 +2,11 @@ node_modules/
 dist/
 .astro/
 .wiki/
+
+# secrets are environment-based and never committed
+.env
+.env.*
+*.log
 # per-deployment instance config (domains/dirs/login providers — never
 # committed); the template inkbrush.config.example.ts IS committed. Anchored
 # to the repo root so a demo site may commit its own config.

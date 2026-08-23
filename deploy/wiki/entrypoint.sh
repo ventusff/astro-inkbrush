@@ -97,7 +97,7 @@ if ! git -C "$D" diff --quiet HEAD -- "$LOCKFILES" "$LOCKFILES2" 2>/dev/null; th
     git -C "$D" checkout -q -- "$LOCKFILES" "$LOCKFILES2"
 fi
 
-# Uncommitted changes in the volume are CMS saves that did not reach git.
+# Uncommitted changes in the volume are CMS saves not yet in git.
 # Recovery spans the whole repo, not only CONTENT_DIR — companion files live
 # outside it: every tracked change (except the engine submodule pointer;
 # lockfiles already match HEAD) plus new files under CONTENT_DIR. Untracked
@@ -124,9 +124,9 @@ if ! git -C "$D" merge --ff-only "origin/$BRANCH" 2>/dev/null; then
 fi
 
 # Push policy: a recovery commit exists only in this volume and autopush
-# replays only future saves, so it is pushed now and a failed push stops
-# the container (under set -e). With nothing recovered, any older local
-# commits are autopush's to deliver — no push, no failure here.
+# replays only future saves, so this step must push it, and a failed push
+# stops the container (under set -e). With nothing recovered, any older
+# local commits are autopush's to deliver — no push, no failure here.
 if [ "$RECOVERED" = 1 ]; then
     echo "[entrypoint] pushing recovered commits ..."
     git -C "$D" push origin "HEAD:$BRANCH"

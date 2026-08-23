@@ -168,6 +168,28 @@ test('MDX comments and template literals are the two allowed expressions', async
   assert.equal(await guardMdx('style={`--w:${"50"}%`}\n\nplain text'), null);
 });
 
+test('an expression that merely begins with a template literal flags', async () => {
+  // the program must be exactly one ExpressionStatement whose whole
+  // expression is a TemplateLiteral — a template literal followed by an
+  // operator, comma or member access is evaluated JS like any other
+  for (const body of [
+    'x {`a`, "swallowed"} y',
+    'x {`a` + z} y',
+    'x {`a`.length} y',
+    'x {y = `a`} y',
+  ]) {
+    const report = await guardMdx(body);
+    assert.ok(flagged(report), body);
+    assert.match(report, /JS expression/);
+  }
+  // the lone template literal stays allowed, interpolations included, in
+  // both text and flow position
+  assert.equal(await guardMdx('x {`--w:${"50"}%`} y'), null);
+  assert.equal(await guardMdx('{`standalone ${1 + 1}`}'), null);
+  // an empty expression is still a finding
+  assert.ok(flagged(await guardMdx('x {} y')));
+});
+
 /* ---------------- renderedProps whitelist ---------------- */
 
 test('math in a non-whitelisted component prop flags', async () => {

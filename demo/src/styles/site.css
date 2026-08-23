@@ -6,7 +6,7 @@
   --bg: #fdfdfc;
   --ink: #1d2126;
   --ink-soft: #4b5259;
-  --ink-faint: #8a9096;
+  --ink-faint: #676d73; /* >=4.5:1 as small text on --bg and --code-bg */
   --line: #e4e2dd;
   --accent: #22665c;
   --code-bg: #f2f1ed;

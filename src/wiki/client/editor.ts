@@ -4,8 +4,8 @@
  * Wikipedia section editing, one block at a time.
  *
  * Save = PUT /block (optimistic lock via slice hash + whole-file MDX compile
- * gate on the server). On success astro's content HMR reloads the page; we
- * remember the scroll position so the reader doesn't lose their place.
+ * gate on the server). On success astro's content HMR reloads the page; the
+ * scroll position is remembered so the reader doesn't lose their place.
  */
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';

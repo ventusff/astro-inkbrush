@@ -24,23 +24,51 @@
  *  - `inbox.ignore` (config) skips files by vault-relative path or basename
  *    prefix.
  *
+ * Import safety: the conversion stages its assets in a temp directory and
+ * builds the note source in memory — nothing touches the content tree yet.
+ * The result must pass the same validateSource gate a manual save passes.
+ * Publication happens under the note file's write lock (the key manual
+ * saves hold): the current content is read as the journal's true `before`,
+ * a slug whose note no longer matches the last import's output is refused
+ * (a manual edit always wins), assets land before the note, each file
+ * moved into place atomically. The revision is journaled whole-file
+ * (lines '*') with the real before/after, and the git autocommit is
+ * awaited on the same path manual saves use — a failed commit is reported
+ * with the file named. A failed conversion or validation leaves no partial
+ * files anywhere.
+ *
  * Files that exist when the watcher starts are marked as seen and not
  * imported; POST /api/wiki/inbox/import {path} imports a specific file.
  * State lives in .wiki/data/inbox-sync.json (content hash → re-import on
- * change, same slug); every read-modify-write of it holds its lock.
+ * change, same slug); every read-modify-write of it holds its lock. Paths
+ * are compared segment-wise (src/lib/path-segments.ts), so the filters and
+ * state keys hold on Windows separators too.
  */
 import { watch, type FSWatcher } from 'chokidar';
-import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
+import { splitFrontmatter } from '../../lib/frontmatter.ts';
+import { hasPathSegment, toPosixPath } from '../../lib/path-segments.ts';
 import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type MaskOptions } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
-import { fail, json, readBody } from './index.ts';
+import { fail, HttpError, json, readBody } from './index.ts';
 import { containedPath, isWithin, vaultPathCandidates } from './paths.ts';
 import { noteUrl } from './site.ts';
-import { autocommit, contentRoot, journalRevision } from './source.ts';
+import { autocommit, contentRoot, journalRevision, validateSource } from './source.ts';
 import { projectRoot, readJson, wikiDataDir, withLock, writeFileAtomic, writeJson } from './store.ts';
 
 /** configured watch dir (absolute, ~ expanded) — null = inbox sync disabled */
@@ -51,7 +79,17 @@ export function inboxDir(): string | null {
 /* ---------------- sync state ---------------- */
 
 interface SyncState {
-  [relPath: string]: { slug: string; hash: string; importedAt: number | null };
+  [relPath: string]: {
+    slug: string;
+    /** content hash of the vault source at last import */
+    hash: string;
+    /** content hash of the note the importer published — the re-import
+     *  baseline: a published note that no longer matches was edited by
+     *  hand and is never overwritten (absent on records from before this
+     *  field existed; such notes also refuse re-import until reconciled) */
+    noteHash?: string;
+    importedAt: number | null;
+  };
 }
 
 function stateFile(): string {
@@ -60,6 +98,11 @@ function stateFile(): string {
 
 function contentHash(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
+}
+
+/** the state key of a vault file: its vault-relative path, `/`-spelled */
+function stateKey(dir: string, sourcePath: string): string {
+  return toPosixPath(relative(dir, resolve(sourcePath)));
 }
 
 /* ---------------- obsidian → site markdown ---------------- */
@@ -71,24 +114,37 @@ interface ObsidianFrontmatter {
   saved?: string;
 }
 
+/** a frontmatter value as a display string: a scalar, or a one-item list's
+ *  scalar (clippers wrap authors in lists); anything else is absent */
+function fmString(value: unknown): string | undefined {
+  const scalar = Array.isArray(value) ? value[0] : value;
+  if (typeof scalar === 'string') return scalar;
+  if (typeof scalar === 'number' || typeof scalar === 'boolean') return String(scalar);
+  return undefined;
+}
+
+/**
+ * Vault-note frontmatter via the shared splitter — real YAML, so multiline
+ * values, lists and quoting all read correctly. Tolerant by design: a file
+ * with broken YAML still imports, with minimal metadata ({}) and the block
+ * blanked out of the body, rather than failing the import. Clipped pages
+ * often carry entity-encoded values; the common entities are decoded.
+ */
 function parseObsidianNote(raw: string): { fm: ObsidianFrontmatter; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
-  if (!match) return { fm: {}, body: raw };
+  const split = splitFrontmatter(raw);
   const fm: ObsidianFrontmatter = {};
-  for (const line of match[1]!.split('\n')) {
-    const kv = /^(author|source|url|saved):\s*(.+)$/.exec(line.trim());
-    if (kv) {
-      fm[kv[1] as keyof ObsidianFrontmatter] = kv[2]!
-        .trim()
-        .replace(/^['"]|['"]$/g, '')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'");
-    }
+  for (const key of ['author', 'source', 'url', 'saved'] as const) {
+    const value = fmString(split.data[key]);
+    if (value === undefined) continue;
+    fm[key] = value
+      .trim()
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
   }
-  return { fm, body: raw.slice(match[0].length) };
+  return { fm, body: split.body };
 }
 
 /** derive the import date: parent folder "YYYY-MM-DD" → frontmatter saved → today */
@@ -105,8 +161,7 @@ function noteDate(sourcePath: string, fm: ObsidianFrontmatter): string {
 function vaultRelPath(sourcePath: string): string {
   const dir = inboxDir();
   const abs = resolve(sourcePath);
-  const rel = dir !== null && isWithin(dir, abs) ? relative(dir, abs) : basename(abs);
-  return rel.split(sep).join('/');
+  return dir !== null && isWithin(dir, abs) ? toPosixPath(relative(dir, abs)) : basename(abs);
 }
 
 /** the slug of a NEW import: date + a hash of the vault-relative path, so
@@ -162,23 +217,37 @@ function deriveDescription(body: string, title: string): string {
   return title;
 }
 
+/** what a conversion produces — everything still in memory or in the stage
+ *  directory, nothing in the content tree */
+interface StagedNote {
+  slug: string;
+  /** the full index.md source */
+  source: string;
+  /** asset file names, staged flat inside the stage directory */
+  assets: string[];
+  warnings: string[];
+}
+
+/** the outcome of a published import */
 export interface ConvertResult {
   slug: string;
+  /** the published note directory (absolute) */
   noteDir: string;
   assetsCopied: number;
   warnings: string[];
 }
 
-export function convertObsidianNote(sourcePath: string, opts?: { slug?: string }): ConvertResult {
+/**
+ * Convert one vault note. Assets are copied into `stageDir` (which must
+ * exist) under their final names; the note source is returned, not
+ * written — publication is importNote's job.
+ */
+export function convertObsidianNote(sourcePath: string, opts: { stageDir: string; slug?: string }): StagedNote {
   const raw = readFileSync(sourcePath, 'utf8');
   const { fm, body } = parseObsidianNote(raw);
   const title = basename(sourcePath).replace(/\.md$/, '');
-  const slug = opts?.slug ?? slugFor(sourcePath, fm);
+  const slug = opts.slug ?? slugFor(sourcePath, fm);
   const warnings: string[] = [];
-
-  // assets co-locate with the note in its directory
-  const noteDir = join(contentRoot(), 'inbox', slug);
-  let assetsCopied = 0;
 
   /** obsidian keeps embeds in `<note dir>/_assets/<note name>/`; a name
    *  only ever resolves to a file inside one of these roots */
@@ -198,10 +267,10 @@ export function convertObsidianNote(sourcePath: string, opts?: { slug?: string }
     return null;
   };
 
-  /** copy an asset beside the note under a collision-safe name: the first
-   *  source file to claim a basename keeps it; a different source file
-   *  claiming a taken name gets a content-hash suffix, and one source file
-   *  referenced twice is copied once */
+  /** stage an asset under a collision-safe name: the first source file to
+   *  claim a basename keeps it; a different source file claiming a taken
+   *  name gets a content-hash suffix, and one source file referenced twice
+   *  is copied once */
   const copiedNames = new Map<string, string>(); // source path → output name
   const takenNames = new Set<string>();
   const copyAsset = (found: string): string => {
@@ -215,16 +284,14 @@ export function convertObsidianNote(sourcePath: string, opts?: { slug?: string }
     }
     takenNames.add(name);
     copiedNames.set(found, name);
-    mkdirSync(noteDir, { recursive: true });
-    copyFileSync(found, join(noteDir, name));
-    assetsCopied++;
+    copyFileSync(found, join(opts.stageDir, name));
     return name;
   };
 
   let markdown = body;
 
   // ![[file|alt]] image/file embeds (prose only — a spelling inside code
-  // stays literal) → copy asset + standard image syntax
+  // stays literal) → stage asset + standard image syntax
   markdown = replaceInProse(markdown, /!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, file, alt) => {
     const found = resolveAsset(file!.trim());
     if (!found) {
@@ -293,19 +360,23 @@ export function convertObsidianNote(sourcePath: string, opts?: { slug?: string }
     '---',
   ].join('\n');
 
-  writeFileAtomic(join(noteDir, 'index.md'), `${frontmatter}\n\n${attribution}${markdown.trim()}\n`);
-  return { slug, noteDir, assetsCopied, warnings };
+  return {
+    slug,
+    source: `${frontmatter}\n\n${attribution}${markdown.trim()}\n`,
+    assets: [...copiedNames.values()],
+    warnings,
+  };
 }
 
 /* ---------------- import orchestration ---------------- */
 
 function isInboxNote(path: string): boolean {
   if (!path.endsWith('.md')) return false;
-  if (path.includes('/_assets/')) return false;
+  if (hasPathSegment(path, '_assets')) return false;
   // config-driven skip list (inkbrush.config.ts → inbox.ignore): each entry
   // is a prefix of the vault-relative path or of the basename
   const dir = inboxDir();
-  const rel = dir ? relative(dir, resolve(path)) : basename(path);
+  const rel = dir ? stateKey(dir, path) : basename(path);
   const name = basename(path);
   for (const entry of wikiConfig().inbox.ignore) {
     if (rel.startsWith(entry) || name.startsWith(entry)) return false;
@@ -313,48 +384,111 @@ function isInboxNote(path: string): boolean {
   return true;
 }
 
+/** move `src` into place: a sibling temp copy renamed over `dest`, so a
+ *  reader sees the old file or the new one, never a torn copy */
+function publishFile(src: string, dest: string): void {
+  const tmp = `${dest}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    copyFileSync(src, tmp);
+    renameSync(tmp, dest);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* temp copy never created or already gone */
+    }
+    throw err;
+  }
+}
+
 export async function importNote(sourcePath: string, opts?: { force?: boolean }): Promise<ConvertResult | null> {
   const dir = inboxDir();
   if (!dir) throw new Error('Inbox is not enabled (inkbrush.config.ts → inbox.dir)');
   const abs = resolve(sourcePath);
   if (!isWithin(dir, abs)) throw new Error('note is outside the inbox directory');
-  const rel = relative(dir, abs);
+  const rel = stateKey(dir, abs);
   const raw = readFileSync(abs, 'utf8');
   const hash = contentHash(raw);
-  const result = await withLock(stateFile(), () => {
+  const result = await withLock(stateFile(), async () => {
     const state = readJson<SyncState>(stateFile(), {});
     const existing = state[rel];
     if (!opts?.force && existing?.hash === hash && existing.importedAt !== null) return null;
-    // a re-import keeps the slug the state recorded at first import, so the
-    // note id (and its URL) never changes under a slug-rule change
-    const converted = convertObsidianNote(abs, existing?.slug ? { slug: existing.slug } : undefined);
-    state[rel] = { slug: converted.slug, hash, importedAt: Date.now() };
-    writeJson(stateFile(), state);
-    return converted;
+    // the conversion stages into a temp directory; a failure below leaves
+    // nothing behind but this directory, removed on every path
+    const stage = mkdtempSync(join(tmpdir(), 'inkbrush-inbox-'));
+    try {
+      // a re-import keeps the slug the state recorded at first import, so
+      // the note id (and its URL) never changes under a slug-rule change
+      const staged = convertObsidianNote(abs, {
+        stageDir: stage,
+        ...(existing?.slug ? { slug: existing.slug } : {}),
+      });
+      const noteDir = join(contentRoot(), 'inbox', staged.slug);
+      const noteRel = relative(projectRoot(), join(noteDir, 'index.md'));
+      // the same gate a manual save passes: a note that would not build is
+      // refused before anything reaches the content tree
+      const problem = await validateSource(noteRel, staged.source);
+      if (problem) throw new Error(`converted note would not build — not imported: ${problem}`);
+
+      // publish under the note file's write lock — the key manual saves
+      // hold — so an in-flight manual edit and this import serialize
+      const lockKey = containedPath(contentRoot(), join('inbox', staged.slug, 'index.md')) ?? join(noteDir, 'index.md');
+      await withLock(lockKey, () => {
+        const current = existsSync(lockKey) ? readFileSync(lockKey, 'utf8') : null;
+        if (current === staged.source) {
+          // identical content: nothing to write or journal
+        } else {
+          if (current !== null && contentHash(current) !== existing?.noteHash) {
+            // the note on disk is not what the importer published (a manual
+            // edit, or a record predating the baseline): a manual edit
+            // always wins — refuse, force included
+            throw new HttpError(
+              409,
+              `refusing to overwrite ${noteRel}: it no longer matches the last import — reconcile or remove the note first`,
+            );
+          }
+          mkdirSync(noteDir, { recursive: true });
+          // assets land before the note: a reader never sees a note whose
+          // assets are missing
+          for (const name of staged.assets) publishFile(join(stage, name), join(noteDir, name));
+          writeFileAtomic(join(noteDir, 'index.md'), staged.source);
+          // whole-file journal record with the true before/after (creation:
+          // before '', the server's convention for new files)
+          journalRevision({
+            ts: Date.now(),
+            user: 'inbox-sync',
+            note: `inbox/${staged.slug}`,
+            lines: '*',
+            via: 'inbox',
+            before: current ?? '',
+            after: staged.source,
+          });
+        }
+      });
+      state[rel] = { slug: staged.slug, hash, noteHash: contentHash(staged.source), importedAt: Date.now() };
+      writeJson(stateFile(), state);
+      return { staged, noteDir };
+    } finally {
+      rmSync(stage, { recursive: true, force: true });
+    }
   });
   if (!result) return null;
-  journalRevision({
-    ts: Date.now(),
-    user: 'inbox-sync',
-    note: `inbox/${result.slug}`,
-    lines: '*',
-    via: 'inbox',
-    before: '',
-    after: `imported from ${rel}`,
-  });
-  void autocommit(
-    relative(projectRoot(), result.noteDir),
-    `wiki: inbox/${result.slug} Obsidian import`,
-    'inbox-sync',
-  );
-  console.log(`[wiki inbox] imported "${rel}" → inbox/${result.slug} (${result.assetsCopied} assets)`);
-  for (const warning of result.warnings) console.warn(`[wiki inbox]   ⚠ ${warning}`);
-  return result;
+  const { staged, noteDir } = result;
+  const noteRelDir = relative(projectRoot(), noteDir);
+  // the commit is awaited on the same git path manual saves use; a failure
+  // names the uncommitted files
+  const git = await autocommit(noteRelDir, `wiki: inbox/${staged.slug} Obsidian import`, 'inbox-sync');
+  if (git === 'failed') {
+    console.error(`[wiki inbox] git commit FAILED for ${noteRelDir} — the import is on disk but not committed`);
+  }
+  console.log(`[wiki inbox] imported "${rel}" → inbox/${staged.slug} (${staged.assets.length} assets)`);
+  for (const warning of staged.warnings) console.warn(`[wiki inbox]   ⚠ ${warning}`);
+  return { slug: staged.slug, noteDir, assetsCopied: staged.assets.length, warnings: staged.warnings };
 }
 
 /** mark a pre-existing file as seen without importing it */
 function markSeen(dir: string, sourcePath: string): Promise<void> {
-  const rel = relative(dir, resolve(sourcePath));
+  const rel = stateKey(dir, sourcePath);
   return withLock(stateFile(), () => {
     const state = readJson<SyncState>(stateFile(), {});
     if (state[rel]) return;
@@ -387,8 +521,9 @@ export function startInboxWatcher(): void {
     ignoreInitial: false,
     awaitWriteFinish: { stabilityThreshold: 800, pollInterval: 120 },
     // assets are read on demand at conversion time — watching the (large)
-    // _assets image trees only burns inotify watches
-    ignored: (path) => path.includes('/_assets'),
+    // _assets image trees only burns inotify watches. Segment comparison:
+    // the watcher hands back native separators on Windows.
+    ignored: (path) => hasPathSegment(path, '_assets'),
   });
   const report = (what: string, path: string) => (err: unknown): void => {
     console.error(`[wiki inbox] ${what} failed for ${path}:`, err);
@@ -401,9 +536,8 @@ export function startInboxWatcher(): void {
   watcher.on('change', (path) => {
     if (!ready || !isInboxNote(path)) return;
     // only a note imported before is re-imported on change
-    const rel = relative(dir, resolve(path));
     const state = readJson<SyncState>(stateFile(), {});
-    if (state[rel]?.importedAt === null) return;
+    if (state[stateKey(dir, path)]?.importedAt === null) return;
     importNote(path).catch(report('re-import', path));
   });
   watcher.on('ready', () => {

@@ -125,7 +125,7 @@ by design):
 import { inkbrush, rehypeWikiBlocks } from 'astro-inkbrush';
 import { markdownProcessor } from 'astro-inkbrush/markdown';
 
-const WIKI_MODE = Boolean(process.env.WIKI);
+const WIKI_MODE = process.env.WIKI === '1' || process.env.WIKI === 'true';
 
 const remarkPlugins = [/* yours */];
 const rehypePlugins = [/* yours */];

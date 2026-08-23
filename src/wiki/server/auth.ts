@@ -11,8 +11,8 @@
  *    missing); sites sharing the secret and a cookie Domain share the session.
  * Cookie name / Domain / TTL come from `auth.session` (defaults:
  * wiki_session, host-only, 30d hmac / 7d jwt); Secure is set when the
- * configured external baseUrl is https or the request arrived over https
- * (direct TLS or x-forwarded-proto).
+ * configured external baseUrl is https or the request itself is https
+ * (direct TLS; x-forwarded-proto counts only under `server.trustProxy`).
  *
  * Providers (toggled per deployment in inkbrush.config.ts → auth):
  *  - dev:    quick login with any name/email — personal machines and
@@ -40,6 +40,8 @@ import { jwtVerify, SignJWT } from 'jose';
 import type { GoogleAuthState, WikiUser } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
 import { HttpError } from './index.ts';
+import { createSingleUse, decodeOAuthState, encodeOAuthState } from './oauth-state.ts';
+import { sessionPayloadUser } from './session-payload.ts';
 import { sessionSecret } from './store.ts';
 
 /* ---------------- signed cookie session ---------------- */
@@ -54,17 +56,21 @@ function sessionConf(): ReturnType<typeof wikiConfig>['auth']['session'] {
 }
 
 /** external base URL of this deployment as configured (SAML first, then
- *  Google) — null when neither provider pins one (plain local dev) */
-function configuredBaseUrl(): string | null {
+ *  Google) — null when neither provider pins one (plain local dev). When
+ *  set, it is also the canonical own-origin for the CSRF origin check. */
+export function configuredBaseUrl(): string | null {
   const auth = wikiConfig().auth;
   if (auth.googleSaml !== false && auth.googleSaml.baseUrl) return auth.googleSaml.baseUrl;
   if (auth.google !== false && auth.google.baseUrl) return auth.google.baseUrl;
   return null;
 }
 
-/** https detection: direct TLS, or the reverse proxy's x-forwarded-proto (traefik/nginx) */
+/** https detection: direct TLS always; the reverse proxy's
+ *  x-forwarded-proto only under `server.trustProxy` — without a proxy that
+ *  overwrites it, the header is client input and proves nothing */
 export function isSecureRequest(req: IncomingMessage): boolean {
   if ((req.socket as { encrypted?: boolean }).encrypted) return true;
+  if (!wikiConfig().server.trustProxy) return false;
   const proto = req.headers['x-forwarded-proto'];
   return (Array.isArray(proto) ? proto[0] : proto)?.split(',')[0]?.trim() === 'https';
 }
@@ -168,9 +174,9 @@ export async function sessionUser(req: IncomingMessage): Promise<WikiUser | null
   const payload = value.slice(0, dot);
   if (!macEquals(value.slice(dot + 1), sign(payload))) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString()) as SessionPayload;
-    if (parsed.exp < Date.now()) return null;
-    return parsed.user;
+    // the MAC proves the server minted the bytes; the shape check proves
+    // they still are a session (./session-payload.ts)
+    return sessionPayloadUser(JSON.parse(Buffer.from(payload, 'base64url').toString()), Date.now());
   } catch {
     return null;
   }
@@ -245,17 +251,19 @@ function redirectUri(req: IncomingMessage): string {
 }
 
 /* ---- the authorization request, bound to the browser that made it ----
- * state = b64url({ nonce, returnTo }) + '.' + HMAC; the nonce and the PKCE
- * verifier also sit in a short-lived cookie, so the callback is accepted
- * only from the browser that started the flow, and only once. */
+ * state = b64url({ nonce, returnTo, iat }) + '.' + HMAC (./oauth-state.ts);
+ * the nonce and the PKCE verifier also sit in a short-lived cookie, so the
+ * callback is accepted only from the browser that started the flow. The
+ * state expires ten minutes after issue and its nonce is consumable once —
+ * the consumed set is in-memory, so a restart forgets it, and the expiry
+ * window bounds a replay across restarts. */
 
 const OAUTH_COOKIE = 'wiki_oauth';
 const OAUTH_TTL_S = 600;
 
-interface OAuthState {
-  nonce: string;
-  returnTo: string;
-}
+/** nonces of states already redeemed — a replayed state fails server-side
+ *  even from the browser that started the flow */
+const consumedStates = createSingleUse(1000);
 
 export interface OAuthStart {
   url: string;
@@ -267,8 +275,7 @@ export function googleAuthStart(req: IncomingMessage, returnTo: string): OAuthSt
   const nonce = randomBytes(16).toString('base64url');
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
-  const payload = b64url(Buffer.from(JSON.stringify({ nonce, returnTo } satisfies OAuthState)));
-  const state = `${payload}.${sign(payload)}`;
+  const state = encodeOAuthState({ nonce, returnTo, iat: Date.now() }, sessionSecret());
   const params = new URLSearchParams({
     client_id: process.env['GOOGLE_CLIENT_ID'] ?? '',
     redirect_uri: redirectUri(req),
@@ -295,20 +302,23 @@ export function clearOAuthCookie(req: IncomingMessage): string {
   return `${OAUTH_COOKIE}=; ${cookieAttrs(0, req)}`;
 }
 
-/** verify the callback's `state` against the binding cookie; returns the
- *  return target and the PKCE verifier, or throws */
+/** verify the callback's `state` against the binding cookie — signature,
+ *  expiry (10 min), browser nonce match and single use; returns the return
+ *  target and the PKCE verifier, or throws */
 export function googleAuthVerify(req: IncomingMessage, state: string | null): { returnTo: string; verifier: string } {
   const bound = cookieValue(req, OAUTH_COOKIE);
   if (!state || !bound) throw new Error('Sign-in was not started from this browser');
-  const [sp, sm] = state.split('.');
+  const parsedState = decodeOAuthState(state, sessionSecret(), Date.now());
   const [bp, bm] = bound.split('.');
-  if (!sp || !sm || !bp || !bm || !macEquals(sm, sign(sp)) || !macEquals(bm, sign(bp))) {
+  if (!bp || !bm || !macEquals(bm, sign(bp))) {
     throw new Error('Sign-in state is invalid');
   }
-  const parsedState = JSON.parse(Buffer.from(sp, 'base64url').toString()) as OAuthState;
   const parsedBound = JSON.parse(Buffer.from(bp, 'base64url').toString()) as { nonce: string; verifier: string };
   if (!parsedState.nonce || parsedState.nonce !== parsedBound.nonce) {
     throw new Error('Sign-in state does not match this browser');
+  }
+  if (!consumedStates.consume(parsedState.nonce)) {
+    throw new Error('This sign-in link has already been used — start again');
   }
   return { returnTo: safeReturnUrl(parsedState.returnTo), verifier: parsedBound.verifier };
 }

@@ -8,7 +8,7 @@
  * never drift. Composition belongs to the caller: the site injects its own
  * noteUrl/slugify/onBroken. The module depends only on the package's own
  * Markdown dialect, remark-parse/remark-math/remark-mdx (source masking)
- * and `yaml` (frontmatter).
+ * and the shared frontmatter splitter (./frontmatter.ts).
  *
  * Syntax: [[target]] · [[target|label]] · [[target#anchor]] (![[embed]] is
  * handled elsewhere).
@@ -36,8 +36,8 @@ import remarkMath from 'remark-math';
 import remarkMdx from 'remark-mdx';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
-import { parseDocument } from 'yaml';
 
+import { splitFrontmatter } from './frontmatter.ts';
 import { markdownSyntax } from './markdown-syntax.ts';
 
 /** shared regex; capture groups: 1=target 2=anchor? 3=label?
@@ -298,23 +298,6 @@ export function remarkWikilinks(opts: {
 
 /* ---------------- frontmatter ---------------- */
 
-/** the frontmatter block Astro recognises: an optional BOM or leading blank
- *  lines, then `---` … `---` (LF or CRLF); group 1 is the YAML body */
-const FRONTMATTER_RE = /(?:^\uFEFF?|^\s*\n)---([\s\S]*?\n)---/;
-
-/** YAML frontmatter → plain object. Absent, non-mapping or malformed YAML
- *  yields `{}`; the site build reports YAML errors itself. */
-function frontmatterOf(source: string): Record<string, unknown> {
-  const raw = FRONTMATTER_RE.exec(source)?.[1];
-  if (raw === undefined) return {};
-  const doc = parseDocument(raw, { logLevel: 'silent' });
-  if (doc.errors.length > 0) return {};
-  const value: unknown = doc.toJS();
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 /** a YAML scalar as a non-empty trimmed string; anything else is absent */
 function fmScalar(value: unknown): string | undefined {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -333,7 +316,7 @@ function fmStringList(value: unknown): string[] {
  *  back to the id) — for corpora that don't follow the index.md layout,
  *  e.g. flat card files fed to the lint CLI via --extra */
 export function noteInfoFromSource(id: string, source: string): WikiNoteInfo {
-  const fm = frontmatterOf(source);
+  const fm = splitFrontmatter(source).data;
   return {
     id,
     title: fmScalar(fm['title']) ?? id,
@@ -496,8 +479,8 @@ function offsetsOf(node: PositionedNode): [number, number] | null {
 function proseOf(source: string, options: MaskOptions): { masked: string; cuts: number[] } {
   const chars = source.split('');
   const cuts: number[] = [];
-  const fm = FRONTMATTER_RE.exec(source);
-  if (fm) blankRange(chars, fm.index, fm.index + fm[0].length);
+  const fm = splitFrontmatter(source);
+  if (fm.present) blankRange(chars, fm.start, fm.end);
   const text = chars.join('');
   let tree: PositionedNode;
   try {

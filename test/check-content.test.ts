@@ -82,6 +82,19 @@ test('a trailing valued option is a usage error', async () => {
   }
 });
 
+test('a nonexistent root and an empty corpus fail; --allow-empty accepts only the latter', async () => {
+  const missing = join(tmpdir(), 'inkbrush-no-such-root');
+  assert.equal(await main([missing]), 1);
+  assert.equal(await main([missing, '--allow-empty']), 1);
+  const empty = mkdtempSync(join(tmpdir(), 'inkbrush-empty-'));
+  try {
+    assert.equal(await main([empty]), 1);
+    assert.equal(await main([empty, '--allow-empty']), 0);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});
+
 test('the walker follows symlinks only inside the root and terminates on cycles', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'inkbrush-content-'));
   const outside = mkdtempSync(join(tmpdir(), 'inkbrush-elsewhere-'));

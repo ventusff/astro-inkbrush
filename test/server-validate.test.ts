@@ -4,10 +4,12 @@ import { test } from 'node:test';
 import { setSiteHooks } from '../src/wiki/server/site.ts';
 import { validateSource, withoutFrontmatter } from '../src/wiki/server/validate.ts';
 
-test('frontmatter is blanked, not removed, so line numbers hold', () => {
-  const out = withoutFrontmatter('---\ntitle: x\n---\n\nbody');
+test('frontmatter is blanked, not removed, so line numbers and offsets hold', () => {
+  const source = '---\ntitle: x\n---\n\nbody';
+  const out = withoutFrontmatter(source);
+  assert.equal(out.length, source.length);
   assert.equal(out.split('\n').length, 5);
-  assert.match(out, /^\n\n\n\nbody$/);
+  assert.match(out, /^ *\n *\n *\n\nbody$/);
 });
 
 test('markdown and MDX are both validated with the dialect and the guard', async () => {

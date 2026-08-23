@@ -131,13 +131,29 @@ export async function openHistory(
     return;
   }
   const title = S.history.title(block.start, block.end);
+  // first page of the newest records; a load-more control reveals the rest
+  // of what the server returned
+  const PAGE = 20;
+  const list = h('div', { class: 'wiki-history-list' }, ...recs.slice(0, PAGE).map((r) => entry(ctx, r)));
+  if (recs.length > PAGE) {
+    const moreBtn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'wiki-btn wiki-history-more',
+        onclick: () => {
+          moreBtn.replaceWith(...recs.slice(PAGE).map((r) => entry(ctx, r)));
+        },
+      },
+      S.history.showMore(recs.length - PAGE),
+    );
+    list.append(moreBtn);
+  }
   const body = h(
     'div',
     { class: 'wiki-history' },
     h('div', { class: 'wiki-panel-title' }, title),
-    recs.length === 0
-      ? h('div', { class: 'wiki-history-empty' }, S.history.noRecords)
-      : h('div', { class: 'wiki-history-list' }, ...recs.slice(0, 20).map((r) => entry(ctx, r))),
+    recs.length === 0 ? h('div', { class: 'wiki-history-empty' }, S.history.noRecords) : list,
   );
   popover(anchor, body, { label: title, trigger });
 }

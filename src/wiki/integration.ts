@@ -101,7 +101,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
           },
         });
       },
-      'astro:server:setup': ({ server, logger }) => {
+      'astro:server:setup': async ({ server, logger }) => {
         const serverEntry = viteId(join(srcDir || join(root, 'src/wiki'), 'server/index.ts'));
         server.middlewares.use((req, res, next) => {
           if (!req.url?.startsWith('/api/wiki/')) return next();
@@ -122,12 +122,21 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
               }
             });
         });
-        // server-side init (fire-and-forget; watcher module guards against
-        // double-start across HMR reloads)
-        server
-          .ssrLoadModule(serverEntry)
-          .then((mod) => (mod as { initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined }) => void }).initWiki(root, serverOptions))
-          .catch((err: unknown) => logger.error(`wiki init failed: ${String(err)}`));
+        // server-side init, awaited: a configuration error (bad config
+        // values, unusable identity registry) rethrows and fails `astro dev`
+        // loudly — the server must not keep serving with broken auth.
+        // Optional pieces (the inbox watcher) are non-fatal inside initWiki
+        // and log their own failure; the watcher module guards against
+        // double-start across HMR reloads.
+        try {
+          const mod = (await server.ssrLoadModule(serverEntry)) as {
+            initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined }) => void;
+          };
+          mod.initWiki(root, serverOptions);
+        } catch (err) {
+          logger.error(`wiki init failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+          throw err;
+        }
       },
     },
   };

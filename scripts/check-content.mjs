@@ -42,9 +42,12 @@
  *                      --config: formula braces otherwise read as JSX
  *                      expressions in MDX). Not needed when --config already
  *                      lists remark-math.
+ *   --allow-empty      accept a corpus with zero matching files (without it,
+ *                      an empty corpus is a failure — it certifies nothing)
  *   --help             print this usage
  *
- * Exit code: 0 clean, 1 findings, 2 usage error.
+ * Exit code: 0 clean, 1 findings (a nonexistent root and an empty corpus
+ * without --allow-empty included), 2 usage error.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
@@ -60,6 +63,7 @@ import { LineCounter, isScalar, parseDocument, visit } from 'yaml';
 const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
 const { markdownSyntax } = await import(pathToFileURL(join(engineRoot, 'src/lib/markdown-syntax.ts')).href);
 const { remarkContentGuard } = await import(pathToFileURL(join(engineRoot, 'src/lib/content-guard.ts')).href);
+const { splitFrontmatter } = await import(pathToFileURL(join(engineRoot, 'src/lib/frontmatter.ts')).href);
 
 /* ---------------- site config ---------------- */
 
@@ -150,18 +154,17 @@ export function* contentFiles(root, globs, skip = []) {
 
 /* ---------------- frontmatter ---------------- */
 
-/** the frontmatter block Astro recognises: an optional BOM or leading blank
- *  lines, then `---` … `---` (LF or CRLF); group 1 is the YAML body */
-const FRONTMATTER_RE = /(?:^\uFEFF?|^\s*\n)---([\s\S]*?\n)---/;
-
-/** YAML errors and plain values cut short by a same-line ` #` comment */
+/** YAML errors and plain values cut short by a same-line ` #` comment.
+ *  Block discovery is the shared splitter's (src/lib/frontmatter.ts); the
+ *  YAML is re-parsed here with a LineCounter so every error and every
+ *  comment-truncated scalar is reported, each on its file line. */
 export function checkFrontmatter(source) {
   const problems = [];
-  const m = FRONTMATTER_RE.exec(source);
-  if (!m) return problems;
-  const yamlStart = m.index + m[0].indexOf('---') + 3;
-  const yamlLine = source.slice(0, yamlStart).split('\n').length - 1;
-  const raw = m[1];
+  const fm = splitFrontmatter(source);
+  if (!fm.present) return problems;
+  // block line n sits on file line yamlLine + n
+  const yamlLine = fm.contentLine - 1;
+  const raw = fm.raw;
   const lineCounter = new LineCounter();
   const doc = parseDocument(raw, { lineCounter, logLevel: 'silent' });
   for (const err of doc.errors) {
@@ -200,9 +203,10 @@ export function buildPipeline({ math = false, site } = {}) {
   return { remarkPlugins, rehypePlugins, remarkRehypeOptions };
 }
 
-/** Astro hands the parser the file with the frontmatter blanked to empty lines; same view here so line numbers match */
+/** Astro hands the parser the file with the frontmatter blanked; the shared
+ *  splitter produces the same line-true view */
 function bodyOf(source) {
-  return source.replace(FRONTMATTER_RE, (block) => block.replace(/[^\r\n]+/g, ''));
+  return splitFrontmatter(source).body;
 }
 
 export async function checkSource(source, { path, pipeline }) {
@@ -243,6 +247,9 @@ export async function checkSource(source, { path, pipeline }) {
 /**
  * Check every matching file under `root`. Returns per-file findings (files
  * without findings are omitted) and the number of files checked.
+ * @param {string} root
+ * @param {{ globs?: string[], skip?: string[], math?: boolean, allowEmpty?: boolean,
+ *           site?: { remarkPlugins: unknown[], rehypePlugins: unknown[], remarkRehype?: unknown } }} [options]
  */
 export async function checkContent(root, { globs = ['**/index.{md,mdx}'], skip = [], math = false, site } = {}) {
   const absRoot = resolve(root);
@@ -260,7 +267,7 @@ export async function checkContent(root, { globs = ['**/index.{md,mdx}'], skip =
 
 /* ---------------- CLI ---------------- */
 
-const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <dir>]... [--config <path>] [--math]
+const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <dir>]... [--config <path>] [--math] [--allow-empty]
 
   <root>             directory to scan (default .)
   --glob <pattern>   files to check, relative to <root> (repeatable; default
@@ -273,13 +280,16 @@ const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <
                      guard, rehype plugins after remark-rehype
   --math             mount remark-math (required for math sites without
                      --config; not needed when --config lists remark-math)
+  --allow-empty      accept a corpus with zero matching files (without it, an
+                     empty corpus fails — it certifies nothing)
   --help             print this usage
 
 Every file is compiled with the package's Markdown dialect (GFM with single
 tilde off, CJK-friendly emphasis) and the content guard; with --config, the
 site's own plugins run after them. Frontmatter is parsed as YAML 1.2: a YAML
 error and a plain value truncated by an unquoted \` #\` are findings.
-Exit code: 0 clean, 1 findings, 2 usage error.`;
+Exit code: 0 clean, 1 findings (a nonexistent root and an empty corpus
+without --allow-empty included), 2 usage error.`;
 
 export async function main(argv) {
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -287,7 +297,7 @@ export async function main(argv) {
     return 0;
   }
   const valued = new Set(['--glob', '--skip', '--config']);
-  const flags = new Set(['--math']);
+  const flags = new Set(['--math', '--allow-empty']);
   if (valued.has(argv[argv.length - 1])) {
     console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
     return 2;
@@ -301,7 +311,20 @@ export async function main(argv) {
   const many = (name) => argv.flatMap((a, i) => (a === `--${name}` && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const globs = many('glob');
   const math = argv.includes('--math');
+  const allowEmpty = argv.includes('--allow-empty');
   const configPath = many('config')[0];
+
+  const root = resolve(positional[0] ?? '.');
+  let rootStat = null;
+  try {
+    rootStat = statSync(root);
+  } catch {
+    /* reported below */
+  }
+  if (rootStat === null || !rootStat.isDirectory()) {
+    console.error(`✗ content root does not exist or is not a directory: ${root}`);
+    return 1;
+  }
 
   let site;
   if (configPath !== undefined) {
@@ -313,7 +336,7 @@ export async function main(argv) {
     }
   }
 
-  const { checked, findings } = await checkContent(positional[0] ?? '.', {
+  const { checked, findings } = await checkContent(root, {
     globs: globs.length > 0 ? globs : undefined,
     skip: many('skip'),
     math,
@@ -326,6 +349,10 @@ export async function main(argv) {
   }
   if (findings.length > 0) {
     console.error(`\n${findings.length}/${checked} files have problems (${scope}).`);
+    return 1;
+  }
+  if (checked === 0 && !allowEmpty) {
+    console.error(`✗ no files matched under ${root} — an empty corpus certifies nothing (pass --allow-empty when that is intended)`);
     return 1;
   }
   console.log(`✓ ${checked} files pass (${scope})`);

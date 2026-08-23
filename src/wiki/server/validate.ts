@@ -1,49 +1,52 @@
 /**
- * Save-time validation of a note's full source, the way the site renders it:
- * the frontmatter must parse as YAML, and the body runs the pipeline the
- * site builds with — the dialect, the content guard, the site's own remark
- * plugins, remark-rehype (raw HTML allowed, as in the build) and the site's
- * rehype plugins; an MDX file is compiled with the same plugin sets. A note
- * that passes here builds; one that fails is refused before any write.
+ * Save-time validation of a note's full source. The pipeline is the
+ * dialect plus the site's own plugins — the same plugin sets the preview
+ * renders with (./markdown.ts) — with two additions the page pipeline does
+ * not have: the content guard, and (for .mdx) an MDX compile. Math
+ * (remark-math) follows the same rule as the preview: mounted only when the
+ * site hands over no plugins of its own — a site with hooks brings its own
+ * math or has none. The frontmatter must parse as YAML. This approximates
+ * the site's build with the plugins it declares to the integration; plugins
+ * a site mounts elsewhere are outside it. A note that fails is refused
+ * before any write.
  */
 import { resolve } from 'node:path';
 
+import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { siteHooks } from './site.ts';
 import { projectRoot } from './store.ts';
 
-/** the frontmatter block replaced by blank lines (line numbers preserved) */
+/** the frontmatter block blanked to spaces (lib/frontmatter.ts — line
+ *  numbers and character offsets both preserved) */
 export function withoutFrontmatter(source: string): string {
-  return source.replace(/^---\r?\n[\s\S]*?\r?\n---/, (m) => m.replace(/[^\n]+/g, ''));
-}
-
-/** YAML error of the frontmatter block, positioned in file lines; null when fine */
-async function frontmatterProblem(source: string): Promise<string | null> {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
-  if (!fm) return null;
-  const { parseDocument } = await import('yaml');
-  const bad = parseDocument(fm[1]!).errors[0];
-  if (!bad) return null;
-  // the block starts on file line 2, so block line n is file line n + 1
-  const line = bad.linePos?.[0]?.line;
-  const message = bad.message.split('\n')[0] ?? bad.message;
-  return `frontmatter${line ? ` (line ${line + 1})` : ''}: ${message}`;
+  return splitFrontmatter(source).body;
 }
 
 /** an error message, or null when `source` (of `file` — project-relative or
- *  absolute, judged by extension) builds; the absolute path is the vfile path, as in
- *  the build */
+ *  absolute, judged by extension) passes; the absolute path is the vfile
+ *  path, as in the build */
 export async function validateSource(file: string, source: string): Promise<string | null> {
-  const fmProblem = await frontmatterProblem(source);
-  if (fmProblem) return fmProblem;
+  const fm = splitFrontmatter(source);
+  if (fm.error) {
+    return `frontmatter${fm.error.line ? ` (line ${fm.error.line})` : ''}: ${fm.error.message}`;
+  }
   const [remarkMath, { markdownSyntax }, { remarkContentGuard }] = await Promise.all([
     import('remark-math').then((m) => m.default),
     import('../../lib/markdown-syntax.ts'),
     import('../../lib/content-guard.ts'),
   ]);
   const site = siteHooks();
-  const remark = [...markdownSyntax(), remarkContentGuard, remarkMath, ...(site.remarkPlugins ?? [])];
+  // math follows the preview's bare-vs-hooks rule: a bare pipeline (no site
+  // plugins at all) gets remark-math; a site with hooks brings its own
+  const bare = site.remarkPlugins === undefined && site.rehypePlugins === undefined;
+  const remark = [
+    ...markdownSyntax(),
+    remarkContentGuard,
+    ...(bare ? [remarkMath] : []),
+    ...(site.remarkPlugins ?? []),
+  ];
   const rehype = site.rehypePlugins ?? [];
-  const body = withoutFrontmatter(source);
+  const body = fm.body;
   const path = resolve(projectRoot(), file);
   try {
     if (file.endsWith('.mdx')) {

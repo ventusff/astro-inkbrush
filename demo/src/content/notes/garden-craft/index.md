@@ -29,7 +29,8 @@ accumulated.
 ## Let the tools carry the ceremony
 
 Commits, history, backups — the ceremony is real, but it shouldn't be
-yours. Saves become git commits on their own; imports arrive from the
-[[inbox]] on their own; even translations are one click in [[ai-assist]].
+yours. With `autocommit` on, saves become git commits on their own;
+imports arrive from the [[inbox]] on their own; even translations are one
+click in [[ai-assist]].
 What's left for you is the only part that was ever interesting: having
 something to say.

@@ -36,6 +36,9 @@ Each incoming note is converted, not copied:
   source line under the title, and a description is derived from the first
   substantive paragraph
 
+The converted note then has to pass the same build gate as a manual save —
+a note that would break the page is refused instead of imported.
+
 Every import lands in the revision journal (via: inbox) as a whole-file
 record: ⟲ lists it as an audit row, and undoing an import is a git
 operation. With `autocommit` on, each import also becomes a git commit like

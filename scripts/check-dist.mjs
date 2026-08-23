@@ -23,12 +23,20 @@
  *   - KaTeX render-error residue (an element with class katex-error);
  *   - CMS injection: a script (inline or bundled under the dist) that
  *     references the inkbrush client API (/api/wiki/) or carries the string
- *     "inkbrush", rehypeWikiBlocks stamps (data-wiki-src) in the markup,
- *     `.wiki-` chrome selectors in a stylesheet or a <style> element, or
- *     any non-HTML dist file containing "inkbrush" (case-insensitive). Page
- *     prose is exempt — a manual may discuss the CMS — and the
- *     `inkbrush-note` meta is site-owned identity markup present in every
- *     build by contract; neither is a finding.
+ *     "inkbrush", any HTML attribute value carrying /api/wiki/ (action,
+ *     href, data-*, …), rehypeWikiBlocks stamps (data-wiki-*) in the
+ *     markup, `.wiki-` chrome selectors in a stylesheet or a <style>
+ *     element, or a textual asset (.json .txt .svg .webmanifest .xml)
+ *     containing "inkbrush" (case-insensitive; binary assets are not
+ *     decoded). Page prose is exempt — a manual may discuss the CMS — and
+ *     the `inkbrush-note` meta is site-owned identity markup present in
+ *     every build by contract; neither is a finding. The marker strings are
+ *     shared with the share-snapshot hygiene check
+ *     (src/lib/pollution-markers.ts).
+ *
+ * A page's <base href> re-bases its relative references by URL semantics —
+ * whether or not anything exists at the base target — and a reference whose
+ * re-based target is not in the dist is a finding as usual.
  *
  * HTML is parsed with parse5 (the WHATWG parser Astro itself uses), so only
  * real elements count — escaped markup in prose is text. Malformed input is
@@ -43,18 +51,27 @@
  *   --base <path>    the site's mount prefix (astro config `base`; default /)
  *   --allow <prefix> internal absolute prefixes to wave through (repeatable;
  *                    paths served at runtime rather than from the dist;
- *                    /api/ is allowed by default)
+ *                    /api/ is allowed by default — /api/wiki/ never is)
  *   --skip <dir>     dist subdirectories not to check (repeatable; a subtree
  *                    built by another site counts as reachable)
+ *   --allow-empty    accept a build output that holds no files at all
+ *                    (without it, an empty dist fails — it certifies
+ *                    nothing)
  *   --help           print this usage
  *
- * Exit code: 0 clean, 1 findings, 2 usage error.
+ * Exit code: 0 clean, 1 findings (a nonexistent or — without --allow-empty —
+ * empty <dir> included), 2 usage error.
  */
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join, posix, relative, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parse } from 'parse5';
+
+const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
+const { CMS_API_MARKER, CMS_NAME_MARKER, CMS_STAMP_MARKER, CMS_STYLE_MARKER } = await import(
+  pathToFileURL(join(engineRoot, 'src/lib/pollution-markers.ts')).href
+);
 
 /* ---------------- URL-bearing syntax ---------------- */
 
@@ -150,7 +167,10 @@ export function cssUrls(css) {
       i = close < 0 ? n : close + 2;
     } else if (c === '"' || c === "'") {
       string();
-    } else if (c === '@' && /^@import\s/i.test(css.slice(i, i + 8))) {
+    } else if (c === '@' && /^@import$/i.test(css.slice(i, i + 7)) && !IDENT_CHAR.test(css[i + 7] ?? '')) {
+      // the at-keyword ends at the first non-ident character: a quoted URL
+      // may follow with or without whitespace (`@import"x.css"` is valid
+      // CSS); `url(…)` after it is collected by the url() branch
       i += 7;
       skipSpace();
       if (css[i] === '"' || css[i] === "'") urls.push(string());
@@ -182,13 +202,13 @@ export function cssUrls(css) {
 
 const URL_ATTRS = new Set(['href', 'src', 'poster', 'data', 'action', 'formaction', 'cite', 'longdesc', 'manifest']);
 
-/** the inkbrush client addresses its server here; nothing else in a site does */
-const CMS_CLIENT_MARK = /\/api\/wiki\//;
-/** the component name; a static build carries it only in the site-owned
- *  `inkbrush-note` meta and in prose, never in executable or style assets */
-const CMS_NAME_MARK = /inkbrush/i;
-/** the CMS chrome styles all live under a `.wiki-` class prefix */
-const CMS_STYLE_MARK = /\.wiki-/;
+/* the marker strings live in src/lib/pollution-markers.ts, shared with the
+ * share-snapshot hygiene check so the two enforcers cannot drift; the
+ * `inkbrush-note` meta exemption is stated there */
+const hasApiMark = (text) => text.includes(CMS_API_MARKER);
+const NAME_MARK_RE = new RegExp(CMS_NAME_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+const hasNameMark = (text) => NAME_MARK_RE.test(text);
+const hasStyleMark = (text) => text.includes(CMS_STYLE_MARKER);
 
 function textOf(node) {
   return (node.childNodes ?? []).map((c) => c.value ?? '').join('');
@@ -203,6 +223,7 @@ function textOf(node) {
  */
 export function analyzeHtml(html) {
   const out = {
+    /** @type {{ url: string, from: string }[]} */
     refs: [],
     ids: new Set(),
     baseHref: undefined,
@@ -211,6 +232,7 @@ export function analyzeHtml(html) {
     katexErrors: 0,
     cmsScripts: 0,
     cmsStyles: 0,
+    cmsAttrs: 0,
     wikiStamps: 0,
   };
   const doc = parse(html, { sourceCodeLocationInfo: true, scriptingEnabled: false });
@@ -224,6 +246,9 @@ export function analyzeHtml(html) {
       const tag = node.tagName;
       const attr = (name) => node.attrs.find((a) => a.name === name)?.value;
       for (const { name, value } of node.attrs) {
+        // every attribute value, URL-bearing or not (action, href, data-*,
+        // event handlers…), is scanned for the client API marker
+        if (hasApiMark(value)) out.cmsAttrs += 1;
         if (URL_ATTRS.has(name)) {
           if (!(tag === 'base' && name === 'href')) ref(value, name);
         } else if (name === 'srcset' || name === 'imagesrcset') {
@@ -234,7 +259,7 @@ export function analyzeHtml(html) {
           for (const u of cssUrls(value)) ref(u, 'style');
         } else if (name === 'id') {
           out.ids.add(value);
-        } else if (name === 'data-wiki-src') {
+        } else if (name.startsWith(CMS_STAMP_MARKER)) {
           out.wikiStamps += 1;
         }
       }
@@ -256,13 +281,13 @@ export function analyzeHtml(html) {
       if (/(?:^|\s)katex-error(?:\s|$)/.test(attr('class') ?? '')) out.katexErrors += 1;
       if (tag === 'style') {
         const css = textOf(node);
-        if (CMS_STYLE_MARK.test(css)) out.cmsStyles += 1;
+        if (hasStyleMark(css)) out.cmsStyles += 1;
         for (const u of cssUrls(css)) ref(u, 'style');
         return;
       }
       if (tag === 'script') {
         const js = textOf(node);
-        if (CMS_CLIENT_MARK.test(js) || CMS_NAME_MARK.test(js)) out.cmsScripts += 1;
+        if (hasApiMark(js) || hasNameMark(js)) out.cmsScripts += 1;
         return;
       }
       if (tag === 'template' && node.content) walk(node.content);
@@ -276,6 +301,10 @@ export function analyzeHtml(html) {
 /* ---------------- the dist check ---------------- */
 
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
+
+/** dist files (beyond pages, stylesheets and scripts) that are text and may
+ *  be decoded for the component-name sweep; everything else is binary */
+const TEXTUAL_ASSET = /\.(?:json|txt|svg|webmanifest|xml)$/i;
 
 /**
  * Check a built dist. Returns counts and the finding list (strings, one per
@@ -360,7 +389,10 @@ export function checkDist(distDir, options = {}) {
     }
     let abs;
     if (path.startsWith('/')) {
-      if (allow.some((p) => path.startsWith(p) || path.startsWith(base.slice(0, -1) + p))) return null;
+      // the /api/ allowlist (and any --allow) never waves through the CMS's
+      // own API: a /api/wiki/ reference is pollution, not runtime routing
+      const allowed = allow.some((p) => path.startsWith(p) || path.startsWith(base.slice(0, -1) + p));
+      if (allowed && !path.includes(CMS_API_MARKER)) return null;
       if (!path.startsWith(base)) {
         return { missing: true, reason: `internal absolute link missing the mount prefix ${base} → ${url}` };
       }
@@ -423,19 +455,42 @@ export function checkDist(distDir, options = {}) {
       problems.push(`${page}: CMS injection — an inline style carries .wiki- chrome selectors`);
     }
     if (a.wikiStamps > 0) {
-      problems.push(`${page}: CMS injection — rehypeWikiBlocks stamps (data-wiki-src) in a static build`);
+      problems.push(`${page}: CMS injection — rehypeWikiBlocks stamps (${CMS_STAMP_MARKER}*) in a static build`);
+    }
+    if (a.cmsAttrs > 0) {
+      problems.push(`${page}: CMS injection — an attribute value references the inkbrush client API (${CMS_API_MARKER})`);
     }
 
-    let fromDir = dirname(file);
+    // <base href> re-bases every path reference by URL semantics alone — it
+    // applies whether or not anything exists at the base target. A relative
+    // base first resolves against the page's own URL; each relative
+    // reference then resolves in the base URL's directory. Fragment-only
+    // references stay on the page.
+    const fromDir = dirname(file);
+    let refBase = null;
     if (a.baseHref !== undefined && !EXTERNAL.test(a.baseHref)) {
-      const baseTarget = targetOf(a.baseHref.endsWith('/') ? `${a.baseHref}index.html` : a.baseHref, fromDir);
-      if (baseTarget?.file) fromDir = dirname(baseTarget.file);
+      const rawBase = a.baseHref.split('#')[0].split('?')[0];
+      if (rawBase) {
+        const pageDir = rel(fromDir);
+        const pageDirUrl = pageDir && pageDir !== '.' ? `${base}${pageDir}/` : base;
+        let resolved = rawBase.startsWith('/') ? rawBase : posix.resolve(pageDirUrl, rawBase);
+        if (rawBase.endsWith('/') && !resolved.endsWith('/')) resolved += '/';
+        refBase = resolved.slice(0, resolved.lastIndexOf('/') + 1);
+      }
     }
+    const applyBase = (url) => {
+      if (refBase === null || EXTERNAL.test(url) || url.startsWith('/')) return url;
+      const m = /^([^?#]*)([?#][\s\S]*)?$/.exec(url);
+      if (!m[1]) return url;
+      let path = posix.resolve(refBase, m[1]);
+      if (m[1].endsWith('/') && !path.endsWith('/')) path += '/';
+      return path + (m[2] ?? '');
+    };
 
     for (const { url } of a.refs) {
       counts.refs += 1;
       const frag = fragmentOf(url);
-      const target = url.startsWith('#') ? { file } : targetOf(url, fromDir);
+      const target = url.startsWith('#') ? { file } : targetOf(applyBase(url), fromDir);
       if (target === null) continue;
       if (target.missing) {
         problems.push(`${page}: ${target.reason ?? `link target does not exist → ${url}`}`);
@@ -460,11 +515,11 @@ export function checkDist(distDir, options = {}) {
   function checkStylesheet(file) {
     const sheet = rel(file);
     const css = readFileSync(file, 'utf8');
-    if (CMS_STYLE_MARK.test(css)) {
-      problems.push(`${sheet}: CMS injection — a stylesheet carries .wiki- chrome selectors`);
+    if (hasStyleMark(css)) {
+      problems.push(`${sheet}: CMS injection — a stylesheet carries ${CMS_STYLE_MARKER} chrome selectors`);
     }
-    if (CMS_NAME_MARK.test(css)) {
-      problems.push(`${sheet}: CMS injection — a stylesheet carries the string "inkbrush"`);
+    if (hasNameMark(css)) {
+      problems.push(`${sheet}: CMS injection — a stylesheet carries the string "${CMS_NAME_MARKER}"`);
     }
     for (const url of cssUrls(css)) {
       counts.refs += 1;
@@ -475,22 +530,27 @@ export function checkDist(distDir, options = {}) {
 
   function checkScript(file) {
     const js = readFileSync(file, 'utf8');
-    if (CMS_CLIENT_MARK.test(js)) {
-      problems.push(`${rel(file)}: CMS injection — a script bundle references the inkbrush client API (/api/wiki/)`);
-    } else if (CMS_NAME_MARK.test(js)) {
-      problems.push(`${rel(file)}: CMS injection — a script bundle carries the string "inkbrush"`);
+    if (hasApiMark(js)) {
+      problems.push(`${rel(file)}: CMS injection — a script bundle references the inkbrush client API (${CMS_API_MARKER})`);
+    } else if (hasNameMark(js)) {
+      problems.push(`${rel(file)}: CMS injection — a script bundle carries the string "${CMS_NAME_MARKER}"`);
     }
   }
 
-  /** every other dist file: prose lives in pages, so the component name has
-   *  no business in any asset */
+  /** textual assets (prose lives in pages, so the component name has no
+   *  business in any of them); binary files are never decoded as text */
   function checkAsset(file) {
-    if (CMS_NAME_MARK.test(readFileSync(file, 'utf8'))) {
-      problems.push(`${rel(file)}: CMS injection — an asset carries the string "inkbrush"`);
+    if (!TEXTUAL_ASSET.test(file)) return;
+    if (hasNameMark(readFileSync(file, 'utf8'))) {
+      problems.push(`${rel(file)}: CMS injection — an asset carries the string "${CMS_NAME_MARKER}"`);
     }
   }
 
-  for (const file of [...files(dist, distReal)].sort()) {
+  const walked = [...files(dist, distReal)].sort();
+  if (walked.length === 0 && options.allowEmpty !== true) {
+    problems.push(`${dist}: the build output holds no files — an empty dist certifies nothing (pass --allow-empty when that is intended)`);
+  }
+  for (const file of walked) {
     const check = file.endsWith('.html')
       ? (counts.pages += 1, checkPage)
       : file.endsWith('.css')
@@ -510,7 +570,7 @@ export function checkDist(distDir, options = {}) {
 
 /* ---------------- CLI ---------------- */
 
-const USAGE = `usage: check-dist.mjs [<dir>] [--base <path>] [--allow <prefix>]... [--skip <dir>]...
+const USAGE = `usage: check-dist.mjs [<dir>] [--base <path>] [--allow <prefix>]... [--skip <dir>]... [--allow-empty]
 
   <dir>            the build output directory (default dist)
   --base <path>    the site's mount prefix (astro config \`base\`; default /)
@@ -519,15 +579,20 @@ const USAGE = `usage: check-dist.mjs [<dir>] [--base <path>] [--allow <prefix>].
                    is allowed by default)
   --skip <dir>     dist subdirectories not to check (repeatable; a subtree
                    built by another site counts as reachable)
+  --allow-empty    accept a build output that holds no files at all (without
+                   it, an empty dist fails — it certifies nothing)
   --help           print this usage
 
 Checks every file under <dir>: internal references (URL attributes, srcset
 candidates, meta refresh, CSS url()/@import) must resolve to a dist file —
 never escape it — and fragments to an id on the target page; no duplicated
 locale segment, no implicitly closed <a>, no KaTeX error residue, no CMS
-injection (inkbrush client API references, rehypeWikiBlocks stamps, .wiki-
-chrome selectors, or the string "inkbrush" in any script, style or asset —
-page prose and the site-owned inkbrush-note meta are exempt).
+injection (inkbrush client API references in scripts or in any HTML
+attribute value, rehypeWikiBlocks stamps, .wiki- chrome selectors, or the
+string "inkbrush" in any script, stylesheet or textual asset — page prose
+and the site-owned inkbrush-note meta are exempt; binary assets are not
+decoded). A nonexistent <dir> and an empty one (without --allow-empty) are
+findings.
 Exit code: 0 clean, 1 findings, 2 usage error.`;
 
 export function main(argv) {
@@ -536,19 +601,25 @@ export function main(argv) {
     return 0;
   }
   const valued = new Set(['--base', '--allow', '--skip']);
+  const flags = new Set(['--allow-empty']);
   if (valued.has(argv[argv.length - 1])) {
     console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
     return 2;
   }
   const positional = argv.filter((a, i) => !a.startsWith('--') && !valued.has(argv[i - 1]));
-  const unknown = argv.filter((a) => a.startsWith('--') && !valued.has(a));
+  const unknown = argv.filter((a) => a.startsWith('--') && !valued.has(a) && !flags.has(a));
   if (positional.length > 1 || unknown.length > 0) {
     console.error(USAGE);
     return 2;
   }
   const many = (name) => argv.flatMap((a, i) => (a === `--${name}` && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
 
-  const result = checkDist(positional[0] ?? 'dist', { base: many('base')[0], allow: many('allow'), skip: many('skip') });
+  const result = checkDist(positional[0] ?? 'dist', {
+    base: many('base')[0],
+    allow: many('allow'),
+    skip: many('skip'),
+    allowEmpty: argv.includes('--allow-empty'),
+  });
   const scope = `${result.pages} pages / ${result.stylesheets} stylesheets / ${result.scripts} scripts / ${result.assets} assets / ${result.refs} references`;
   if (result.problems.length > 0) {
     console.error(`✗ dist check: ${result.problems.length} problems (${scope}):\n`);

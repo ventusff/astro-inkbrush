@@ -20,6 +20,14 @@ import { resolve } from 'node:path';
 
 import type { WikiConfig, WikiConfigInput } from '../config.ts';
 import { resolveLocales } from '../shared/locales.ts';
+import {
+  checkAutopush,
+  checkContentDir,
+  checkCookieDomain,
+  checkCookieName,
+  checkHttpUrl,
+  checkTrustedOrigins,
+} from './config-checks.ts';
 import { projectRoot } from './store.ts';
 
 const configModules = import.meta.glob<{ default: WikiConfigInput }>('/inkbrush.config.ts', {
@@ -57,6 +65,11 @@ let cached: WikiConfig | null = null;
 export function wikiConfig(): WikiConfig {
   if (cached) return cached;
   const input = Object.values(configModules)[0]?.default ?? {};
+
+  // proxy trust is opt-in: without it, forwarded headers are attacker input
+  const server: WikiConfig['server'] = {
+    trustProxy: envFlag('WIKI_TRUST_PROXY') ?? input.server?.trustProxy ?? false,
+  };
 
   const googleInput = input.auth?.google ?? false;
   const google: WikiConfig['auth']['google'] =
@@ -160,7 +173,8 @@ export function wikiConfig(): WikiConfig {
   // dev login: the default (nothing set anywhere) is loopback-only at the
   // route; only an explicit config/env value serves non-loopback clients
   const devFlag = envFlag('WIKI_DEV_LOGIN');
-  cached = {
+  const resolved: WikiConfig = {
+    server,
     auth: {
       dev: devFlag ?? input.auth?.dev ?? true,
       devExplicit: devFlag !== undefined || input.auth?.dev !== undefined,
@@ -187,5 +201,23 @@ export function wikiConfig(): WikiConfig {
     },
     share,
   };
+
+  // value validation (./config-checks.ts): a malformed field fails here, at
+  // resolution, with a message naming it — never on the first request
+  checkCookieName(resolved.auth.session.cookieName);
+  checkCookieDomain(resolved.auth.session.cookieDomain);
+  checkTrustedOrigins(resolved.auth.session.trustedOrigins);
+  if (resolved.auth.google !== false) checkHttpUrl('auth.google.baseUrl', resolved.auth.google.baseUrl);
+  if (resolved.auth.googleSaml !== false) {
+    checkHttpUrl('auth.googleSaml.baseUrl', resolved.auth.googleSaml.baseUrl);
+  }
+  if (resolved.share !== false) {
+    checkHttpUrl('share.gatewayUrl', resolved.share.gatewayUrl);
+    checkHttpUrl('share.publicBase', resolved.share.publicBase);
+  }
+  checkContentDir(resolved.content.dir);
+  checkAutopush(resolved.autocommit, resolved.autopush);
+
+  cached = resolved;
   return cached;
 }

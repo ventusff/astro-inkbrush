@@ -24,7 +24,7 @@
   --wiki-surface: var(--color-bg, #fbf9f4);
   --wiki-on-surface: var(--color-ink, #1f2024);
   --wiki-muted: var(--color-ink-soft, #4a4d57);
-  --wiki-faint: var(--color-ink-faint, #8a8d97);
+  --wiki-faint: var(--color-ink-faint, #6b6e78); /* >=4.5:1 small text on surface/field */
   --wiki-line: var(--color-line, #e5e0d3);
   --wiki-accent: var(--color-accent, #b6552e);
   --wiki-ai: var(--color-accent2, #2a6f6b);
@@ -434,7 +434,11 @@ select.wiki-members-role {
   color: var(--wiki-faint);
   font: 500 11px/1 var(--wiki-font);
   cursor: pointer;
-  padding: 2px;
+  /* >=24px hit target; the negative block margin keeps the row height */
+  min-width: 24px;
+  min-height: 24px;
+  padding: 6px 4px;
+  margin: -6px 0;
   white-space: nowrap;
 }
 .wiki-members-remove:hover {
@@ -986,7 +990,11 @@ select.wiki-members-role {
   color: var(--wiki-faint);
   font-size: 11.5px;
   cursor: pointer;
-  padding: 0;
+  /* >=24px hit target; the negative block margin keeps the meta row height */
+  min-width: 24px;
+  min-height: 24px;
+  padding: 4px 6px;
+  margin: -4px 0;
 }
 .wiki-comment-del:hover {
   color: var(--wiki-danger);
@@ -1052,6 +1060,10 @@ select.wiki-members-role {
   flex-direction: column;
   gap: 10px;
   margin-top: 8px;
+}
+.wiki-history-more {
+  font-size: 12px;
+  color: var(--wiki-muted);
 }
 .wiki-history-empty {
   color: var(--wiki-faint);

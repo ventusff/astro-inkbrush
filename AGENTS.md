@@ -75,9 +75,11 @@ npm test
   changes — is resolved through `server/paths.ts` and must stay inside its
   root; every write goes through `store.ts` (atomic, under the in-process
   lock). AI jobs never work in the project: they run in a `workspace.ts`
-  copy against a start-of-job snapshot, their changes pass `validate.ts`,
-  and a file that changed in the project meanwhile refuses the whole
-  application — a concurrent manual edit always wins.
+  copy against a start-of-job snapshot, their changes pass `validate.ts`
+  plus a per-job postcondition (a block edit changes nothing in the note
+  outside its block; a translation creates exactly the target and leaves
+  the source untouched), and a file that changed in the project meanwhile
+  refuses the whole application — a concurrent manual edit always wins.
 - Child processes (claude jobs, snapshot builds) receive an allowlisted
   environment — deployment secrets never reach them. API responses never
   carry a member's email except to that member or an admin.

@@ -21,8 +21,8 @@
  * Conflict contract: apply() holds the in-process write locks of all target
  * files (sorted path order) and verifies each still matches the creation
  * baseline; any mismatch refuses the whole application with nothing
- * written. A write failure midway reports exactly which files were and were
- * not written.
+ * written. A write failure midway reports exactly which files are written
+ * and which are not.
  */
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -46,7 +46,7 @@ export interface Workspace {
   scope: string[];
   /** every file that differs from the creation baseline, within scope */
   changes(): WorkspaceChange[];
-  /** the project file's content at workspace creation; null = did not exist */
+  /** the project file's content at workspace creation; null = no such file then */
   baseline(rel: string): string | null;
   /** verify containment and baselines under the file locks, then write */
   apply(changes: WorkspaceChange[]): Promise<void>;

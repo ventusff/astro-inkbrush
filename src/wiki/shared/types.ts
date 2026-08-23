@@ -133,7 +133,7 @@ export interface ShareRecord {
   /** 10-char base58 id — doubles as the gateway path /s/<id> */
   id: string;
   note: string;
-  /** site route that was snapshotted, e.g. "/notes/getting-started/" */
+  /** the site route the snapshot serves, e.g. "/notes/getting-started/" */
   route: string;
   /** public URL recipients open (<publicBase>/s/<id>/) */
   url: string;

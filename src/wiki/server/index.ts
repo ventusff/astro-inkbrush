@@ -11,9 +11,11 @@
  *    member holding the admin role (404 while the registry is off);
  *  - a mutating request (anything but GET/HEAD) that carries a session
  *    cookie must come from this site: its Origin (or Referer) must be the
- *    request's own origin or a configured trusted origin (the SAML ACS
- *    route is exempt — see ./csrf.ts), and a JSON body must be declared as
- *    application/json;
+ *    request's own origin — the configured auth baseUrl when one is set,
+ *    otherwise derived from the request, honoring forwarding headers only
+ *    under `server.trustProxy` — or a configured trusted origin (the SAML
+ *    ACS route is exempt — see ./csrf.ts), and a JSON body must be declared
+ *    as application/json;
  *  - malformed input (bad percent-encoding, a body that is not JSON, a body
  *    over the limit) is a 4xx; an unexpected failure is logged with a
  *    request id and answered with a generic 500 carrying that id.
@@ -25,6 +27,7 @@ import type { MeResponse, WikiUser } from '../shared/types.ts';
 import {
   clearOAuthCookie,
   clearSessionCookie,
+  configuredBaseUrl,
   createSessionCookie,
   devLoginEnabled,
   googleAuthStart,
@@ -187,12 +190,17 @@ async function readCapped(req: IncomingMessage, limit = BODY_LIMIT): Promise<str
   });
 }
 
-/** a JSON body: declared as application/json, parsed, or a 400 */
+/** a JSON body: declared as application/json (415 otherwise, an empty or
+ *  absent body included — the declaration is part of the contract), parsed,
+ *  or a 400 */
 export async function readBody<T>(req: IncomingMessage): Promise<T> {
   const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+  if (type !== 'application/json') {
+    req.resume();
+    throw new HttpError(415, 'JSON bodies must be sent as application/json');
+  }
   const text = await readCapped(req);
   if (!text) return {} as T;
-  if (type !== 'application/json') throw new HttpError(415, 'JSON bodies must be sent as application/json');
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -420,23 +428,42 @@ export type RouteRegistrar = typeof on;
 /* ---------------- entry ---------------- */
 
 /**
- * one-time server-side init, called by the integration at astro:server:setup:
- * pins the project root and the site hooks, resolves the config (so a
- * misconfiguration fails at startup, not on the first request), verifies the
- * identity registry is usable, then starts what the deployment enables.
+ * one-time server-side init, called (and awaited) by the integration at
+ * astro:server:setup: pins the project root and the site hooks, resolves
+ * the config and verifies the identity registry — a failure there throws,
+ * so a misconfigured deployment fails dev startup loudly instead of serving
+ * with broken auth. The inbox watcher is genuinely optional: its failure is
+ * logged explicitly and does not stop the server.
  */
 export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): void {
   setProjectRoot(root);
   setSiteHooks(opts.markdown);
   wikiConfig();
   ensureRegistry();
-  startInboxWatcher();
+  try {
+    startInboxWatcher();
+  } catch (err) {
+    console.error('[wiki inbox] the watcher failed to start — inbox import is off for this run:', err);
+  }
 }
 
-/** the request's own origin, as the browser would send it */
+/** the request's own origin: the configured external base URL when auth
+ *  pins one (the canonical origin of the deployment); otherwise derived
+ *  from the request — x-forwarded-host/-proto count only under
+ *  `server.trustProxy`, since without a proxy those headers are client
+ *  input and would let anyone mint their own "own origin" */
 function requestOrigin(req: IncomingMessage): string {
+  const configured = configuredBaseUrl();
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      /* malformed baseUrl is rejected at config resolution; fall through */
+    }
+  }
+  const trustProxy = wikiConfig().server.trustProxy;
   const proto = isSecureRequest(req) ? 'https' : 'http';
-  const host = (req.headers['x-forwarded-host'] ?? req.headers.host ?? '') as string;
+  const host = ((trustProxy ? req.headers['x-forwarded-host'] : undefined) ?? req.headers.host ?? '') as string;
   return `${proto}://${host.split(',')[0]!.trim()}`;
 }
 

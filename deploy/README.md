@@ -36,6 +36,12 @@ Contract of the editing machine:
   contract is that edits reach git. With `KNOWN_HOSTS` installed, SSH runs
   `StrictHostKeyChecking=yes`; without it, `accept-new` pins the first host
   key seen.
+- **Forwarded headers are trusted only explicitly.** The compose example
+  joins the reverse-proxy network, so it sets `WIKI_TRUST_PROXY=1`
+  (`server.trustProxy` is the `inkbrush.config.ts` spelling) and the CMS
+  reads `x-forwarded-host`/`-proto`/`-for` as the proxy's. The default is
+  off; a directly exposed server must keep it off, or any client can forge
+  its origin and protocol.
 - **Fail closed on synchronisation.** Edits found uncommitted in the volume
   are committed before the update — tracked changes across the whole repo
   plus new files under the content tree, since companion files live outside

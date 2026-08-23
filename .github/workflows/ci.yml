@@ -29,10 +29,11 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run typecheck
-      - name: Install and build the demo (reading mode)
+      - name: Install, type-check and build the demo (reading mode)
         working-directory: demo
         run: |
           npm ci --no-audit --no-fund
+          npx astro check
           npm run build
       - name: Check the demo's notes
         working-directory: demo

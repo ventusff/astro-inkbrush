@@ -123,6 +123,19 @@ test('a trailing valued option is a usage error', async () => {
   }
 });
 
+test('a nonexistent content dir and an empty corpus fail; --allow-empty accepts only the latter', async () => {
+  const missing = join(tmpdir(), 'inkbrush-no-such-notes');
+  assert.equal(await main([missing]), 1);
+  assert.equal(await main([missing, '--allow-empty']), 1);
+  const empty = mkdtempSync(join(tmpdir(), 'inkbrush-nonotes-'));
+  try {
+    assert.equal(await main([empty]), 1);
+    assert.equal(await main([empty, '--allow-empty']), 0);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+});
+
 test('an extra corpus follows symlinks only inside its own tree and terminates on cycles', () => {
   const dir = mkdtempSync(join(tmpdir(), 'inkbrush-cards-'));
   const outside = mkdtempSync(join(tmpdir(), 'inkbrush-vault-'));

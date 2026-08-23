@@ -4,11 +4,12 @@
  * language (the note's own for edits and answers, the target locale for
  * translations).
  *
- * The hard constraints the engine states are those of its own dialect and
- * content guard; a site appends its own conventions (component vocabulary,
- * heading attributes, generated numbering, …) through
- * `inkbrush.config.ts → claude.rules`, and names the files a job may change
- * beside the note through `claude.companions`.
+ * Every prompt carries the writing rules in two tiers: hard constraints —
+ * only what the dialect, the content guard and the MDX compile mechanically
+ * refuse — and house style for everything else. A site's own conventions
+ * (component vocabulary, heading attributes, generated numbering, …) from
+ * `inkbrush.config.ts → claude.rules` join the house-style tier, and
+ * `claude.companions` names the files a job may change beside the note.
  */
 import type { LocaleDef } from '../shared/locales.ts';
 import type { NoteMeta } from '../shared/types.ts';
@@ -18,22 +19,32 @@ import { wikiConfig } from './config.ts';
 const locales = (): readonly LocaleDef[] => wikiConfig().content.locales;
 const langName = (code: string): string => locales().find((l) => l.code === code)?.promptName ?? code;
 
-/** what the dialect and the content guard refuse; every site inherits these */
-const DIALECT_RULES = [
+/** what the dialect, the content guard and the MDX compile mechanically
+ *  refuse — a note breaking any of these fails validation and the build */
+const HARD_RULES = [
   'Display math uses the three-line form: `$$` on its own line, the formula, `$$` on its own line (a single-line $$x$$ is refused).',
-  'Emphasis markers (`*`, `_`, `~~`) must pair; an unpaired marker fails the build.',
-  'Literal braces in prose are escaped: \\{ and \\}; an unescaped `{…}` is an MDX expression and swallows the text.',
-  'After wrapping a long sentence, a continuation line must not start with +, -, * or `1.` (it becomes a list marker).',
+  'Emphasis markers (`*`, `_`, `~~`) must pair; an unpaired marker that could open emphasis is refused.',
+  'Literal braces in prose are escaped: \\{ and \\}; an unescaped `{…}` in MDX prose is a JS expression and is refused.',
+  'A line directly under a paragraph must not start with `+` or `*` — a continuation left behind by wrapping turns into a bullet list and is refused.',
+  'Every formula must render under strict KaTeX; a broken macro, and any HTML entity inside math (&lt; &gt; &amp;), is refused — write \\lt \\gt \\le \\ge and \\&.',
+  'In MDX, a JSX attribute value containing double quotes uses single-quote delimiters; a straight double quote inside a double-quoted attribute breaks the compile.',
+];
+
+/** conventions the checks do not mechanically catch; follow them anyway */
+const STYLE_RULES = [
+  'After wrapping a long sentence, a continuation line must not start with `-` or `1.` either (it reads as a list).',
   '`<` followed by a letter or digit in prose is written &lt;; inside $…$ math it stays as it is.',
   'Emphasis is written with ** and *, never with HTML tags.',
-  'JSX attribute values that contain double quotes use single-quote delimiters; straight quotes stay straight.',
   'Component props do not render markdown or math: write Unicode characters (α, Σ) in them instead.',
   'A `|` inside a GFM table cell is written \\lvert … \\rvert inside math and \\| elsewhere.',
 ];
 
 function rules(): string {
-  const all = [...DIALECT_RULES, ...wikiConfig().claude.rules];
-  return `Hard constraints — the build refuses a note that breaks any of them:\n${all.map((r, i) => `${i + 1}. ${r}`).join('\n')}`;
+  const style = [...STYLE_RULES, ...wikiConfig().claude.rules];
+  return [
+    `Hard constraints — the build refuses these:\n${HARD_RULES.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
+    `House style — follow these:\n${style.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
+  ].join('\n');
 }
 
 function companionNote(companions: string[]): string {

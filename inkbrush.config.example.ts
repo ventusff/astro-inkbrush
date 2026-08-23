@@ -10,6 +10,13 @@
 import { defineInkbrushConfig } from 'astro-inkbrush/config';
 
 export default defineInkbrushConfig({
+  // How the server reads its own environment. trustProxy (default false)
+  // makes the server honor x-forwarded-host / x-forwarded-proto /
+  // x-forwarded-for from incoming requests: set it true ONLY when the dev
+  // server sits behind a reverse proxy (traefik/nginx) that overwrites
+  // those headers — on a directly exposed server they are client input,
+  // and trusting them lets anyone forge the request origin.
+  // server: { trustProxy: true },
   auth: {
     // Local quick login (name + email, no password). Omitted, the default
     // serves LOOPBACK clients only (127.0.0.1/::1, no reverse proxy in

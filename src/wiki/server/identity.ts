@@ -21,7 +21,7 @@
  * `identity.autoRegister` is on (default); otherwise unknown users are
  * refused at login.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { IdentityUser, IdentityUsersResponse } from '../shared/types.ts';
@@ -45,6 +45,8 @@ function usersFile(conf: IdentityConf): string {
 }
 
 function writeUsers(conf: IdentityConf, users: IdentityUser[]): void {
+  // the registry holds emails and roles: the directory is private (0700)
+  mkdirSync(conf.dir, { recursive: true, mode: 0o700 });
   writeFileAtomic(usersFile(conf), JSON.stringify(users, null, 2));
 }
 

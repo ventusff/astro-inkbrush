@@ -5,9 +5,12 @@
  *
  * Write contract: every write of a note runs under the file's lock, re-reads
  * the file, re-checks the block hash against the current bytes, validates the
- * whole resulting file the way the site builds it (the dialect, the content
- * guard, the site's own remark plugins; MDX files are compiled) and replaces
- * the file atomically. A failed validation writes nothing.
+ * whole resulting file with the dialect, the content guard and the site's
+ * own plugins (MDX files are compiled) and replaces the file atomically. A
+ * failed validation writes nothing. The save's journal entry and its
+ * autocommit run inside the same held lock, so what git stages is exactly
+ * what that save wrote — a later save cannot slip its bytes under an
+ * earlier save's commit.
  *
  * Edit history is two layers: the journal is the fine-grained per-block
  * audit log (each record has a unique id); git in the content repo is the
@@ -22,11 +25,11 @@ import { promisify } from 'node:util';
 
 import type { LocaleDef } from '../shared/locales.ts';
 import type { BlockSource, NoteLocale, NoteMeta, RevisionRecord } from '../shared/types.ts';
-import { cachedScan } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, HttpError, json, readBody } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
+import { createRootedScanner } from './note-scan.ts';
 import { frontmatterField, NOTE_ID } from './note-id.ts';
 import { containedPath } from './paths.ts';
 import { appendNdjson, projectRoot, readNdjson, wikiDataDir, withLock, writeFileAtomic } from './store.ts';
@@ -149,14 +152,18 @@ export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRec
  * when a block no longer matches, → 409), the result is validated (→ 422
  * when it would not build), then written atomically. `afterWrite` runs
  * inside the same lock after the write (journaling belongs there, so the
- * journal order matches the write order).
+ * journal order matches the write order), and `commit` runs last, still
+ * inside the lock, so the save's autocommit stages exactly what the save
+ * wrote — attribution correctness wins over save throughput. Returns the
+ * commit outcome (null when no `commit` is given).
  */
 export async function writeNote(
   file: string,
   produce: (current: string) => { next: string; error?: string | undefined },
   afterWrite?: (next: string) => void,
-): Promise<void> {
-  await withLock(file, async () => {
+  commit?: () => Promise<AutocommitResult>,
+): Promise<AutocommitResult | null> {
+  return await withLock(file, async () => {
     const current = readFileSync(file, 'utf8');
     const { next, error } = produce(current);
     if (error) throw new HttpError(409, error);
@@ -164,6 +171,7 @@ export async function writeNote(
     if (problem) throw new HttpError(422, `The note would not build — not saved: ${problem}`);
     writeFileAtomic(file, next);
     afterWrite?.(next);
+    return commit ? await commit() : null;
   });
 }
 
@@ -273,7 +281,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
         return fail(res, 400, 'missing start/end/hash/source');
       }
       let before = '';
-      await writeNote(
+      const git = await writeNote(
         located.file,
         (current) => {
           const lines = current.split('\n');
@@ -297,8 +305,9 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
             before,
             after: source,
           }),
+        // committed inside the same lock: what git stages is this save's bytes
+        () => autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name),
       );
-      const git = await autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name);
       json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },
     { auth: true },
@@ -328,10 +337,13 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
   );
 
   // note list for [[ autocomplete / wikilink resolution (inbox included —
-  // everything is linkable); the scan is cached for a short window
-  const notes = cachedScan(contentRoot());
+  // everything is linkable); the scan is cached for a short window and keyed
+  // by the content root current at request time — routes register at module
+  // load, before the project root is pinned, so the scanner must not bind
+  // a root here
+  const notes = createRootedScanner();
   on('GET', '/notes', ({ res }) => {
-    json(res, 200, { notes: notes() });
+    json(res, 200, { notes: notes(contentRoot()) });
   });
 
   // revision history (with full before/after source) is editor-only
@@ -366,7 +378,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
 
       let at = -1;
       const beforeLines = rec.before.split('\n');
-      await writeNote(
+      const git = await writeNote(
         located.file,
         (current) => {
           const fileLines = current.split('\n');
@@ -406,11 +418,8 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
             before: rec.after,
             after: rec.before,
           }),
-      );
-      const git = await autocommit(
-        located.rel,
-        `wiki: ${id} revert ${rec.via} revision ${rec.id}`,
-        user!.name,
+        // committed inside the same lock: what git stages is this revert's bytes
+        () => autocommit(located.rel, `wiki: ${id} revert ${rec.via} revision ${rec.id}`, user!.name),
       );
       json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },

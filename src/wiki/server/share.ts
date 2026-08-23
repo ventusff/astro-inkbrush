@@ -40,6 +40,11 @@ import { projectRoot, readJson, wikiDataDir, withLock, writeJson } from './store
 /** a snapshot bundle above this size is refused before upload */
 const BUNDLE_LIMIT = 256 * 1024 * 1024;
 
+/** notes whose share is being created right now — an in-process reservation
+ *  taken before the build, so two concurrent creates cannot build and
+ *  upload the same note twice (the second request answers 409 immediately) */
+const creating = new Set<string>();
+
 /* ---------------- availability ---------------- */
 
 /** off = share:false/omitted in inkbrush.config.ts (routes 404, no button) ·
@@ -194,106 +199,119 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           share: withoutCreator(existing),
         });
       }
-
-      // the gateway is checked before the (minutes-long) build
-      try {
-        const ping = await gatewayFetch(conf, '/admin/s', {}, 5000);
-        if (ping.status === 401) {
-          return fail(res, 502, 'Share gateway rejected SHARE_GATEWAY_TOKEN');
-        }
-        if (!ping.ok) return fail(res, 502, `Share gateway error (HTTP ${ping.status})`);
-      } catch (err) {
-        return fail(
-          res,
-          502,
-          `Share gateway unreachable (${conf.gatewayUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        );
+      // reserve the note before any building starts; released in finally
+      if (creating.has(note)) {
+        return fail(res, 409, 'A share for this note is already being created — wait for it to finish');
       }
-
-      const stream = ndjsonStream(res);
-      const progress = (message: string): void => {
-        stream.write({ kind: 'progress', message } satisfies ShareStreamEvent);
-      };
-      let snapDir: string | null = null;
-      let tgzPath: string | null = null;
+      creating.add(note);
       try {
-        const snapshot = await buildSnapshot(projectRoot(), route, progress);
-        snapDir = snapshot.dir;
-        tgzPath = `${snapshot.dir}.tgz`;
-        progress(`Packing snapshot (${snapshot.files.length + 1} files)…`);
-        // index.html at the tar root — the gateway extracts into site/ as-is
-        await tar.c({ gzip: true, cwd: snapshot.dir, file: tgzPath, portable: true }, readdirSync(snapshot.dir));
-        const size = statSync(tgzPath).size;
-        if (size > BUNDLE_LIMIT) {
-          throw new Error(`snapshot bundle is ${Math.round(size / 1048576)} MiB, above the ${BUNDLE_LIMIT / 1048576} MiB limit`);
-        }
-
-        const id = mintId();
-        const expiresAt = expiresDays ? new Date(Date.now() + expiresDays * 86_400_000).toISOString() : null;
-        progress('Uploading to the share gateway…');
-        const put = await gatewayFetch(
-          conf,
-          `/admin/s/${id}`,
-          {
-            method: 'PUT',
-            headers: {
-              'content-type': 'application/gzip',
-              'content-length': String(size),
-              'x-share-password': await hashPassword(password),
-              ...(expiresAt ? { 'x-share-expires': expiresAt } : {}),
-              // header values are latin1 — a CJK note id travels percent-encoded
-              'x-share-note': /^[\x20-\x7e]*$/.test(note) ? note : encodeURIComponent(note),
-            },
-            // streamed from disk: the bundle is never held in memory
-            body: Readable.toWeb(createReadStream(tgzPath)) as unknown as BodyInit,
-            duplex: 'half',
-          } as RequestInit,
-          600_000,
-        );
-        if (!put.ok) {
-          throw new Error(`gateway upload failed (HTTP ${put.status}): ${(await put.text()).slice(0, 300)}`);
-        }
-
-        const record: ShareRecord = {
-          id,
-          note,
-          route,
-          url: `${conf.publicBase}/s/${id}/`,
-          createdBy: user!.email,
-          createdAt: new Date().toISOString(),
-          expiresAt,
-          revokedAt: null,
-        };
-        // the local record must persist, and stay the note's only active one;
-        // otherwise the uploaded share is deleted again (compensation) so the
-        // gateway never serves a share this server has no record of
-        let lostRace = false;
+        // the gateway is checked before the (minutes-long) build
         try {
-          await updateShares((shares) => {
-            if (shares.some((r) => r.note === note && isActive(r))) {
-              lostRace = true;
-              return;
-            }
-            shares.push(record);
-          });
-          if (lostRace) throw new Error('This note already has an active share link — revoke it first');
+          const ping = await gatewayFetch(conf, '/admin/s', {}, 5000);
+          if (ping.status === 401) {
+            return fail(res, 502, 'Share gateway rejected SHARE_GATEWAY_TOKEN');
+          }
+          if (!ping.ok) return fail(res, 502, `Share gateway error (HTTP ${ping.status})`);
         } catch (err) {
-          await gatewayFetch(conf, `/admin/s/${id}`, { method: 'DELETE' }, 10_000).catch((cleanupErr: unknown) => {
-            console.error(`[wiki share] could not delete orphaned gateway share ${id}:`, cleanupErr);
-          });
-          throw err;
+          return fail(
+            res,
+            502,
+            `Share gateway unreachable (${conf.gatewayUrl}): ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
-        stream.write({ kind: 'result', ok: true, share: record } satisfies ShareStreamEvent);
-      } catch (err) {
-        stream.write({
-          kind: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        } satisfies ShareStreamEvent);
+
+        const stream = ndjsonStream(res);
+        const progress = (message: string): void => {
+          stream.write({ kind: 'progress', message } satisfies ShareStreamEvent);
+        };
+        // a creator who disconnects cancels the snapshot work
+        const closed = new AbortController();
+        res.on('close', () => closed.abort());
+        let snapDir: string | null = null;
+        let tgzPath: string | null = null;
+        try {
+          const snapshot = await buildSnapshot(projectRoot(), route, progress, closed.signal);
+          snapDir = snapshot.dir;
+          tgzPath = `${snapshot.dir}.tgz`;
+          progress(`Packing snapshot (${snapshot.files.length + 1} files)…`);
+          // index.html at the tar root — the gateway extracts into site/ as-is
+          await tar.c({ gzip: true, cwd: snapshot.dir, file: tgzPath, portable: true }, readdirSync(snapshot.dir));
+          const size = statSync(tgzPath).size;
+          if (size > BUNDLE_LIMIT) {
+            throw new Error(`snapshot bundle is ${Math.round(size / 1048576)} MiB, above the ${BUNDLE_LIMIT / 1048576} MiB limit`);
+          }
+          // a disconnected creator stops before the gateway sees anything
+          closed.signal.throwIfAborted();
+
+          const id = mintId();
+          const expiresAt = expiresDays ? new Date(Date.now() + expiresDays * 86_400_000).toISOString() : null;
+          progress('Uploading to the share gateway…');
+          const put = await gatewayFetch(
+            conf,
+            `/admin/s/${id}`,
+            {
+              method: 'PUT',
+              headers: {
+                'content-type': 'application/gzip',
+                'content-length': String(size),
+                'x-share-password': await hashPassword(password),
+                ...(expiresAt ? { 'x-share-expires': expiresAt } : {}),
+                // header values are latin1 — a CJK note id travels percent-encoded
+                'x-share-note': /^[\x20-\x7e]*$/.test(note) ? note : encodeURIComponent(note),
+              },
+              // streamed from disk: the bundle is never held in memory
+              body: Readable.toWeb(createReadStream(tgzPath)) as unknown as BodyInit,
+              duplex: 'half',
+            } as RequestInit,
+            600_000,
+          );
+          if (!put.ok) {
+            throw new Error(`gateway upload failed (HTTP ${put.status}): ${(await put.text()).slice(0, 300)}`);
+          }
+
+          const record: ShareRecord = {
+            id,
+            note,
+            route,
+            url: `${conf.publicBase}/s/${id}/`,
+            createdBy: user!.email,
+            createdAt: new Date().toISOString(),
+            expiresAt,
+            revokedAt: null,
+          };
+          // the local record must persist, and stay the note's only active one;
+          // otherwise the uploaded share is deleted again (compensation) so the
+          // gateway never serves a share this server has no record of
+          let lostRace = false;
+          try {
+            await updateShares((shares) => {
+              if (shares.some((r) => r.note === note && isActive(r))) {
+                lostRace = true;
+                return;
+              }
+              shares.push(record);
+            });
+            if (lostRace) throw new Error('This note already has an active share link — revoke it first');
+          } catch (err) {
+            await gatewayFetch(conf, `/admin/s/${id}`, { method: 'DELETE' }, 10_000).catch((cleanupErr: unknown) => {
+              console.error(`[wiki share] could not delete orphaned gateway share ${id}:`, cleanupErr);
+            });
+            throw err;
+          }
+          stream.write({ kind: 'result', ok: true, share: record } satisfies ShareStreamEvent);
+        } catch (err) {
+          stream.write({
+            kind: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          } satisfies ShareStreamEvent);
+        } finally {
+          if (snapDir) rmSync(snapDir, { recursive: true, force: true });
+          if (tgzPath) rmSync(tgzPath, { force: true });
+        }
+        stream.close();
       } finally {
-        if (snapDir) rmSync(snapDir, { recursive: true, force: true });
-        if (tgzPath) rmSync(tgzPath, { force: true });
+        creating.delete(note);
       }
-      stream.close();
     },
     { auth: true },
   );

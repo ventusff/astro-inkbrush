@@ -335,6 +335,10 @@ export function mountChatPanel(ctx: PageContext): void {
   };
   sendBtn.addEventListener('click', () => void send());
   input.addEventListener('keydown', (e) => {
+    // Enter during IME composition confirms the composition, never sends
+    // (isComposing; keyCode 229 covers engines that fire the key event
+    // after compositionend)
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void send();

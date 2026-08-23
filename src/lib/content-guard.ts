@@ -75,6 +75,13 @@ interface Point {
   offset?: number | undefined;
 }
 
+/** the slice of an estree program the expression check reads */
+interface EstreeNode {
+  type: string;
+  expression?: EstreeNode | undefined;
+  body?: EstreeNode[] | undefined;
+}
+
 interface MdNode {
   type: string;
   depth?: number | undefined;
@@ -83,9 +90,11 @@ interface MdNode {
   attributes?: { type: string; name?: string; value?: unknown }[] | undefined;
   children?: MdNode[] | undefined;
   position?: { start: Point; end: Point } | undefined;
+  /** structurally open so MdNode stays a supertype of every pipeline's Root */
+  data?: unknown;
 }
 
-/** the minimal slice of vfile we need: body, path, throwing a fatal error */
+/** the minimal slice of vfile the guard reads: body, path, fatal failure */
 interface FileLike {
   value: unknown;
   path?: string | undefined;
@@ -161,11 +170,24 @@ function isLeakedEmphasis(text: string, at: number, run: string): boolean {
   return open || (run.length > 1 && close);
 }
 
-/** `{/* comment *\/}` and template literals are the only two legitimate
- *  expressions in prose */
-function isIntendedExpression(value: string): boolean {
-  const v = value.trim();
-  return /^\/\*[\s\S]*\*\/$/.test(v) || v.startsWith('`');
+/**
+ * `{/* comment *\/}` and a lone template literal are the only two
+ * legitimate expressions in prose. The judgment reads the parsed program
+ * (mdast `data.estree`), never the spelling: the program must be exactly
+ * one ExpressionStatement whose whole expression is a TemplateLiteral —
+ * `{\`a\` + x}`, `{\`a\`, x}` and every other shape that merely begins
+ * with a template literal are findings. Interpolations inside the template
+ * are allowed (build-time string assembly, e.g. inline-SVG styling). A
+ * node without an estree program (minted by a plugin, not parsed from
+ * source) is judged by spelling, and only the comment form passes.
+ */
+function isIntendedExpression(node: MdNode): boolean {
+  const comment = /^\/\*[\s\S]*\*\/$/.test((node.value ?? '').trim());
+  const program = (node.data as { estree?: EstreeNode | undefined } | undefined)?.estree;
+  if (!program) return comment;
+  const body = program.body ?? [];
+  if (body.length === 0) return comment;
+  return body.length === 1 && body[0]!.type === 'ExpressionStatement' && body[0]!.expression?.type === 'TemplateLiteral';
 }
 
 const MANUAL_NUMBER = /^\s*\d+(?:\.\d+)*[.、．]\s/;
@@ -246,7 +268,7 @@ export function remarkContentGuard(options: ContentGuardOptions = {}) {
       // and template literals (inline-SVG styling and similar build-time
       // idioms), prose has no legitimate expression.
       if (node.type === 'mdxTextExpression' || node.type === 'mdxFlowExpression') {
-        if (!isIntendedExpression(node.value ?? '')) {
+        if (!isIntendedExpression(node)) {
           found(
             node.position?.start.offset,
             here,

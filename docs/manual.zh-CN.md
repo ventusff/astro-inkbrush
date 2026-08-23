@@ -121,8 +121,8 @@ CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本
 - Obsidian 剪藏的 frontmatter(`author` / `source` / `url` / `saved`)变成
   一行 `> Source: …`;描述从第一段实质内容自动提取。
 
-`inbox.ignore` 用来跳过噪音:每一项同时按 vault 相对路径前缀和文件名前缀
-匹配——`['daily/']` 跳过整个文件夹,`['scratch-']` 按名字跳过文件。
+`inbox.ignore` 用来跳过噪音:每一项按 vault 相对路径前缀和文件名前缀匹配,
+命中任意一个就跳过——`['daily/']` 跳过整个文件夹,`['scratch-']` 按名字跳过文件。
 
 ### 对外分享
 
@@ -186,6 +186,11 @@ export default defineInkbrushConfig({
 | `content.dir` | `'src/content/notes'` | 笔记内容根目录(相对站点根) |
 | `content.locales` | zh/en/de 表 | 笔记语言表——[见下](#contentlocales) |
 | `share` | 关 | 快照分享——[分享](#分享与网关契约)一节 |
+| `server.trustProxy` | `false` | 推导本服务自身 origin 时是否采信 `x-forwarded-host`/`-proto`——有反代在前面就开,否则别开 |
+
+配置在启动时校验:cookie 名/域不合法、`trustedOrigins` 不是纯 origin、
+登录或网关地址不是 http(s)、`content.dir` 是绝对路径、只开 `autopush` 不开
+`autocommit`,都会拒绝启动并点名字段。
 
 改动配置文件后,下一次请求即生效(服务端热更)——唯独收件箱监听目录是
 dev server 启动时创建的,改它要重启。
@@ -237,6 +242,7 @@ locales: [
 | `WIKI_INBOX_DIR` | `inbox.dir`(设为空字符串 = 本次运行不监听) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore`(逗号分隔) |
 | `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` | `autocommit` / `autopush`(`0`/`1`) |
+| `WIKI_TRUST_PROXY` | `server.trustProxy`(`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
 
@@ -271,7 +277,8 @@ locales: [
 id token 经 Google tokeninfo 端点验签(校 audience 与邮箱已验证),再过
 `allowedDomains` 白名单——**默认拒绝**:空名单谁都进不来;要明确放行所有
 Google 账号就写 `['*']`。名单项可以是域名(`acme.com`)也可以是完整地址
-(`bob@gmail.com`)。
+(`bob@gmail.com`)。登录 state 带签名、绑定发起登录的浏览器、只能用一次,
+10 分钟过期——重放或过期的回调在服务端就会失败。
 
 ### Google Workspace SAML SSO
 
@@ -414,8 +421,6 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `POST /claude/block` | 需登录 | NDJSON 流;300 秒上限;关页面照跑 |
 | `POST /claude/ask` | 需登录 | NDJSON 流;300 秒上限;断连即杀;可续对话——但只有开启该会话的同一用户、同一笔记能续(否则 403;会话表在内存里,服务重启即清) |
 | `POST /claude/translate` | 需登录 | NDJSON 流;30 分钟上限;目标语言已存在时 409 |
-
-AI 任务每用户最多同时 2 个(超出 429)。
 | `GET /inbox/status` | 需登录 | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | 需登录 | `{path}` 补导;路径锁定在 `inbox.dir` 内 |
 | `GET /comments/<id>` | 公开 | 现存评论(删除已生效);作者只露 `{name, provider}`——邮箱永不出服务端;`canDelete` 按请求者计算 |
@@ -426,6 +431,11 @@ AI 任务每用户最多同时 2 个(超出 429)。
 | `POST /share` | 需登录 | 创建分享——NDJSON 流:`progress…` → `result`;该笔记已有活跃分享时 409 |
 | `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填) |
 | `DELETE /share/<id>` | 需登录 | 撤销——只有创建者本人,或注册表开启时的管理员(否则 403) |
+
+AI 任务每用户最多同时 2 个、全机最多 4 个(超出 429);排队中的任务不占
+名额。每类任务还有形状约束:块编辑不得改动笔记里选中块之外的任何内容
+(伴随文件不受限),翻译必须恰好创建目标文件、源文件一字不动——违反约束的
+结果整体作废。
 
 通用规则:JSON 请求体必须以 `application/json` 发送、上限 1 MiB(否则
 415/413);改状态的请求若 `Origin`(或 `Referer`)指向本站和 `trustedOrigins`
@@ -456,6 +466,8 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
 编辑 = 改写 `<content.dir>` 下的源文件;Astro 内容热更新刷新页面。**文件即
 数据库,git 即历史**——修订账本在其上再加一层块级审计。全部 CMS 状态住在
 站点根的 `.wiki/`(git-ignored):
+
+`.wiki/` 目录以 0700 创建、文件 0600——账本、评论与身份记录里有邮箱和角色。
 
 ```
 .wiki/

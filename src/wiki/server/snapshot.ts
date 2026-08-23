@@ -2,10 +2,14 @@
  * Static snapshot builder for the share module.
  *
  * A share is a self-contained copy of one built page: a WIKI-free
- * `astro build` into `.wiki/share-dist` (cached across shares while none of
- * the build inputs changed since the build began), then the route's
- * index.html plus its complete asset closure (CSS → url() refs, JS → import
- * graph + emitted `/_astro/…` asset strings) copied into a temp dir. The HTML
+ * `astro build` into `.wiki/share-dist` (cached across shares while every
+ * build input's mtime is older than the cached build's start stamp), then
+ * the route's index.html plus its complete asset closure (CSS → url() refs,
+ * JS → import graph + emitted `/_astro/…` asset strings) copied into a temp
+ * dir. A required asset reference (script src, stylesheet link, image
+ * src/srcset, font url()) that resolves inside the site must exist in the
+ * build output, or the snapshot fails naming the reference; navigational
+ * hrefs stay permissive (page links are not assets). The HTML
  * is re-based from root-relative to `./`-relative (the page lands at
  * /s/<id>/index.html; assets keep their site-root-relative structure), and
  * copied stylesheets likewise. The output is asserted free of CMS and Vite
@@ -25,12 +29,14 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 
+import { POLLUTION_MARKERS } from '../../lib/pollution-markers.ts';
 import { childEnv } from './child-env.ts';
 import { containedPath } from './paths.ts';
 
@@ -102,8 +108,17 @@ function buildInputs(root: string): string[] {
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 const BUILD_KILL_GRACE_MS = 5000;
 
-function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): Promise<void> {
+function runAstroBuild(
+  root: string,
+  outDirRel: string,
+  onProgress: Progress,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
+    if (signal?.aborted) {
+      rejectPromise(new Error('snapshot build canceled — the client disconnected'));
+      return;
+    }
     // the project's own astro binary — never a network-resolving npx
     const astroBin = join(root, 'node_modules', '.bin', 'astro');
     if (!existsSync(astroBin)) {
@@ -130,18 +145,27 @@ function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): P
     const heartbeat = setInterval(() => {
       onProgress(`astro build running… ${Math.round((Date.now() - started) / 1000)}s`);
     }, 10_000);
-    // timeout: SIGTERM, then SIGKILL after a grace window
-    let timedOut = false;
+    // timeout / cancellation: SIGTERM, then SIGKILL after a grace window
+    let killReason: string | null = null;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
-    const timeout = setTimeout(() => {
-      timedOut = true;
+    const killChild = (reason: string): void => {
+      if (killReason) return;
+      killReason = reason;
       child.kill('SIGTERM');
       killTimer = setTimeout(() => child.kill('SIGKILL'), BUILD_KILL_GRACE_MS);
+    };
+    const timeout = setTimeout(() => {
+      killChild(`astro build timed out (${BUILD_TIMEOUT_MS / 60000} min) and was terminated`);
     }, BUILD_TIMEOUT_MS);
+    const onAbort = (): void => {
+      killChild('snapshot build canceled — the client disconnected');
+    };
+    signal?.addEventListener('abort', onAbort);
     const cleanup = (): void => {
       clearInterval(heartbeat);
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener('abort', onAbort);
     };
     child.on('error', (err) => {
       cleanup();
@@ -149,9 +173,8 @@ function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): P
     });
     child.on('close', (code) => {
       cleanup();
-      if (timedOut) {
-        rejectPromise(new Error(`astro build timed out (${BUILD_TIMEOUT_MS / 60000} min) and was terminated`));
-      } else if (code === 0) resolvePromise();
+      if (killReason) rejectPromise(new Error(killReason));
+      else if (code === 0) resolvePromise();
       else rejectPromise(new Error(`astro build failed (code ${code})${tail ? `: …${tail.slice(-600)}` : ''}`));
     });
   });
@@ -160,26 +183,44 @@ function runAstroBuild(root: string, outDirRel: string, onProgress: Progress): P
 // serialize builds — two concurrent share creations must not race one outDir
 let buildChain: Promise<void> = Promise.resolve();
 
-async function ensureBuild(root: string, onProgress: Progress): Promise<string> {
+async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSignal): Promise<string> {
   const outDir = join(root, '.wiki', 'share-dist');
   const stampFile = join(root, '.wiki', 'share-dist.stamp');
+  // the cache predicate, shared by the freshness check and the post-build
+  // drift check: a build whose start stamp is newer than every input's
+  // mtime reflects those inputs
+  const inputsOlderThan = (stamp: number): boolean =>
+    buildInputs(root).every((input) => stamp > latestMtime(input));
   const run = async (): Promise<void> => {
     const stamp = existsSync(stampFile) ? Number(readFileSync(stampFile, 'utf8').trim()) : 0;
     const fresh =
-      existsSync(join(outDir, 'index.html')) &&
-      Number.isFinite(stamp) &&
-      buildInputs(root).every((input) => stamp > latestMtime(input));
+      existsSync(join(outDir, 'index.html')) && Number.isFinite(stamp) && inputsOlderThan(stamp);
     if (fresh) {
       onProgress('Using cached static build');
       return;
     }
-    onProgress('Building the static site (WIKI-free astro build) — may take a few minutes on first share…');
-    // the stamp is the moment the build began: an input changed while it ran
-    // is newer than the stamp and invalidates the cache next time
-    const startedAt = Date.now();
-    await runAstroBuild(root, '.wiki/share-dist', onProgress);
-    writeFileSync(stampFile, String(startedAt));
-    onProgress('Static build finished');
+    // the stamp records the build's start: an input edited while the build
+    // runs is newer than the stamp, so the drift check below catches it and
+    // rebuilds once; a second drift fails the share rather than serving a
+    // build that mixes pre- and post-edit inputs
+    for (let attempt = 1; ; attempt++) {
+      signal?.throwIfAborted();
+      onProgress(
+        attempt === 1
+          ? 'Building the static site (WIKI-free astro build) — may take a few minutes on first share…'
+          : 'The build inputs changed during the build — rebuilding once…',
+      );
+      const startedAt = Date.now();
+      await runAstroBuild(root, '.wiki/share-dist', onProgress, signal);
+      if (inputsOlderThan(startedAt)) {
+        writeFileSync(stampFile, String(startedAt));
+        onProgress('Static build finished');
+        return;
+      }
+      if (attempt >= 2) {
+        throw new Error('the site keeps changing while the snapshot builds — retry when edits pause');
+      }
+    }
   };
   const chained = buildChain.then(run, run);
   buildChain = chained.catch(() => undefined);
@@ -248,7 +289,10 @@ function resolveRef(ref: string, fromDir: string, outDir: string): string | null
   return abs;
 }
 
-const POLLUTION = ['/api/wiki', '@vite/client', 'astro-dev-toolbar'];
+// the shared CMS markers plus what only a dev-server leak can carry; the
+// exempted site-owned `inkbrush-note` meta tags are stripped before the scan
+const POLLUTION = [...POLLUTION_MARKERS, '/api/wiki', '@vite/client', 'astro-dev-toolbar'];
+const EXEMPT_TAG = /<meta\s[^>]*name=["']inkbrush-note(?:-url)?["'][^>]*>/gi;
 
 /**
  * One start tag beginning at `at`, or null if `at` is not one.
@@ -278,7 +322,8 @@ function readStartTag(html: string, at: number): { raw: string; name: string; en
  * every script. Prose is dropped.
  *
  * The hygiene check exists to catch a CMS-enabled build leaking into a public
- * share, and a leak always arrives as a tag or a script — never as body text.
+ * share, and a leak always arrives as a tag, a script or a stylesheet —
+ * never as body text.
  * A plain substring search over the whole document cannot tell the two apart:
  * a note that merely documents an endpoint (`/api/wiki/...` in a table of
  * SAML settings) must still be shareable.
@@ -301,8 +346,8 @@ export function executableMarkup(html: string): string {
     }
     out += `${tag.raw}\n`;
     i = tag.end;
-    if (tag.name === 'script') {
-      const close = html.toLowerCase().indexOf('</script', i);
+    if (tag.name === 'script' || tag.name === 'style') {
+      const close = html.toLowerCase().indexOf(`</${tag.name}`, i);
       const stop = close === -1 ? html.length : close;
       out += `${html.slice(i, stop)}\n`;
       i = stop;
@@ -628,6 +673,16 @@ const URL_ATTRS = new Set([
 /** attributes whose value is a srcset list */
 const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
 
+/** where in the document a reference sits — the requiredness rules read it */
+interface RefContext {
+  /** lowercase tag name ('' for a CSS-file or JS-file reference) */
+  tag: string;
+  /** lowercase attribute name; undefined for a script/style body */
+  attr?: string | undefined;
+  /** the tag's rel attribute value (link tags), lowercase */
+  rel?: string | undefined;
+}
+
 /**
  * Walk a built page and hand every url-ish value to `map`, splicing whatever it
  * returns back into the document.
@@ -636,7 +691,7 @@ const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
  * attribute pattern applied blindly also hits `src="…"` inside a `<script>`
  * string, inside an HTML comment, and inside any note that shows HTML in a code
  * block (fenced samples reach the output as literal text — quotes and all).
- * Rewriting those corrupts content that was never a reference. Everything
+ * Rewriting those corrupts content that is not a reference. Everything
  * outside a real start tag is therefore copied byte-for-byte, and `<script>` /
  * `<style>` bodies get their own handling.
  *
@@ -647,22 +702,28 @@ const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
  * rewriter — so a reference can never be copied into the snapshot without being
  * re-based, or re-based without being copied.
  */
-function mapHtmlRefs(html: string, map: (ref: string, kind: 'url' | 'css' | 'js') => string): string {
+function mapHtmlRefs(
+  html: string,
+  map: (ref: string, kind: 'url' | 'css' | 'js', ctx: RefContext) => string,
+): string {
   let out = '';
   let i = 0;
 
   /** attributes of one start tag; `end` is the index just past `>` */
-  const mapStartTag = (tag: string): string =>
-    tag.replace(
+  const mapStartTag = (tag: string, tagName: string): string => {
+    const relRaw = /(?:^|\s)rel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag);
+    const rel = (relRaw?.[1] ?? relRaw?.[2] ?? relRaw?.[3])?.toLowerCase();
+    return tag.replace(
       /([^\s"'=<>/]+)(\s*=\s*)("([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g,
       (all, rawName: string, eq: string, _v: string, dq?: string, sq?: string, uq?: string) => {
         const name = rawName.toLowerCase();
         const value = dq ?? sq ?? uq ?? '';
         const quote = dq !== undefined ? '"' : sq !== undefined ? "'" : '';
+        const ctx: RefContext = { tag: tagName, attr: name, rel };
         let mapped: string;
-        if (URL_ATTRS.has(name)) mapped = map(value, 'url');
-        else if (SRCSET_ATTRS.has(name)) mapped = mapSrcset(value, (ref) => map(ref, 'url'));
-        else if (name === 'style') mapped = mapCssRefs(value, (ref) => map(ref, 'css'));
+        if (URL_ATTRS.has(name)) mapped = map(value, 'url', ctx);
+        else if (SRCSET_ATTRS.has(name)) mapped = mapSrcset(value, (ref) => map(ref, 'url', ctx));
+        else if (name === 'style') mapped = mapCssRefs(value, (ref) => map(ref, 'css', ctx));
         else return all;
         // an unquoted value that gained a space/quote must be quoted to stay valid
         const needsQuote = quote === '' && /[\s"'`=<>]/.test(mapped);
@@ -670,6 +731,7 @@ function mapHtmlRefs(html: string, map: (ref: string, kind: 'url' | 'css' | 'js'
         return `${rawName}${eq}${q}${mapped}${q}`;
       },
     );
+  };
 
   while (i < html.length) {
     const lt = html.indexOf('<', i);
@@ -696,7 +758,7 @@ function mapHtmlRefs(html: string, map: (ref: string, kind: 'url' | 'css' | 'js'
       continue;
     }
 
-    out += mapStartTag(tag.raw);
+    out += mapStartTag(tag.raw, tag.name);
     i = tag.end;
 
     const tagName = tag.name;
@@ -710,21 +772,50 @@ function mapHtmlRefs(html: string, map: (ref: string, kind: 'url' | 'css' | 'js'
     const body = closeAt === -1 ? rest : rest.slice(0, closeAt);
     out +=
       tagName === 'style'
-        ? mapCssRefs(body, (ref) => map(ref, 'css'))
+        ? mapCssRefs(body, (ref) => map(ref, 'css', { tag: tagName }))
         : // Inline JS is not rewritten wholesale — a string literal there is not
           // reliably a URL. Vite's own emitted `/_astro/…` refs are the exception:
           // unambiguous, and what the island bootstrap needs.
-          body.replace(/(["'`])(\/_astro\/[^"'`]+)\1/g, (_all, q: string, ref: string) => `${q}${map(ref, 'js')}${q}`);
+          body.replace(
+            /(["'`])(\/_astro\/[^"'`]+)\1/g,
+            (_all, q: string, ref: string) => `${q}${map(ref, 'js', { tag: tagName })}${q}`,
+          );
     i += closeAt === -1 ? rest.length : closeAt;
   }
   return out;
 }
 
-/** every url-ish value of a page, in document order (closure collection) */
-function collectHtmlRefs(html: string): string[] {
-  const refs: string[] = [];
-  mapHtmlRefs(html, (ref) => {
-    refs.push(ref);
+/** a reference whose target is (by extension) a web font */
+const FONT_REF = /\.(woff2?|ttf|otf|eot)$/i;
+
+function isFontRef(ref: string): boolean {
+  return FONT_REF.test(ref.split('#')[0]!.split('?')[0]!);
+}
+
+/**
+ * The page cannot render without these; every other reference (page links,
+ * preloads, open-graph URLs…) is navigational and stays permissive:
+ *  - script src
+ *  - stylesheet link href
+ *  - img / source src and srcset
+ *  - font url() (stylesheets and style blocks/attributes)
+ */
+function isRequiredRef(ref: string, kind: 'url' | 'css' | 'js', ctx: RefContext): boolean {
+  if (kind === 'css') return isFontRef(ref);
+  if (kind !== 'url') return false;
+  if (ctx.tag === 'script' && ctx.attr === 'src') return true;
+  if (ctx.tag === 'link' && ctx.attr === 'href' && (ctx.rel ?? '').split(/\s+/).includes('stylesheet')) {
+    return true;
+  }
+  return (ctx.tag === 'img' || ctx.tag === 'source') && (ctx.attr === 'src' || ctx.attr === 'srcset');
+}
+
+/** every url-ish value of a page, in document order (closure collection),
+ *  each flagged with whether the snapshot may exist without it */
+function collectHtmlRefs(html: string): Array<{ ref: string; required: boolean }> {
+  const refs: Array<{ ref: string; required: boolean }> = [];
+  mapHtmlRefs(html, (ref, kind, ctx) => {
+    refs.push({ ref, required: isRequiredRef(ref, kind, ctx) });
     return ref;
   });
   return refs;
@@ -795,8 +886,10 @@ export async function buildSnapshot(
   root: string,
   noteRoute: string,
   onProgress: Progress = () => undefined,
+  signal?: AbortSignal,
 ): Promise<Snapshot> {
-  const outDir = await ensureBuild(root, onProgress);
+  const outDir = await ensureBuild(root, onProgress, signal);
+  signal?.throwIfAborted();
 
   // route → built page (directory format first, file format fallback);
   // every candidate must resolve inside the build output
@@ -816,54 +909,79 @@ export async function buildSnapshot(
   onProgress('Collecting the page asset closure…');
   const html = readFileSync(htmlPath, 'utf8');
   const snapDir = await mkdtemp(join(tmpdir(), 'inkbrush-share-'));
+  // the temp dir is owned by the caller only once this returns; any failure
+  // before that removes it here
+  try {
+    // walk the closure: html refs → css url()/`@import` → js import graph.
+    // A required ref (see isRequiredRef) that resolves inside the site must
+    // exist as a file, or the snapshot fails naming the reference; page
+    // links and other navigational refs are skipped silently.
+    const files: string[] = [];
+    const visited = new Set<string>();
+    const pageName = relative(outDir, htmlPath).split(sep).join('/');
+    const queue: Array<{ ref: string; fromDir: string; from: string; required: boolean }> =
+      collectHtmlRefs(html).map(({ ref, required }) => ({
+        ref,
+        fromDir: dirname(htmlPath),
+        from: pageName,
+        required,
+      }));
+    while (queue.length) {
+      const { ref, fromDir, from, required } = queue.shift()!;
+      const abs = resolveRef(ref, fromDir, outDir);
+      if (!abs || visited.has(abs)) continue;
+      let stat;
+      try {
+        stat = lstatSync(abs);
+      } catch {
+        stat = null;
+      }
+      if (!stat?.isFile()) {
+        // directories = other routes; symlinks are never packed
+        if (required) {
+          throw new Error(
+            `snapshot failed: the page requires asset '${ref}' (referenced by ${from}) but the build output has no such file`,
+          );
+        }
+        continue; // e.g. <a href="/wiki/other"> — page links are not assets
+      }
+      visited.add(abs);
+      const rel = relative(outDir, abs);
+      const dest = join(snapDir, rel);
+      mkdirSync(dirname(dest), { recursive: true });
+      files.push(rel);
+      if (abs.endsWith('.css')) {
+        const css = readFileSync(abs, 'utf8');
+        assertClean(css, rel);
+        for (const next of collectCssUrls(css)) {
+          queue.push({ ref: next, fromDir: dirname(abs), from: rel, required: isFontRef(next) });
+        }
+        // copied with its refs re-based, not byte-for-byte (see rewriteCssFile)
+        const cssDir = dirname(rel).split(sep).join('/');
+        writeFileSync(dest, rewriteCssFile(css, cssDir === '.' ? '' : cssDir));
+        continue;
+      }
+      copyFileSync(abs, dest);
+      if (/\.m?js$/.test(abs)) {
+        const js = readFileSync(abs, 'utf8');
+        assertClean(js, rel);
+        for (const next of collectJsRefs(js)) {
+          queue.push({ ref: next, fromDir: dirname(abs), from: rel, required: false });
+        }
+      }
+    }
 
-  // walk the closure: html refs → css url()/`@import` → js import graph
-  const files: string[] = [];
-  const visited = new Set<string>();
-  const queue: Array<{ ref: string; fromDir: string }> = collectHtmlRefs(html).map((ref) => ({
-    ref,
-    fromDir: dirname(htmlPath),
-  }));
-  while (queue.length) {
-    const { ref, fromDir } = queue.shift()!;
-    const abs = resolveRef(ref, fromDir, outDir);
-    if (!abs || visited.has(abs)) continue;
-    visited.add(abs);
-    let stat;
-    try {
-      stat = lstatSync(abs);
-    } catch {
-      continue; // e.g. <a href="/wiki/other"> — page links are not assets
-    }
-    if (!stat.isFile()) continue; // directories = other routes; symlinks are never packed
-    const rel = relative(outDir, abs);
-    const dest = join(snapDir, rel);
-    mkdirSync(dirname(dest), { recursive: true });
-    files.push(rel);
-    if (abs.endsWith('.css')) {
-      const css = readFileSync(abs, 'utf8');
-      assertClean(css, rel);
-      for (const next of collectCssUrls(css)) queue.push({ ref: next, fromDir: dirname(abs) });
-      // copied with its refs re-based, not byte-for-byte (see rewriteCssFile)
-      const cssDir = dirname(rel).split(sep).join('/');
-      writeFileSync(dest, rewriteCssFile(css, cssDir === '.' ? '' : cssDir));
-      continue;
-    }
-    copyFileSync(abs, dest);
-    if (/\.m?js$/.test(abs)) {
-      const js = readFileSync(abs, 'utf8');
-      assertClean(js, rel);
-      for (const next of collectJsRefs(js)) queue.push({ ref: next, fromDir: dirname(abs) });
-    }
+    const pageDir = relative(outDir, dirname(htmlPath)).split(sep).join('/');
+    const rewritten = rewriteHtml(html, pageDir);
+    assertClean(executableMarkup(rewritten).replace(EXEMPT_TAG, ''), 'index.html');
+    writeFileSync(join(snapDir, 'index.html'), rewritten);
+    mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });
+    writeFileSync(join(snapDir, PRELOAD_SHIM), PRELOAD_SHIM_SOURCE);
+    files.push(PRELOAD_SHIM);
+    onProgress(`Snapshot ready (${files.length} assets)`);
+    return { dir: snapDir, files };
+  } catch (err) {
+    rmSync(snapDir, { recursive: true, force: true });
+    throw err;
   }
-
-  const pageDir = relative(outDir, dirname(htmlPath)).split(sep).join('/');
-  const rewritten = rewriteHtml(html, pageDir);
-  assertClean(executableMarkup(rewritten), 'index.html');
-  writeFileSync(join(snapDir, 'index.html'), rewritten);
-  mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });
-  writeFileSync(join(snapDir, PRELOAD_SHIM), PRELOAD_SHIM_SOURCE);
-  files.push(PRELOAD_SHIM);
-  onProgress(`Snapshot ready (${files.length} assets)`);
-  return { dir: snapDir, files };
 }

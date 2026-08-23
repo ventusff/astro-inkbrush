@@ -59,10 +59,14 @@
  *                            native TypeScript support.
  *   --allow <target>         a link target that may resolve to nothing
  *                            (repeatable); reported as INFO, never a FAIL
+ *   --allow-empty            accept a corpus with zero notes (without it, an
+ *                            empty corpus is a failure — it certifies
+ *                            nothing)
  *   --help                   print this usage
  *
- * Exit code: 0 clean (or FAILs without --strict), 1 FAILs under --strict,
- * 2 usage error.
+ * Exit code: 0 clean (or FAILs without --strict), 1 FAILs under --strict —
+ * a nonexistent content dir and an empty corpus without --allow-empty are
+ * failures regardless of --strict — 2 usage error.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
@@ -321,7 +325,7 @@ export function checkWikilinks(root, options = {}) {
 
 /* ---------------- CLI ---------------- */
 
-const USAGE = `usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-prefix <p/>]... [--extra <dir>:<idPrefix>]... [--config <path>] [--allow <target>]...
+const USAGE = `usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-prefix <p/>]... [--extra <dir>:<idPrefix>]... [--config <path>] [--allow <target>]... [--allow-empty]
 
   <content-dir>            the notes root (<id>/index.{md,mdx} layout)
   --strict                 exit 1 when the report carries any FAIL (dead
@@ -339,6 +343,8 @@ const USAGE = `usage: check-wikilinks.mjs <content-dir> [--strict] [--locale-pre
                            and --locale-prefix / --extra are not accepted
   --allow <target>         a link target that may resolve to nothing
                            (repeatable) — reported as INFO, never a FAIL
+  --allow-empty            accept a corpus with zero notes (without it, an
+                           empty corpus fails — it certifies nothing)
   --help                   print this usage
 
 Reports FAIL missing / FAIL ambiguous (dead links), WARN anchor (no such
@@ -354,7 +360,7 @@ export async function main(argv) {
     return 0;
   }
   const valued = new Set(['--locale-prefix', '--extra', '--config', '--allow']);
-  const flags = new Set(['--strict']);
+  const flags = new Set(['--strict', '--allow-empty']);
   if (valued.has(argv[argv.length - 1])) {
     console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
     return 2;
@@ -367,6 +373,7 @@ export async function main(argv) {
   }
   const many = (name) => argv.flatMap((a, i) => (a === `--${name}` && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
   const strict = argv.includes('--strict');
+  const allowEmpty = argv.includes('--allow-empty');
   const localePrefixes = many('locale-prefix');
   const extraSpecs = many('extra');
   const configPath = many('config')[0];
@@ -400,7 +407,19 @@ export async function main(argv) {
     extras.push({ dir: resolve(spec.slice(0, idx)), prefix: spec.slice(idx + 1).replace(/\/+$/, '') });
   }
 
-  const result = checkWikilinks(resolve(positional[0]), { locales, extras, site, allow });
+  const root = resolve(positional[0]);
+  let rootStat = null;
+  try {
+    rootStat = statSync(root);
+  } catch {
+    /* reported below */
+  }
+  if (rootStat === null || !rootStat.isDirectory()) {
+    console.error(`✗ content dir does not exist or is not a directory: ${root}`);
+    return 1;
+  }
+
+  const result = checkWikilinks(root, { locales, extras, site, allow });
   for (const { level, kind, note, message } of result.report) {
     const line = `${level} ${kind.padEnd(9)} ${note}: ${message}`;
     if (level === 'FAIL') console.error(line);
@@ -408,6 +427,10 @@ export async function main(argv) {
     else console.log(line);
   }
   console.log(`\nnotes=${result.notes} wikilinks=${result.wikilinks} fails=${result.fails} warns=${result.warns}`);
+  if (result.notes === 0 && !allowEmpty) {
+    console.error(`✗ no notes found under ${root} — an empty corpus certifies nothing (pass --allow-empty when that is intended)`);
+    return 1;
+  }
   return strict && result.fails > 0 ? 1 : 0;
 }
 

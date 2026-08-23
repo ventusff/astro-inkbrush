@@ -99,7 +99,18 @@ export interface IdentityConfig {
   autoRegister?: boolean;
 }
 
+export interface ServerConfig {
+  /** honor x-forwarded-host / x-forwarded-proto / x-forwarded-for from the
+   *  incoming request (default false). Set true ONLY when the dev server
+   *  sits behind a reverse proxy that overwrites these headers; a directly
+   *  exposed server must leave it off, or any client can forge its origin
+   *  and protocol */
+  trustProxy?: boolean;
+}
+
 export interface WikiConfigInput {
+  /** how the server reads its own environment (proxy trust) */
+  server?: ServerConfig;
   auth?: {
     /** dev quick-login (name + email, no password) — local machines and
      *  private networks. Omitted, the default (true) serves LOOPBACK
@@ -170,9 +181,10 @@ export interface WikiConfigInput {
 
 /** fully resolved config — defaults + env overrides applied (server/config.ts) */
 export interface WikiConfig {
+  server: { trustProxy: boolean };
   auth: {
     dev: boolean;
-    /** the dev flag was set explicitly (config file or WIKI_DEV_LOGIN);
+    /** the dev flag is set explicitly (config file or WIKI_DEV_LOGIN);
      *  a merely-defaulted true serves loopback clients only */
     devExplicit: boolean;
     google: false | { allowedDomains: string[]; baseUrl: string | null };

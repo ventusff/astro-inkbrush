@@ -157,8 +157,8 @@ rules:
   substantive paragraph.
 
 `inbox.ignore` skips noise: each entry is matched as a prefix of the
-vault-relative path *and* of the file name — `['daily/']` skips a folder,
-`['scratch-']` skips files by name.
+vault-relative path and of the file name — either match skips the file;
+`['daily/']` skips a folder, `['scratch-']` skips files by name.
 
 ### Sharing
 
@@ -226,6 +226,12 @@ export default defineInkbrushConfig({
 | `content.dir` | `'src/content/notes'` | Note content root, relative to the site root |
 | `content.locales` | zh/en/de table | The note language table — [below](#contentlocales) |
 | `share` | off | Snapshot sharing — [sharing](#sharing--the-gateway-contract) |
+| `server.trustProxy` | `false` | Honor `x-forwarded-host`/`-proto` when deriving the server's own origin — set it exactly when a reverse proxy fronts the editor |
+
+The configuration is validated at startup: a malformed cookie name or
+domain, a `trustedOrigins` entry that is not a bare origin, a non-http(s)
+provider or gateway URL, an absolute `content.dir`, or `autopush` without
+`autocommit` refuses to start, naming the field.
 
 Edits to the config apply on the next request (the server hot-reloads) —
 except the inbox watch directory, which is created at dev-server startup and
@@ -283,6 +289,7 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_INBOX_DIR` | `inbox.dir` (empty string = watcher off for this run) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore` (comma-separated) |
 | `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` | `autocommit` / `autopush` (`0`/`1`) |
+| `WIKI_TRUST_PROXY` | `server.trustProxy` (`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
 
@@ -320,7 +327,9 @@ networks only, never for anything externally reachable.
 The id token is verified against Google's tokeninfo endpoint (audience +
 verified email), then checked against `allowedDomains` — a **fail-closed**
 allowlist: an empty list denies everyone; pass `['*']` to explicitly allow
-any Google account. Entries can be domains (`acme.com`) or full addresses
+any Google account. The login state is signed, bound to the starting
+browser, single-use, and expires after 10 minutes — a replayed or stale
+callback fails server-side. Entries can be domains (`acme.com`) or full addresses
 (`bob@gmail.com`).
 
 ### Google Workspace SAML SSO
@@ -492,8 +501,6 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `POST /claude/block` | signed-in | NDJSON stream; 300 s cap; survives client disconnect |
 | `POST /claude/ask` | signed-in | NDJSON stream; 300 s cap; killed on disconnect; resumable — only by the user and note the session was opened for (403 otherwise; the session registry is in-memory and resets with the server) |
 | `POST /claude/translate` | signed-in | NDJSON stream; 30 min cap; 409 if the target locale exists |
-
-AI jobs are capped at 2 in flight per user (429 beyond).
 | `GET /inbox/status` | signed-in | `{enabled, watching, seen, imported}` |
 | `POST /inbox/import` | signed-in | `{path}` backfill; path confined to `inbox.dir` |
 | `GET /comments/<id>` | public | Live comments (deletions applied); authors appear as `{name, provider}` — emails never leave the server; `canDelete` is computed per requester |
@@ -504,6 +511,13 @@ AI jobs are capped at 2 in flight per user (429 beyond).
 | `POST /share` | signed-in | Create share — NDJSON `progress…` → `result`; 409 when the note already has an active share |
 | `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required) |
 | `DELETE /share/<id>` | signed-in | Revoke — the share's creator, or an admin when the registry is on (403 otherwise) |
+
+AI jobs are capped at 2 in flight per user and 4 machine-wide (429
+beyond); queued jobs hold no capacity. Each job kind carries a
+postcondition: a block edit may change nothing in the note outside the
+selected block (companions stay free), and a translation must create
+exactly the target file while leaving the source untouched — a result
+violating its postcondition is refused whole.
 
 Cross-cutting: JSON bodies must be sent as `application/json` and are capped
 at 1 MiB (415/413 otherwise); a state-changing request whose `Origin` (or
@@ -537,6 +551,9 @@ Editing = writing to `<content.dir>` source files; Astro's content HMR
 refreshes the page. **Files are the database, git is the history** — the
 journal adds per-block audit granularity on top. All CMS state lives under
 `.wiki/` at the site root (git-ignored):
+
+The `.wiki/` tree is created 0700 and its files 0600 — journal, comments
+and identity records carry emails and roles.
 
 ```
 .wiki/

@@ -42,7 +42,9 @@ export const api = {
 
 /**
  * POST an NDJSON-streaming endpoint; yields each parsed line. Throws ApiError
- * on non-2xx before the stream starts.
+ * on non-2xx before the stream starts. A consumer that stops early (break /
+ * return / throw) cancels the response body, so the connection closes and
+ * the server sees the disconnect; `signal` additionally aborts the fetch.
  */
 export async function* stream<T = ClaudeStreamEvent>(
   path: string,
@@ -62,16 +64,21 @@ export async function* stream<T = ClaudeStreamEvent>(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (line) yield JSON.parse(line) as T;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) yield JSON.parse(line) as T;
+      }
     }
+    if (buffer.trim()) yield JSON.parse(buffer) as T;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  if (buffer.trim()) yield JSON.parse(buffer) as T;
 }

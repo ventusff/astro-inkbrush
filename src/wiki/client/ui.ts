@@ -127,10 +127,14 @@ export interface PopoverOptions {
 /**
  * One-at-a-time floating non-modal dialog, light-dismissed on outside
  * pointerdown, on focus leaving it, and on Escape. `anchor` positions it
- * (below-start alignment, clamped to the viewport). Focus moves to the first
- * focusable child on open (the dialog itself when there is none) and returns
- * to the trigger on close when it is still inside. While open, the trigger
- * carries aria-expanded="true" and aria-controls pointing at the dialog's id.
+ * (below-start alignment, clamped into the viewport on both axes), tracking
+ * the anchor's live rect on scroll and resize. An anchor inside a
+ * position:fixed ancestor scrolls with the viewport, so its popover is
+ * position:fixed too and shares that coordinate space. Focus moves to the
+ * first focusable child on open (the dialog itself when there is none) and
+ * returns to the trigger on close when it is still inside. While open, the
+ * trigger carries aria-expanded="true" and aria-controls pointing at the
+ * dialog's id.
  */
 let openPopover: HTMLElement | null = null;
 let closeCurrent: (() => void) | null = null;
@@ -145,11 +149,26 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
   );
   trigger.setAttribute('aria-controls', pop.id);
   document.body.append(pop);
-  const rect = anchor.getBoundingClientRect();
-  const top = rect.bottom + 8 + window.scrollY;
-  pop.style.top = `${top}px`;
-  const left = Math.min(rect.left + window.scrollX, window.scrollX + window.innerWidth - pop.offsetWidth - 12);
-  pop.style.left = `${Math.max(8, left)}px`;
+  const fixedAnchor = ((): boolean => {
+    for (let el: Element | null = anchor; el instanceof Element; el = el.parentElement) {
+      if (getComputedStyle(el).position === 'fixed') return true;
+    }
+    return false;
+  })();
+  if (fixedAnchor) pop.style.position = 'fixed';
+  const place = (): void => {
+    const rect = anchor.getBoundingClientRect();
+    // viewport-space placement first (below-start, clamped into the
+    // viewport), then shifted into document space for a non-fixed popover
+    const top = Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - pop.offsetHeight - 8));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 12));
+    pop.style.top = `${top + (fixedAnchor ? 0 : window.scrollY)}px`;
+    pop.style.left = `${left + (fixedAnchor ? 0 : window.scrollX)}px`;
+  };
+  place();
+  // capture catches scrolls of nested scroll containers, not just the page
+  window.addEventListener('scroll', place, { passive: true, capture: true });
+  window.addEventListener('resize', place, { passive: true });
   requestAnimationFrame(() => pop.classList.add('show'));
   trigger.setAttribute('aria-expanded', 'true');
   (firstFocusable(pop) ?? pop).focus();
@@ -164,6 +183,8 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
     closed = true;
     document.removeEventListener('pointerdown', onDown, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('scroll', place, { capture: true });
+    window.removeEventListener('resize', place);
     trigger.setAttribute('aria-expanded', 'false');
     trigger.removeAttribute('aria-controls');
     if (pop.contains(document.activeElement)) trigger.focus();

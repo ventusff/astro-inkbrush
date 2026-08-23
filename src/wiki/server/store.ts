@@ -13,23 +13,29 @@
  *    crash mid-append); a malformed line anywhere else is an error;
  *  - read-modify-write sequences on one file run under `withLock(file)`,
  *    which serializes them within this process (the CMS runs as one dev
- *    server process; there is no cross-process lock).
+ *    server process; there is no cross-process lock);
+ *  - `.wiki/` holds private state (session secret, journals, comments):
+ *    its directories are created 0700 and its new files 0600; an existing
+ *    file keeps its mode on rewrite; content files elsewhere keep the
+ *    process default.
  */
 import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 let root = process.cwd();
 
@@ -46,19 +52,37 @@ export function wikiDataDir(...segments: string[]): string {
   return join(root, '.wiki', 'data', ...segments);
 }
 
-function ensureDir(path: string): void {
-  mkdirSync(path, { recursive: true });
+/** `path` sits under this project's private `.wiki/` state directory */
+function underWikiDir(path: string): boolean {
+  const wikiRoot = join(root, '.wiki');
+  return path === wikiRoot || path.startsWith(wikiRoot + sep);
+}
+
+function ensureDir(path: string, mode?: number): void {
+  mkdirSync(path, { recursive: true, ...(mode === undefined ? {} : { mode }) });
 }
 
 /** write `text` to `file` atomically: a sibling temp file, fsync, rename;
  *  a failed write removes the temp file, and the directory entry is fsynced
- *  (best-effort) so the rename survives a crash */
+ *  (best-effort) so the rename survives a crash. An existing file keeps its
+ *  mode; a new file under `.wiki/` defaults to 0600 (and its directories to
+ *  0700), a new file elsewhere to `mode` or the process default */
 export function writeFileAtomic(file: string, text: string, mode?: number): void {
-  ensureDir(dirname(file));
+  const isPrivate = underWikiDir(file);
+  ensureDir(dirname(file), isPrivate ? 0o700 : undefined);
+  let effectiveMode = mode ?? (isPrivate ? 0o600 : undefined);
+  try {
+    effectiveMode = statSync(file).mode & 0o777;
+  } catch {
+    /* new file — the default above applies */
+  }
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
-    const fd = openSync(tmp, 'w', mode);
+    const fd = openSync(tmp, 'w', effectiveMode);
     try {
+      // the open mode is filtered by the umask; a preserved/explicit mode
+      // must land exactly, so it is applied to the descriptor as well
+      if (effectiveMode !== undefined) fchmodSync(fd, effectiveMode);
       writeSync(fd, text);
       fsyncSync(fd);
     } finally {
@@ -118,7 +142,7 @@ export async function withLock<T>(key: string, fn: () => Promise<T> | T): Promis
 export function sessionSecret(): string {
   const file = join(root, '.wiki', 'secret');
   if (!existsSync(file)) {
-    ensureDir(dirname(file));
+    ensureDir(dirname(file), 0o700);
     try {
       writeFileSync(file, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' });
     } catch (err) {
@@ -131,8 +155,10 @@ export function sessionSecret(): string {
 /* ---------------- JSON / NDJSON ---------------- */
 
 export function appendNdjson(file: string, record: unknown): void {
-  ensureDir(dirname(file));
-  appendFileSync(file, `${JSON.stringify(record)}\n`);
+  const isPrivate = underWikiDir(file);
+  ensureDir(dirname(file), isPrivate ? 0o700 : undefined);
+  // the mode applies only when the append creates the file
+  appendFileSync(file, `${JSON.stringify(record)}\n`, isPrivate ? { mode: 0o600 } : {});
 }
 
 export function readNdjson<T>(file: string): T[] {

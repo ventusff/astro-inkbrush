@@ -104,7 +104,7 @@ pnpm `workspace:*` 或 npm `file:`——本包按设计不发 npm):
 import { inkbrush, rehypeWikiBlocks } from 'astro-inkbrush';
 import { markdownProcessor } from 'astro-inkbrush/markdown';
 
-const WIKI_MODE = Boolean(process.env.WIKI);
+const WIKI_MODE = process.env.WIKI === '1' || process.env.WIKI === 'true';
 
 const remarkPlugins = [/* 站点自己的 */];
 const rehypePlugins = [/* 站点自己的 */];

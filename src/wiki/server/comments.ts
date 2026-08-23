@@ -54,10 +54,10 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
       if (text.length > 10_000) return fail(res, 413, 'Comment too long (>10000 characters)');
       const comment: StoredComment = {
         id: randomUUID(),
+        // no avatar URL in the record: nothing reads it, so nothing stores it
         author: {
           name: user!.name,
           email: user!.email,
-          ...(user!.picture ? { picture: user!.picture } : {}),
           provider: user!.provider,
         },
         markdown: text,

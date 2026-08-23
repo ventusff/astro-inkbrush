@@ -4,13 +4,16 @@
  *  - comments                          (sanitize: true — user input)
  *
  * The preview pipeline is the dialect (lib/markdown-syntax) followed by the
- * site's own remark and rehype plugins from `inkbrush({ markdown })`, so a
- * note renders with the plugins the page is built with; the note's file is
- * the vfile path, as in the build. A `[[wikilink]]` the site's plugins leave
- * untouched is resolved afterwards with the package's own resolver and the
- * site's URL rule. A site that hands over no plugins gets the defaults of
- * a bare pipeline: math (remark-math + KaTeX) and wikilinks. Site
- * components (MDX JSX) are not rendered; they show as their source.
+ * site's own remark and rehype plugins from `inkbrush({ markdown })` — the
+ * plugins the site declares to the integration, which approximates its page
+ * pipeline but is not it (plugins a site mounts elsewhere, and Astro's own
+ * processing, are outside it; save-time validation adds the guard and an
+ * MDX compile on the same plugin sets, see ./validate.ts). The note's file
+ * is the vfile path. A `[[wikilink]]` the site's plugins leave untouched is
+ * resolved afterwards with the package's own resolver and the site's URL
+ * rule. A site that hands over no plugins gets the defaults of a bare
+ * pipeline: math (remark-math + KaTeX) and wikilinks. Site components
+ * (MDX JSX) are not rendered; they show as their source.
  *
  * Comments always render math and never resolve wikilinks (a comment must
  * not mint site-internal links).

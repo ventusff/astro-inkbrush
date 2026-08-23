@@ -20,6 +20,11 @@ services:
       SITE_BASE: ${SITE_BASE:-/}
       SITE_HOST: ${SITE_HOST:?e.g. edit.your-site.com}
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${SITE_HOST:?}
+      # This service sits behind the reverse proxy on the proxy network, so
+      # the forwarded headers (x-forwarded-host/-proto/-for) are the proxy's
+      # and are trusted. Remove this (default: off) if the server is ever
+      # exposed directly — with it on, a direct client can forge its origin.
+      WIKI_TRUST_PROXY: '1'
       GIT_COMMITTER_NAME: ${GIT_COMMITTER_NAME:-wiki-editor}
       GIT_COMMITTER_EMAIL: ${GIT_COMMITTER_EMAIL:-wiki@example.com}
       AUTH_SECRET: ${AUTH_SECRET:-}
