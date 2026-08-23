@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { setSiteHooks } from '../src/wiki/server/site.ts';
+import { projectRoot, setProjectRoot } from '../src/wiki/server/store.ts';
 import { validateSource, withoutFrontmatter } from '../src/wiki/server/validate.ts';
 
 test('frontmatter is blanked, not removed, so line numbers and offsets hold', () => {
@@ -66,7 +67,17 @@ test("the site's rehype plugins run for both .md and .mdx", async () => {
 });
 
 test('the message names the file project-relative, never by its absolute path', async () => {
-  const problem = await validateSource('a/index.md', 'an **unclosed marker\n');
-  assert.match(problem ?? '', /(^|\s)a\/index\.md:\d+:\d+/);
-  assert.doesNotMatch(problem ?? '', new RegExp(process.cwd().replaceAll('\\', '\\\\')));
+  const cwd = projectRoot();
+  const escaped = new RegExp(cwd.replaceAll('\\', '\\\\'));
+  try {
+    // astro hands the root over with a trailing separator; a bare root must work too
+    for (const root of [cwd, cwd.endsWith('/') ? cwd : `${cwd}/`]) {
+      setProjectRoot(root);
+      const problem = await validateSource('a/index.md', 'an **unclosed marker\n');
+      assert.match(problem ?? '', /(^|\s)a\/index\.md:\d+:\d+/);
+      assert.doesNotMatch(problem ?? '', escaped);
+    }
+  } finally {
+    setProjectRoot(cwd);
+  }
 });

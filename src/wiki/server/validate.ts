@@ -12,7 +12,7 @@
  * a site mounts elsewhere are outside it. A note that fails is refused
  * before any write.
  */
-import { resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { validateNoteSource } from '../../lib/render-pipeline.ts';
@@ -41,5 +41,6 @@ export async function validateSource(file: string, source: string): Promise<stri
     mdx: file.endsWith('.mdx'),
     path: resolve(root, file),
   });
-  return problem === null ? null : problem.split(root + sep).join('');
+  // join() normalizes the root's trailing separator away (astro hands one over)
+  return problem === null ? null : problem.split(join(root, sep)).join('');
 }
