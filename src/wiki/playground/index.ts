@@ -72,6 +72,12 @@ function noteIdFromPage(): string | null {
   return id ? id : null;
 }
 
+/* The badge drinks the page's own ink: on a site with the shared token
+ * vocabulary it paints in the theme's card/ink/line colors (and follows the
+ * dark flip); the system-color fallbacks cover any other host. Never an
+ * off-palette ground — text scrolling behind a fixed overlay is measured
+ * against the overlay's pixels by contrast tooling, so the overlay must sit
+ * on a surface the palette already proves. */
 const BADGE_CSS = `
 .inkbrush-playground-badge {
   position: fixed; right: 14px; bottom: 14px; z-index: 2147482000;
@@ -80,14 +86,15 @@ const BADGE_CSS = `
 }
 .inkbrush-playground-badge button {
   display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid rgba(128,128,128,0.35); border-radius: 999px;
+  border: 1px solid var(--color-line, rgba(128,128,128,0.35));
+  border-radius: 999px;
   padding: 7px 12px; cursor: pointer;
-  background: color-mix(in srgb, canvas 88%, canvastext 12%);
-  color: canvastext; font: inherit;
+  background: var(--color-bg-card, canvas);
+  color: var(--color-ink, canvastext); font: inherit;
   box-shadow: 0 2px 10px rgba(0,0,0,0.12);
 }
 .inkbrush-playground-badge button:hover {
-  background: color-mix(in srgb, canvas 78%, canvastext 22%);
+  background: var(--color-bg-soft, color-mix(in srgb, canvas 88%, canvastext 12%));
 }
 .inkbrush-playground-badge .pg-reset { padding: 7px 10px; }
 `;
