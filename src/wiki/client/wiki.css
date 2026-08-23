@@ -597,7 +597,6 @@ select.wiki-members-role {
   background: var(--wiki-field);
   box-shadow: var(--wiki-shadow);
   overflow: hidden;
-  font-family: var(--wiki-font);
 }
 .wiki-editor-head {
   display: flex;
@@ -614,6 +613,10 @@ select.wiki-members-role {
 .wiki-editor-head .spacer {
   flex: 1;
 }
+/* The preview is page typography: the shell sets no font of its own, so the
+   rendered block inherits the host's fonts exactly like the block it
+   replaces; the editor chrome (head, foot, buttons, source) each declare
+   theirs. */
 .wiki-editor-preview {
   padding: 4px 16px;
   border-bottom: 1px dashed var(--wiki-line);
