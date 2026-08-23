@@ -32,3 +32,22 @@ export function containedPath(root: string, candidate: string): string | null {
   const abs = resolve(root, candidate);
   return isWithin(root, abs) ? realpathDeep(abs) : null;
 }
+
+/**
+ * Vault-absolute embed paths, resolved against the watch dir. Obsidian's
+ * central attachment folders ("default location for new attachments" set to a
+ * fixed folder) write embeds as full vault paths — `![[Inbox/clips/images/x.jpg]]`
+ * — while the importer only knows the watch dir, somewhere inside the vault.
+ * The two overlap, so progressively shorter suffixes of the embed path are
+ * tried inside the watch dir; containment is enforced per candidate.
+ */
+export function vaultPathCandidates(watchDir: string | null, name: string): string[] {
+  if (!watchDir || !name.includes('/')) return [];
+  const segments = name.split('/');
+  const out: string[] = [];
+  for (let i = 1; i < segments.length; i += 1) {
+    const candidate = containedPath(watchDir, segments.slice(i).join('/'));
+    if (candidate) out.push(candidate);
+  }
+  return out;
+}
