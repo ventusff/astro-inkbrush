@@ -51,7 +51,9 @@
  *   --base <path>    the site's mount prefix (astro config `base`; default /)
  *   --allow <prefix> internal absolute prefixes to wave through (repeatable;
  *                    paths served at runtime rather than from the dist;
- *                    /api/ is allowed by default — /api/wiki/ never is)
+ *                    /api/ is allowed by default — /api/wiki/ only via an
+ *                    explicit --allow, the operator's declaration of a
+ *                    deliberate cross-plane link)
  *   --skip <dir>     dist subdirectories not to check (repeatable; a subtree
  *                    built by another site counts as reachable)
  *   --allow-empty    accept a build output that holds no files at all
@@ -230,7 +232,8 @@ export function analyzeHtml(html) {
     katexErrors: 0,
     cmsScripts: 0,
     cmsStyles: 0,
-    cmsAttrs: 0,
+    /** attribute values carrying the client API marker */
+    cmsAttrs: [],
     wikiStamps: 0,
   };
   const doc = parse(html, { sourceCodeLocationInfo: true, scriptingEnabled: false });
@@ -246,7 +249,7 @@ export function analyzeHtml(html) {
       for (const { name, value } of node.attrs) {
         // every attribute value, URL-bearing or not (action, href, data-*,
         // event handlers…), is scanned for the client API marker
-        if (hasApiMark(value)) out.cmsAttrs += 1;
+        if (hasApiMark(value)) out.cmsAttrs.push(value);
         if (URL_ATTRS.has(name)) {
           if (!(tag === 'base' && name === 'href')) ref(value, name);
         } else if (name === 'srcset' || name === 'imagesrcset') {
@@ -311,7 +314,12 @@ export function checkDist(distDir, options = {}) {
   const dist = resolve(distDir);
   let base = options.base ?? '/';
   if (!base.endsWith('/')) base += '/';
-  const allow = [...(options.allow ?? []), '/api/'];
+  // an explicit --allow is the operator's declaration of a deliberate
+  // reference — it overrides even the /api/wiki/ pollution ruling (a site
+  // co-deploying the editor may link into its sign-in from static pages);
+  // the built-in /api/ default never does
+  const explicitAllow = options.allow ?? [];
+  const allow = [...explicitAllow, '/api/'];
   const skips = new Set((options.skip ?? []).map((d) => d.replace(/\/+$/, '')));
   const problems = [];
   const counts = { pages: 0, stylesheets: 0, scripts: 0, assets: 0, refs: 0 };
@@ -388,8 +396,8 @@ export function checkDist(distDir, options = {}) {
     if (path.startsWith('/')) {
       // the /api/ allowlist (and any --allow) never waves through the CMS's
       // own API: a /api/wiki/ reference is pollution, not runtime routing
-      const allowed = allow.some((p) => path.startsWith(p) || path.startsWith(base.slice(0, -1) + p));
-      if (allowed && !path.includes(CMS_API_MARKER)) return null;
+      const hit = (p) => path.startsWith(p) || path.startsWith(base.slice(0, -1) + p);
+      if (allow.some(hit) && (!path.includes(CMS_API_MARKER) || explicitAllow.some(hit))) return null;
       if (!path.startsWith(base)) {
         return { missing: true, reason: `internal absolute link missing the mount prefix ${base} → ${url}` };
       }
@@ -451,7 +459,8 @@ export function checkDist(distDir, options = {}) {
     if (a.wikiStamps > 0) {
       problems.push(`${page}: CMS injection — rehypeWikiBlocks stamps (${CMS_STAMP_MARKER}*) in a static build`);
     }
-    if (a.cmsAttrs > 0) {
+    const cmsAttrs = a.cmsAttrs.filter((v) => !explicitAllow.some((p) => v.includes(p)));
+    if (cmsAttrs.length > 0) {
       problems.push(`${page}: CMS injection — an attribute value references the inkbrush client API (${CMS_API_MARKER})`);
     }
 
