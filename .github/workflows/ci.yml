@@ -1,8 +1,9 @@
 name: CI
 
-# Unit tests, a type check of the package, a reading-mode build of the demo
-# (its postbuild runs check-dist, which also fails on any CMS byte in the
-# output), and the two content check CLIs over the demo's notes.
+# Unit tests and a type check of the package. The integration build — an
+# Astro site consuming the engine, its output checked for CMS bytes, its
+# notes run through the content CLIs — lives in the astro-inkstone
+# repository, whose demo garden vendors this engine.
 
 on:
   push:
@@ -25,20 +26,7 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            demo/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run typecheck
-      - name: Install, type-check and build the demo (reading mode)
-        working-directory: demo
-        run: |
-          npm ci --no-audit --no-fund
-          npx astro check
-          npm run build
-      - name: Check the demo's notes
-        working-directory: demo
-        run: |
-          node ../scripts/check-content.mjs src/content/notes --math
-          node ../scripts/check-wikilinks.mjs src/content/notes --locale-prefix zh/ --strict --allow compost-heap

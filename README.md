@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="the demo notes site: reading mode, and the same page with a block open in the in-place editor" src=".github/assets/demo-preview.png" width="920">
+  <img alt="a notes page in reading mode, and the same page with a block open in the in-place editor" src=".github/assets/demo-preview.png" width="920">
 </p>
 
 **Inkbrush** (笔 — the ink brush) adds an optional editing layer to any Astro
@@ -114,11 +114,16 @@ ships in [`deploy/`](deploy/README.md).
 
 ## Quick start
 
-Run the demo — a small multi-note site with the editor wired up:
+The demo is the [Inkstone garden](https://ventusff.github.io/astro-inkstone/):
+this engine's own manual lives there as
+[the editing machine](https://ventusff.github.io/astro-inkstone/inkbrush/)
+chapters (in 18 languages), and the browser playground on that site runs this
+very editor on a purely static build. To edit for real, run the garden in
+editing mode — it vendors this engine as a git submodule:
 
 ```bash
-git clone https://github.com/ventusff/astro-inkbrush
-cd astro-inkbrush && npm install
+git clone --recurse-submodules https://github.com/ventusff/astro-inkstone
+cd astro-inkstone && npm install
 cd demo && npm install
 npm run wiki        # WIKI=1 astro dev → open the site, sign in (dev login), edit away
 npm run build       # reading mode — proof of the zero-footprint claim

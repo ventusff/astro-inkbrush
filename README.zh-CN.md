@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="示范笔记站:阅读态,以及同一页面上某个块打开原地编辑器的样子" src=".github/assets/demo-preview.png" width="920">
+  <img alt="一张阅读态的笔记页,以及同一页面上某个块打开原地编辑器的样子" src=".github/assets/demo-preview.png" width="920">
 </p>
 
 **Inkbrush(笔)**给任意 Astro 站点叠加一层可选的编辑能力:鼠标悬到某个段落,
@@ -93,11 +93,15 @@ frontmatter 原地编辑,守门拒绝一次坏的保存——见
 
 ## 快速开始
 
-跑起示范站——一个接好编辑器的多笔记小站:
+示范站就是 [Inkstone 园地](https://ventusff.github.io/astro-inkstone/zh/):
+本引擎自己的手册以「[编辑机](https://ventusff.github.io/astro-inkstone/zh/inkbrush/)」
+合集的形式长在那里(共 18 种语言),那个站上的浏览器体验场跑的正是这个编辑器
+(纯静态构建)。想真正动手编辑,把园地以编辑模式跑起来——它以 git submodule
+的方式内置了本引擎:
 
 ```bash
-git clone https://github.com/ventusff/astro-inkbrush
-cd astro-inkbrush && npm install
+git clone --recurse-submodules https://github.com/ventusff/astro-inkstone
+cd astro-inkstone && npm install
 cd demo && npm install
 npm run wiki        # WIKI=1 astro dev → 打开站点,登录(本地登录),开始编辑
 npm run build       # 阅读模式——顺便验证零残留

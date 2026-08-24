@@ -20,8 +20,11 @@ The package doesn't run standalone in production — it activates inside a
 consuming site's dev server. Two ways to work on it:
 
 ```bash
-# 1. The in-repo demo (a small multi-note site consuming the package):
-npm install && cd demo && npm install
+# 1. Inside the Inkstone garden — the demo site that consumes this package
+#    (it vendors the engine as a git submodule; the garden's notes are the
+#    engine's manual, under its /inkbrush/ chapters):
+git clone --recurse-submodules https://github.com/ventusff/astro-inkstone
+cd astro-inkstone && npm install && cd demo && npm install
 npm run wiki          # WIKI=1 astro dev — CMS active
 npm run build         # reading mode; output must be engine-free
 
@@ -123,6 +126,8 @@ manual) · `inkbrush.config.example.ts` (annotated config template) ·
 ```bash
 npm test                                  # unit tests (node:test, native TS)
 npm run typecheck                         # tsc --noEmit
-cd demo && npm run build                  # reading-mode build; postbuild runs check-dist
-npm run check                             # check-content + check-wikilinks over the notes
 ```
+
+The integration build — an Astro site consuming the engine, `check-dist`
+over its output, the content CLIs over its notes — runs in the
+astro-inkstone repository, whose demo garden vendors this engine.
