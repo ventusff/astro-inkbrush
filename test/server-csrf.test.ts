@@ -46,3 +46,12 @@ test('every own origin counts — a pinned identity base URL does not displace t
   assert.equal(crossSiteBlocked({ ...both, origin: 'https://hub.example.com' }), false);
   assert.equal(crossSiteBlocked({ ...both, origin: 'https://evil.example' }), true);
 });
+
+test('a wildcard trusted origin admits any one-or-more-label subdomain, never the apex', () => {
+  const opts = { ...base, trustedOrigins: ['https://*.hub.example.com'] };
+  assert.equal(crossSiteBlocked({ ...opts, origin: 'https://aws-wiki-edit.hub.example.com' }), false);
+  assert.equal(crossSiteBlocked({ ...opts, origin: 'https://a.b.hub.example.com' }), false);
+  assert.equal(crossSiteBlocked({ ...opts, origin: 'https://hub.example.com' }), true);
+  assert.equal(crossSiteBlocked({ ...opts, origin: 'http://aws.hub.example.com' }), true);
+  assert.equal(crossSiteBlocked({ ...opts, origin: 'https://evilhub.example.com' }), true);
+});

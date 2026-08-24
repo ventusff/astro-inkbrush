@@ -29,18 +29,20 @@ export function checkCookieDomain(domain: string | null): void {
   }
 }
 
-/** every entry must be exactly an http(s) origin — scheme://host[:port] */
+/** every entry must be exactly an http(s) origin — scheme://host[:port] —
+ *  or a subdomain wildcard of one: scheme://*.host[:port] (origins.ts) */
 export function checkTrustedOrigins(origins: string[]): void {
   for (const origin of origins) {
+    const probe = origin.replace('//*.', '//wildcard-label.');
     let url: URL;
     try {
-      url = new URL(origin);
+      url = new URL(probe);
     } catch {
       throw new Error(`auth.session.trustedOrigins entry '${origin}' is not a URL`);
     }
-    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== origin) {
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== probe) {
       throw new Error(
-        `auth.session.trustedOrigins entry '${origin}' must be a bare http(s) origin (scheme://host[:port], no path)`,
+        `auth.session.trustedOrigins entry '${origin}' must be a bare http(s) origin (scheme://host[:port] or scheme://*.host[:port], no path)`,
       );
     }
   }

@@ -35,6 +35,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
+import { originTrusted } from './origins.ts';
 import { jwtVerify, SignJWT } from 'jose';
 
 import type { GoogleAuthState, WikiUser } from '../shared/types.ts';
@@ -183,7 +184,8 @@ export async function sessionUser(req: IncomingMessage): Promise<WikiUser | null
 }
 
 /** login return target: a site-relative path, or an absolute URL whose
- *  origin is listed in auth.session.trustedOrigins; anything else is `/`.
+ *  origin matches auth.session.trustedOrigins (exact entries or
+ *  `scheme://*.suffix` wildcards — ./origins.ts); anything else is `/`.
  *  A second character of `/` or `\` after the leading slash is an off-site
  *  jump (browsers normalise `\` to `/`), and a control character anywhere
  *  is stripped by browsers before navigation, so both are refused. */
@@ -198,7 +200,7 @@ export function safeReturnUrl(raw: string | null | undefined): string {
     const url = new URL(raw);
     if (
       (url.protocol === 'https:' || url.protocol === 'http:') &&
-      sessionConf().trustedOrigins.includes(url.origin)
+      originTrusted(url.origin, sessionConf().trustedOrigins)
     ) {
       return raw;
     }

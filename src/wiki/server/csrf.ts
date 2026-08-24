@@ -15,6 +15,8 @@
  *  - A request with no Origin and no Referer passes: it is not a browser
  *    form post.
  */
+import { originTrusted } from './origins.ts';
+
 export function crossSiteBlocked(opts: {
   method: string;
   /** router path inside /api/wiki, e.g. '/auth/saml/callback' */
@@ -31,5 +33,6 @@ export function crossSiteBlocked(opts: {
   if (opts.method === 'GET' || opts.method === 'HEAD' || opts.method === 'OPTIONS') return false;
   if (opts.path === '/auth/saml/callback') return false;
   if (!opts.origin) return false;
-  return !new Set([...opts.ownOrigins, ...opts.trustedOrigins]).has(opts.origin);
+  if (opts.ownOrigins.includes(opts.origin)) return false;
+  return !originTrusted(opts.origin, opts.trustedOrigins);
 }
