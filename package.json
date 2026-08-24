@@ -1,6 +1,6 @@
 {
   "name": "astro-inkbrush",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A tiny git-backed CMS for Astro: in-place block editing, revision history, comments, AI assist and an Obsidian inbox — as one dev-mode integration with zero footprint in production builds.",
   "type": "module",
