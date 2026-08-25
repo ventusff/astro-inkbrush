@@ -93,9 +93,14 @@ function noteIdFromPage(): string | null {
 /* The badge docks into the site's own chrome when it can: the account
  * slot ([data-inkbrush-slot="account"]) is the CMS chip's contractual seat
  * and is unoccupied here (the playground never mounts the auth chip). In
- * the nav it is ordinary sticky-band chrome. Only a host with no slot gets
- * the fixed-corner fallback — a permanently visible overlay is a ground
- * for the text scrolling behind it, so flow placement is the default.
+ * the nav it is ordinary sticky-band chrome, and flow placement is the
+ * default. The fixed-corner presentation serves a host with no slot — and,
+ * on narrow viewports, every host: a phone bar has no seat to give, and
+ * the entry point must stay reachable, so the badge undocks to the corner
+ * instead of hiding. Undocking is a real DOM move to <body> (see seat()):
+ * nav chrome routinely carries backdrop-filter or transform, which makes
+ * the bar the containing block of its fixed-position descendants — a badge
+ * left inside the slot could never reach the viewport corner.
  * Colors are the shared token vocabulary with system-color fallbacks. */
 const BADGE_CSS = `
 .inkbrush-playground-badge {
@@ -103,7 +108,10 @@ const BADGE_CSS = `
   font: 500 12px/1 system-ui, sans-serif;
 }
 .inkbrush-playground-badge.pg-floating {
-  position: fixed; right: 14px; bottom: 14px; z-index: 2147482000;
+  position: fixed; right: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 2147482000;
+  max-width: calc(100vw - 28px);
 }
 .inkbrush-playground-badge button {
   display: inline-flex; align-items: center; gap: 6px;
@@ -113,22 +121,22 @@ const BADGE_CSS = `
   background: var(--color-bg-card, canvas);
   color: var(--color-ink, canvastext); font: inherit;
 }
+/* No shadow on the floating pill: a fixed overlay's shadow darkens the
+   ground of every text run that scrolls past it, dropping borderline text
+   below AA — the opaque card face and its border carry the definition. */
 .inkbrush-playground-badge.pg-floating button {
   padding: 7px 12px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+  min-width: 0;
 }
 .inkbrush-playground-badge button:hover {
   background: var(--color-bg-soft, color-mix(in srgb, canvas 88%, canvastext 12%));
 }
 .inkbrush-playground-badge .pg-label { white-space: nowrap; }
-.inkbrush-playground-badge .pg-reset { padding: 4px 8px; }
-@media (max-width: 520px) {
-  /* A narrow nav bar has no seat to give: even a bare glyph squeezes the
-     breadcrumb into clipping. The entry point hides; a returning visitor's
-     local edits still apply and auto-activate (activation never depends on
-     the badge being visible). */
-  .inkbrush-playground-badge { display: none; }
-}
+.inkbrush-playground-badge.pg-floating .pg-label { overflow: hidden; text-overflow: ellipsis; }
+.inkbrush-playground-badge .pg-reset { padding: 4px 8px; flex-shrink: 0; }
+/* the display rule above beats the UA's [hidden] default — restate it, or
+   the reset button shows before activation */
+.inkbrush-playground-badge [hidden] { display: none; }
 `;
 
 export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
@@ -163,13 +171,22 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
   const badge = document.createElement('div');
   badge.className = 'inkbrush-playground-badge';
   badge.append(main, reset);
+  /* Responsive seat: the slot while the viewport can afford a bar seat, the
+   * fixed corner otherwise — re-seated live, so a resize or rotation never
+   * strands the entry point. */
   const slot = document.querySelector('[data-inkbrush-slot="account"]');
-  if (slot) {
-    slot.append(badge);
-  } else {
-    badge.classList.add('pg-floating');
-    document.body.append(badge);
-  }
+  const narrow = window.matchMedia('(max-width: 520px)');
+  const seat = (): void => {
+    if (slot && !narrow.matches) {
+      badge.classList.remove('pg-floating');
+      slot.append(badge);
+    } else {
+      badge.classList.add('pg-floating');
+      document.body.append(badge);
+    }
+  };
+  seat();
+  narrow.addEventListener('change', seat);
 
   reset.addEventListener('click', () => {
     if (!window.confirm(s.resetConfirm)) return;
