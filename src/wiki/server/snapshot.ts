@@ -279,8 +279,10 @@ export interface WarmerOptions {
  * stale and the inputs have been quiet for `idleMs`, one build runs through
  * the same serialized chain a share request uses (a request arriving
  * mid-build waits for that build, then hits the cache). A failed build is
- * logged and retried at the next quiet probe. Starting a warmer replaces a
- * running one (server module reloads); the returned function stops it.
+ * logged and retried once the inputs change again — the same inputs would
+ * fail the same way, and a share request still triggers its own build.
+ * Starting a warmer replaces a running one (server module reloads); the
+ * returned function stops it.
  */
 export function startSnapshotWarmer(root: string, opts: WarmerOptions = {}): () => void {
   const intervalMs = opts.intervalMs ?? 15_000;
@@ -289,20 +291,27 @@ export function startSnapshotWarmer(root: string, opts: WarmerOptions = {}): () 
   const globals = globalThis as Record<string, unknown>;
   (globals[WARMER_KEY] as (() => void) | undefined)?.();
   let building = false;
+  /** start of the last failed attempt; the inputs must change past it */
+  let failedAt: number | null = null;
   const tick = (): void => {
     if (building) return;
     const { fresh, latestInput } = snapshotCache(root);
     if (fresh || Date.now() - latestInput < idleMs) return;
+    if (failedAt !== null && latestInput < failedAt) return;
     building = true;
     const startedAt = Date.now();
     log('the site changed — refreshing the snapshot build in the background…');
     ensureBuild(root, () => undefined)
-      .then(() => log(`snapshot build is warm (${Math.round((Date.now() - startedAt) / 1000)}s)`))
-      .catch((err: unknown) =>
+      .then(() => {
+        failedAt = null;
+        log(`snapshot build is warm (${Math.round((Date.now() - startedAt) / 1000)}s)`);
+      })
+      .catch((err: unknown) => {
+        failedAt = startedAt;
         log(
-          `background snapshot build failed — retried after the next quiet period: ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      )
+          `background snapshot build failed — retried once the site changes again: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      })
       .finally(() => {
         building = false;
       });

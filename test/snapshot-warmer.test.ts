@@ -82,8 +82,24 @@ test('stale and quiet: the warmer runs one build and reports its outcome', async
   // no astro binary in a bare temp project: the build attempt fails and says so
   assert.ok(logs[0]?.includes('refreshing the snapshot build'), logs.join(' | '));
   assert.ok(logs.some((m) => m.includes('astro binary not found')), logs.join(' | '));
-  // one attempt per quiet probe cycle, never a pile-up while one is running
-  assert.equal(logs.filter((m) => m.includes('refreshing')).length, logs.filter((m) => m.includes('failed')).length);
+  // one attempt for one state of the inputs — a failure is not retried
+  // until the inputs change again
+  assert.equal(logs.filter((m) => m.includes('refreshing')).length, 1);
+  assert.equal(logs.filter((m) => m.includes('failed')).length, 1);
+});
+
+test('after a failure the next attempt waits for the inputs to change', async () => {
+  const root = project(120_000);
+  roots.push(root);
+  rmSync(join(root, '.wiki', 'share-dist.stamp'));
+  const logs: string[] = [];
+  const stop = startSnapshotWarmer(root, { intervalMs: 5, idleMs: 0, log: (m) => logs.push(m) });
+  await sleep(120);
+  assert.equal(logs.filter((m) => m.includes('refreshing')).length, 1);
+  writeFileSync(join(root, 'src', 'a.md'), '# changed again\n');
+  await sleep(120);
+  stop();
+  assert.equal(logs.filter((m) => m.includes('refreshing')).length, 2);
 });
 
 test('starting a warmer replaces the running one', async () => {
