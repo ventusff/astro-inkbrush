@@ -114,8 +114,12 @@ export default defineInkbrushConfig({
   // publicBase = the public host recipients open (link =
   // <publicBase>/s/<id>/). The admin token comes from the
   // SHARE_GATEWAY_TOKEN env var and never enters this file.
+  // prewarm keeps the cached snapshot build fresh in the background (a
+  // rebuild once the site has been quiet for 30 s after a change), so a
+  // share spends only the seconds of packing and uploading.
   // share: {
   //   gatewayUrl: 'http://gateway.internal:8787',
   //   publicBase: 'https://share.example.com',
+  //   prewarm: true,
   // },
 });

@@ -218,7 +218,7 @@ export default defineInkbrushConfig({
   autopush: false,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
-  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com' },
+  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true },
 });
 ```
 
@@ -239,6 +239,7 @@ export default defineInkbrushConfig({
 | `content.dir` | `'src/content/notes'` | Note content root, relative to the site root |
 | `content.locales` | zh/en/de table | The note language table — [below](#contentlocales) |
 | `share` | off | Snapshot sharing — [sharing](#sharing--the-gateway-contract) |
+| `share.prewarm` | `false` | Keep the snapshot build warm in the background — [sharing](#sharing--the-gateway-contract) |
 | `server.trustProxy` | `false` | Honor `x-forwarded-host`/`-proto` when deriving the server's own origin — set it exactly when a reverse proxy fronts the editor |
 
 The configuration is validated at startup: a malformed cookie name or
@@ -305,6 +306,7 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_TRUST_PROXY` | `server.trustProxy` (`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
+| `WIKI_SHARE_PREWARM` | `share.prewarm` (`0`/`1`) |
 
 `content.dir` and `content.locales` have no env override — they are
 config-file decisions. Enabling a provider is also always a config-file
@@ -425,10 +427,17 @@ password-gated static snapshot:
 
 1. **Create** — the popover pre-generates a 10-character password (editable;
    6 characters minimum) and offers 7 days / 30 days / no expiry. The server
-   runs a **WIKI-free `astro build`** with the site's own installed astro
-   binary, an allowlisted environment and a 10-minute cap (cached in
-   `.wiki/share-dist`; cold
-   builds take minutes, so progress streams live), extracts the route's
+   runs a **WIKI-free, production-mode `astro build`** (`NODE_ENV=production`
+   whatever the dev server's own environment says) with the site's own
+   installed astro binary, an allowlisted environment and a 10-minute cap.
+   The build is cached in `.wiki/share-dist` and reused while no build input
+   (`src/`, `public/`, `packages/`, `vendor/`, the astro config, the package
+   manifest and lockfiles) has changed; a cold build takes as long as the
+   site's own build, so progress streams live. With `share.prewarm: true`
+   the cached build is kept fresh in the background — the inputs are probed
+   every 15 s and the site rebuilt once it has been quiet for 30 s after a
+   change — so a share request finds it ready and spends only the seconds
+   of packing and uploading. The server then extracts the route's
    `index.html` plus its complete asset closure (HTML attributes → CSS
    `url()`/`@import` → the JS import graph), rewrites references to be
    `./`-relative, injects `noindex`, and PUTs a tar.gz to the gateway. Share

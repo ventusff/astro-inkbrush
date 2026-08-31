@@ -176,7 +176,7 @@ export default defineInkbrushConfig({
   autopush: false,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
-  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com' },
+  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true },
 });
 ```
 
@@ -197,6 +197,7 @@ export default defineInkbrushConfig({
 | `content.dir` | `'src/content/notes'` | 笔记内容根目录(相对站点根) |
 | `content.locales` | zh/en/de 表 | 笔记语言表——[见下](#contentlocales) |
 | `share` | 关 | 快照分享——[分享](#分享与网关契约)一节 |
+| `share.prewarm` | `false` | 后台保温快照构建——[分享](#分享与网关契约)一节 |
 | `server.trustProxy` | `false` | 推导本服务自身 origin 时是否采信 `x-forwarded-host`/`-proto`——有反代在前面就开,否则别开 |
 
 配置在启动时校验:cookie 名/域不合法、`trustedOrigins` 不是纯 origin、
@@ -256,6 +257,7 @@ locales: [
 | `WIKI_TRUST_PROXY` | `server.trustProxy`(`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
+| `WIKI_SHARE_PREWARM` | `share.prewarm`(`0`/`1`) |
 
 `content.dir` 与 `content.locales` 没有环境变量覆盖——它们是配置文件级的
 决定。功能的**启用**也永远由配置文件决定,环境变量只能覆盖已启用功能的字段。
@@ -356,8 +358,12 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 
 1. **创建**——弹层预生成 10 位密码(可改;最少 6 位),有效期 7 天 / 30 天 /
    永久三选一。服务端用站点自己装的 astro、白名单环境变量、10 分钟上限跑一次
-   **WIKI-free 的 `astro build`**(缓存在
-   `.wiki/share-dist`;冷构建要几分钟,进度实时流式回传),抽出该路由的
+   **WIKI-free 的生产模式 `astro build`**(`NODE_ENV=production`,与 dev
+   进程自己的环境无关)。构建缓存在 `.wiki/share-dist`,只要任一构建输入
+   (`src/`、`public/`、`packages/`、`vendor/`、astro 配置、包清单与锁文件)
+   都没变就直接复用;冷构建耗时等于整站构建,所以进度实时流式回传。开
+   `share.prewarm: true` 则后台保温:每 15 秒探测一次输入,站点改动后安静
+   30 秒即重建,点分享时构建已就绪,只剩打包上传的几秒。随后抽出该路由的
    `index.html` 与完整资源闭包(HTML 属性 → CSS `url()`/`@import` → JS
    import 图),引用改写成 `./` 相对、注入 `noindex`,打成 tar.gz PUT 给
    网关。分享 id 是 10 位 base58——不含 `0/O/I/l`,念出来不会错。

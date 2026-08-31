@@ -79,6 +79,12 @@ export interface ShareGatewayConfig {
   /** public base recipients open (e.g. 'https://share.example.com') —
    *  share links are `<publicBase>/s/<id>/` */
   publicBase: string;
+  /** keep the cached snapshot build fresh in the background — the inputs are
+   *  probed every 15 s and the site is rebuilt once it has been quiet for
+   *  30 s after a change — so a share request finds the build ready and
+   *  spends only the seconds of packing and uploading. Costs one site build
+   *  per burst of edits. Default false: the build runs at share time */
+  prewarm?: boolean;
 }
 
 export interface IdentityConfig {
@@ -226,7 +232,7 @@ export interface WikiConfig {
   content: { dir: string; locales: readonly LocaleDef[] };
   /** false = share module off (the token only ever lives in the
    *  SHARE_GATEWAY_TOKEN env var) */
-  share: false | { gatewayUrl: string; publicBase: string };
+  share: false | { gatewayUrl: string; publicBase: string; prewarm: boolean };
 }
 
 /** identity helper — gives the root inkbrush.config.ts type checking + completion */

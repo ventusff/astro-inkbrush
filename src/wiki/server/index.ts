@@ -414,6 +414,7 @@ import { registerCommentRoutes } from './comments.ts';
 import { registerIdentityRoutes } from './identity.ts';
 import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
 import { registerShareRoutes } from './share.ts';
+import { startSnapshotWarmer } from './snapshot.ts';
 import { registerSourceRoutes } from './source.ts';
 
 registerSourceRoutes(on);
@@ -444,6 +445,13 @@ export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): voi
     startInboxWatcher();
   } catch (err) {
     console.error('[wiki inbox] the watcher failed to start — inbox import is off for this run:', err);
+  }
+  // prewarm needs a share that can actually be created; an incomplete share
+  // configuration is reported at share time (503), not by a build nobody can use
+  const share = wikiConfig().share;
+  if (share !== false && share.prewarm) {
+    if (shareState() === 'ready') startSnapshotWarmer(root);
+    else console.warn('[wiki share] prewarm is on but share is unconfigured (gatewayUrl / publicBase / SHARE_GATEWAY_TOKEN) — not warming');
   }
 }
 

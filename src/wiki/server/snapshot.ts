@@ -18,7 +18,9 @@
  * Build inputs tracked by the cache: src/, public/, packages/, vendor/, the
  * astro config, package.json and the lockfiles. Environment variables that
  * change a build are not tracked — a deployment that builds differently by
- * env removes `.wiki/share-dist` when the env changes.
+ * env removes `.wiki/share-dist` when the env changes. With `share.prewarm`
+ * a background warmer (startSnapshotWarmer) rebuilds after the inputs
+ * change and go quiet, so a share request finds the cache fresh.
  */
 import { spawn } from 'node:child_process';
 import {
@@ -198,19 +200,31 @@ function runAstroBuild(
 // serialize builds — two concurrent share creations must not race one outDir
 let buildChain: Promise<void> = Promise.resolve();
 
+/** newest mtime (ms) across every build input */
+function latestInputMtime(root: string): number {
+  return Math.max(0, ...buildInputs(root).map((input) => latestMtime(input)));
+}
+
+/**
+ * The cached build against its inputs: `fresh` says the cached build
+ * reflects them — a build whose start stamp is newer than every input's
+ * mtime; `latestInput` is that newest mtime, which also dates the site's
+ * last change.
+ */
+export function snapshotCache(root: string): { fresh: boolean; latestInput: number } {
+  const outDir = join(root, '.wiki', 'share-dist');
+  const stampFile = join(root, '.wiki', 'share-dist.stamp');
+  const stamp = existsSync(stampFile) ? Number(readFileSync(stampFile, 'utf8').trim()) : 0;
+  const latestInput = latestInputMtime(root);
+  const fresh = existsSync(join(outDir, 'index.html')) && Number.isFinite(stamp) && stamp > latestInput;
+  return { fresh, latestInput };
+}
+
 async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSignal): Promise<string> {
   const outDir = join(root, '.wiki', 'share-dist');
   const stampFile = join(root, '.wiki', 'share-dist.stamp');
-  // the cache predicate, shared by the freshness check and the post-build
-  // drift check: a build whose start stamp is newer than every input's
-  // mtime reflects those inputs
-  const inputsOlderThan = (stamp: number): boolean =>
-    buildInputs(root).every((input) => stamp > latestMtime(input));
   const run = async (): Promise<void> => {
-    const stamp = existsSync(stampFile) ? Number(readFileSync(stampFile, 'utf8').trim()) : 0;
-    const fresh =
-      existsSync(join(outDir, 'index.html')) && Number.isFinite(stamp) && inputsOlderThan(stamp);
-    if (fresh) {
+    if (snapshotCache(root).fresh) {
       onProgress('Using cached static build');
       return;
     }
@@ -227,7 +241,9 @@ async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSig
       );
       const startedAt = Date.now();
       await runAstroBuild(root, '.wiki/share-dist', onProgress, signal);
-      if (inputsOlderThan(startedAt)) {
+      // the post-build drift check shares the cache predicate: the build
+      // reflects its inputs only when its start is newer than every input
+      if (latestInputMtime(root) < startedAt) {
         writeFileSync(stampFile, String(startedAt));
         onProgress('Static build finished');
         return;
@@ -241,6 +257,64 @@ async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSig
   buildChain = chained.catch(() => undefined);
   await chained;
   return outDir;
+}
+
+/* ---------------- prewarm ---------------- */
+
+const WARMER_KEY = '__wikiSnapshotWarmer';
+
+export interface WarmerOptions {
+  /** how often the inputs are probed (ms) */
+  intervalMs?: number;
+  /** a rebuild starts only once no input has changed for this long (ms):
+   *  edits arrive in bursts, and a build that starts mid-burst fails its
+   *  own drift check */
+  idleMs?: number;
+  log?: (message: string) => void;
+}
+
+/**
+ * Keeps the cached build fresh in the background so a share request finds
+ * it ready: every `intervalMs` the inputs are probed; when the cache is
+ * stale and the inputs have been quiet for `idleMs`, one build runs through
+ * the same serialized chain a share request uses (a request arriving
+ * mid-build waits for that build, then hits the cache). A failed build is
+ * logged and retried at the next quiet probe. Starting a warmer replaces a
+ * running one (server module reloads); the returned function stops it.
+ */
+export function startSnapshotWarmer(root: string, opts: WarmerOptions = {}): () => void {
+  const intervalMs = opts.intervalMs ?? 15_000;
+  const idleMs = opts.idleMs ?? 30_000;
+  const log = opts.log ?? ((message: string): void => console.log(`[wiki share] ${message}`));
+  const globals = globalThis as Record<string, unknown>;
+  (globals[WARMER_KEY] as (() => void) | undefined)?.();
+  let building = false;
+  const tick = (): void => {
+    if (building) return;
+    const { fresh, latestInput } = snapshotCache(root);
+    if (fresh || Date.now() - latestInput < idleMs) return;
+    building = true;
+    const startedAt = Date.now();
+    log('the site changed — refreshing the snapshot build in the background…');
+    ensureBuild(root, () => undefined)
+      .then(() => log(`snapshot build is warm (${Math.round((Date.now() - startedAt) / 1000)}s)`))
+      .catch((err: unknown) =>
+        log(
+          `background snapshot build failed — retried after the next quiet period: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+      .finally(() => {
+        building = false;
+      });
+  };
+  const timer = setInterval(tick, intervalMs);
+  timer.unref();
+  const stop = (): void => {
+    clearInterval(timer);
+    if (globals[WARMER_KEY] === stop) delete globals[WARMER_KEY];
+  };
+  globals[WARMER_KEY] = stop;
+  return stop;
 }
 
 /* ---------------- reference scanning ---------------- */

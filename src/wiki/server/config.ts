@@ -164,6 +164,7 @@ export function wikiConfig(): WikiConfig {
       : {
           gatewayUrl: (envStr('WIKI_SHARE_GATEWAY_URL') ?? shareInput.gatewayUrl ?? '').replace(/\/$/, ''),
           publicBase: (envStr('WIKI_SHARE_PUBLIC_BASE') ?? shareInput.publicBase ?? '').replace(/\/$/, ''),
+          prewarm: envFlag('WIKI_SHARE_PREWARM') ?? shareInput.prewarm ?? false,
         };
 
   // WIKI_INBOX_DIR='' explicitly disables the watcher even when the config
