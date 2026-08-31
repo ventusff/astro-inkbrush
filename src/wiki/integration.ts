@@ -76,6 +76,11 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
           // dev` without WIKI never loads this integration and keeps it)
           devToolbar: { enabled: false },
           vite: {
+            // `.wiki/` is the CMS's private state (session secret, journals,
+            // the cached snapshot build): never a module and never a page.
+            // Left watched, every file a snapshot build writes there is a
+            // page-reload broadcast to every connected browser.
+            server: { watch: { ignored: ['**/.wiki/**'] } },
             // CodeMirror is reached through a lazy import (editor.ts), which
             // Vite's startup dependency scan does not see, so it is
             // pre-bundled explicitly. The entry is the bare name when the site

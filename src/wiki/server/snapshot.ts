@@ -104,6 +104,25 @@ function buildInputs(root: string): string[] {
   ];
 }
 
+/**
+ * The snapshot build's environment: the allowlisted subset of the server's
+ * env (WIKI/WIKI_* and server secrets excluded — the integration and the
+ * rehype plugin are added conditionally by the site's astro.config, so an
+ * env without WIKI yields the pure-static page), with NODE_ENV pinned to
+ * `production`. The dev server runs with NODE_ENV=development in its own
+ * process; inherited by the child, that turns `astro build` into a
+ * development-mode build (`import.meta.env.PROD` false — production-only
+ * caches and optimizations off, every page paying their full cost). A share
+ * is a copy of the published site, so it builds the way the published site
+ * builds.
+ */
+export function snapshotEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...childEnv({ prefixes: ['NODE_', 'ASTRO_', 'PUBLIC_'], drop: ['NODE_ENV'] }, source),
+    NODE_ENV: 'production',
+  };
+}
+
 /** hard ceiling on one astro build; beyond it the child is terminated */
 const BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 const BUILD_KILL_GRACE_MS = 5000;
@@ -125,13 +144,9 @@ function runAstroBuild(
       rejectPromise(new Error(`astro binary not found (${astroBin}) — install the site's dependencies`));
       return;
     }
-    // allowlisted environment (WIKI/WIKI_* and server secrets excluded):
-    // the integration + rehype plugin are added conditionally by the site's
-    // astro.config, so an env without WIKI yields the pure-static page
-    const env = childEnv({ prefixes: ['NODE_', 'ASTRO_', 'PUBLIC_'] });
     const child = spawn(astroBin, ['build', '--outDir', outDirRel], {
       cwd: root,
-      env,
+      env: snapshotEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let tail = '';
