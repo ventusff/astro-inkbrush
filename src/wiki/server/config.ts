@@ -47,6 +47,15 @@ function envFlag(name: string): boolean | undefined {
   return value !== '0';
 }
 
+/** a non-negative number of minutes, from the config file or an env string */
+function minutes(key: string, value: string | number): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`${key} must be a non-negative number of minutes (got ${JSON.stringify(value)})`);
+  }
+  return n;
+}
+
 function envStr(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value === '' ? undefined : value;
@@ -165,6 +174,10 @@ export function wikiConfig(): WikiConfig {
           gatewayUrl: (envStr('WIKI_SHARE_GATEWAY_URL') ?? shareInput.gatewayUrl ?? '').replace(/\/$/, ''),
           publicBase: (envStr('WIKI_SHARE_PUBLIC_BASE') ?? shareInput.publicBase ?? '').replace(/\/$/, ''),
           prewarm: envFlag('WIKI_SHARE_PREWARM') ?? shareInput.prewarm ?? false,
+          followIdleMinutes: minutes(
+            'share.followIdleMinutes',
+            envStr('WIKI_SHARE_FOLLOW_IDLE_MINUTES') ?? shareInput.followIdleMinutes ?? 20,
+          ),
         };
 
   // WIKI_INBOX_DIR='' explicitly disables the watcher even when the config

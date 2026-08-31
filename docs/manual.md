@@ -218,7 +218,7 @@ export default defineInkbrushConfig({
   autopush: false,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
-  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true },
+  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
 });
 ```
 
@@ -240,6 +240,7 @@ export default defineInkbrushConfig({
 | `content.locales` | zh/en/de table | The note language table — [below](#contentlocales) |
 | `share` | off | Snapshot sharing — [sharing](#sharing--the-gateway-contract) |
 | `share.prewarm` | `false` | Keep the snapshot build warm in the background — [sharing](#sharing--the-gateway-contract) |
+| `share.followIdleMinutes` | `20` | A share republishes once its note has been quiet this long; `0` = publish by hand only — [sharing](#sharing--the-gateway-contract) |
 | `server.trustProxy` | `false` | Honor `x-forwarded-host`/`-proto` when deriving the server's own origin — set it exactly when a reverse proxy fronts the editor |
 
 The configuration is validated at startup: a malformed cookie name or
@@ -307,6 +308,7 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
 | `WIKI_SHARE_PREWARM` | `share.prewarm` (`0`/`1`) |
+| `WIKI_SHARE_FOLLOW_IDLE_MINUTES` | `share.followIdleMinutes` |
 
 `content.dir` and `content.locales` have no env override — they are
 config-file decisions. Enabling a provider is also always a config-file
@@ -447,7 +449,19 @@ password-gated static snapshot:
    the plaintext never persists anywhere. It is shown exactly once, at
    creation. One note has at most one active share: creating over a live
    one is refused (409) with the existing link.
-3. **Revoke** — deletes the gateway directory; the link 404s immediately.
+3. **Follow** — a share follows its note. Once the note has been quiet for
+   `share.followIdleMinutes` (default 20) after a change — an editing
+   session has ended; a single block save is not a version — the snapshot
+   is rebuilt and, when its bytes differ from the published version, PUT to
+   the same id without a password header: the link, the password and the
+   expiry stay, the recipient reads the new version. **Publish this
+   version** in the popover does the same at once; **Pin this version**
+   freezes the share at what it serves now (unpin to follow again). The
+   popover states which version the link serves and whether the note has
+   changed since; the share chip carries the same as a dot (current ·
+   unpublished changes · pinned). `followIdleMinutes: 0` turns automatic
+   publishing off — shares then publish by hand only.
+4. **Revoke** — deletes the gateway directory; the link 404s immediately.
    The local record (with `revokedAt`) is kept in `.wiki/data/shares.json`
    for audit.
 
@@ -462,7 +476,7 @@ work with nginx + a tiny app in front of a directory tree):
 | Call | Meaning |
 |---|---|
 | `GET /admin/s` | Health/auth pre-flight; the engine calls it (5 s timeout) before an expensive build. 401 ⇒ bad token |
-| `PUT /admin/s/<id>` | Create/replace snapshot `<id>`. Body: tar.gz with `index.html` at the archive root — extract into the directory you serve at `/s/<id>/` |
+| `PUT /admin/s/<id>` | With `x-share-password`: create/replace snapshot `<id>`. Body: tar.gz with `index.html` at the archive root — extract into the directory you serve at `/s/<id>/`. Without `x-share-password`: update the content of an existing share in place — swap the directory atomically, keep the password and creation time (expiry and note too unless the header is sent); answer 404 for an unknown id |
 | `DELETE /admin/s/<id>` | Remove snapshot `<id>` (a 404 here is treated as already-gone) |
 
 Request headers on PUT:
@@ -470,7 +484,7 @@ Request headers on PUT:
 | Header | Content |
 |---|---|
 | `authorization` | `Bearer <SHARE_GATEWAY_TOKEN>` |
-| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` — N=2¹⁵, r=8, p=1, 32-byte hash. Verify a visitor's password by re-computing with the embedded parameters |
+| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` — N=2¹⁵, r=8, p=1, 32-byte hash. Verify a visitor's password by re-computing with the embedded parameters. Absent on a content update |
 | `x-share-expires` | Optional ISO-8601 timestamp; serve 404/410 after it |
 | `x-share-note` | The source note id (URI-encoded when not printable ASCII) — informational |
 
@@ -531,7 +545,9 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `GET /identity/users` | admin | Members + role vocabulary |
 | `PUT /identity/users` | admin | Full-list overwrite (validated; last admin protected) |
 | `POST /share` | signed-in | Create share — NDJSON `progress…` → `result`; 409 when the note already has an active share |
-| `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required); each record carries `canRevoke` for the requester |
+| `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required); each record carries `canRevoke` for the requester, `stale`/`noteChangedAt` against the published version, and the response the deployment's `followIdleMinutes` |
+| `POST /share/<id>/publish` | signed-in | Republish the share from the note as it is now — NDJSON `progress…` → `result`; creator or admin (403 otherwise); 409 while a publish is running |
+| `POST /share/<id>/pin` | signed-in | `{pinned}` — a pinned share never follows its note; creator or admin |
 | `DELETE /share/<id>` | signed-in | Revoke — the share's creator, or an admin when the registry is on (403 otherwise) |
 
 AI jobs are capped at 2 in flight per user and 4 machine-wide (429

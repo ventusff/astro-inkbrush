@@ -59,7 +59,7 @@ const MTIME_SKIP = new Set(['node_modules', '.git', '.astro', '.wiki', 'dist']);
 /** latest mtime (ms) across a tree — cheap freshness probe for the cache.
  *  Symlinks are not followed, and each real directory is visited once, so
  *  the walk cannot loop or wander outside the inputs. */
-function latestMtime(path: string, visited: Set<string> = new Set()): number {
+export function latestMtime(path: string, visited: Set<string> = new Set()): number {
   let stat;
   try {
     stat = lstatSync(path);

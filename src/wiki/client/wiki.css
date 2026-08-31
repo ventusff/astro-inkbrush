@@ -1172,6 +1172,44 @@ select.wiki-members-role {
   opacity: 0.55;
   cursor: not-allowed;
 }
+/* the active share's state rides on the chip: current · unpublished
+   changes · pinned. Tokens only — teal is calm, the accent asks for a look */
+.wiki-share-chip {
+  position: relative;
+}
+.wiki-share-dot {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--wiki-surface);
+  background: var(--wiki-faint);
+}
+.wiki-share-dot[data-state='current'] {
+  background: var(--wiki-ai);
+}
+.wiki-share-dot[data-state='stale'] {
+  background: var(--wiki-accent);
+}
+.wiki-share-dot[data-state='pinned'] {
+  background: var(--wiki-faint);
+}
+.wiki-share-dot[hidden] {
+  display: none;
+}
+.wiki-share-stale {
+  color: var(--wiki-on-surface);
+}
+.wiki-share-actions {
+  display: flex;
+  gap: 6px;
+}
+.wiki-share-actions .wiki-btn {
+  flex: 1;
+  width: auto;
+}
 .wiki-popover:has(.wiki-share-body) {
   min-width: 300px;
 }

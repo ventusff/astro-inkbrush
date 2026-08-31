@@ -150,10 +150,26 @@ export interface ShareRecord {
   /** set when revoked (record kept for audit; the list endpoint only returns
    *  shares that are neither revoked nor expired) */
   revokedAt: string | null;
+  /** a pinned share keeps its published version: it never follows the note */
+  pinned: boolean;
+  /** ISO time of the version the gateway serves (creation, or the last
+   *  publish) */
+  publishedAt: string;
+  /** fingerprint of the published snapshot — persisted, never returned */
+  publishedHash?: string;
   /** the requesting user may revoke this share (its creator, or an admin
    *  while the identity registry is on) — computed per response, never
    *  persisted; absent on the stored record */
   canRevoke?: boolean;
+  /** the note changed after the published version — computed per response */
+  stale?: boolean;
+  /** ISO time of that change (null when not stale) — computed per response */
+  noteChangedAt?: string | null;
+}
+
+/** POST /api/wiki/share/<id>/pin request body */
+export interface SharePinRequest {
+  pinned: boolean;
 }
 
 /** POST /api/wiki/share request body — the snapshotted route derives from
@@ -176,6 +192,8 @@ export type ShareStreamEvent =
  *  records omit createdBy and carry canRevoke for the requester */
 export interface ShareListResponse {
   shares: ShareRecord[];
+  /** the deployment's follow window (0 = shares publish by hand only) */
+  followIdleMinutes: number;
 }
 
 export interface RevisionRecord {

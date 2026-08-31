@@ -220,6 +220,23 @@ interface Strings {
     streamEnded: string;
     loading: string;
     loadFailed: string;
+    upToDate: (published: string) => string;
+    staleSince: (changed: string) => string;
+    followHint: (minutes: number) => string;
+    manualOnly: string;
+    pinnedHint: (published: string) => string;
+    publish: string;
+    publishing: string;
+    published: string;
+    publishFailed: string;
+    pin: string;
+    unpin: string;
+    pinned: string;
+    unpinned: string;
+    pinFailed: string;
+    dotCurrent: string;
+    dotStale: string;
+    dotPinned: string;
   };
 }
 
@@ -443,6 +460,23 @@ const en: Strings = {
     streamEnded: 'Stream ended without a result',
     loading: 'Loading…',
     loadFailed: 'Failed to load shares',
+    upToDate: (published) => `The published version is current (${published}).`,
+    staleSince: (changed) => `The note changed ${changed} — the link still shows the previous version.`,
+    followHint: (minutes) => `It publishes on its own once the note has been quiet for ${minutes} min.`,
+    manualOnly: 'This site publishes by hand only.',
+    pinnedHint: (published) => `Pinned to the version of ${published} — it never updates on its own.`,
+    publish: 'Publish this version',
+    publishing: 'Publishing…',
+    published: 'Share updated',
+    publishFailed: 'Publish failed',
+    pin: 'Pin this version',
+    unpin: 'Unpin — follow the note',
+    pinned: 'Pinned — the link keeps this version',
+    unpinned: 'Following the note again',
+    pinFailed: 'Could not change the pin',
+    dotCurrent: 'Shared · the link is current',
+    dotStale: 'Shared · unpublished changes',
+    dotPinned: 'Shared · pinned to a version',
   },
 };
 
@@ -673,6 +707,23 @@ const zh: Strings = {
     streamEnded: '流意外中断',
     loading: '加载中…',
     loadFailed: '加载分享列表失败',
+    upToDate: (published) => `已发布的就是最新版本（${published}）。`,
+    staleSince: (changed) => `笔记于 ${changed} 有改动，链接仍是上一版。`,
+    followHint: (minutes) => `笔记安静 ${minutes} 分钟后会自动发布。`,
+    manualOnly: '本站只手动发布。',
+    pinnedHint: (published) => `已钉住 ${published} 的版本，不会自动更新。`,
+    publish: '发布这一版',
+    publishing: '发布中…',
+    published: '分享已更新',
+    publishFailed: '发布失败',
+    pin: '钉住当前版本',
+    unpin: '解除钉住，跟随笔记',
+    pinned: '已钉住，链接保持这一版',
+    unpinned: '已恢复跟随笔记',
+    pinFailed: '钉住状态没改成',
+    dotCurrent: '已分享 · 链接是最新版',
+    dotStale: '已分享 · 有未发布的改动',
+    dotPinned: '已分享 · 已钉住某一版',
   },
 };
 

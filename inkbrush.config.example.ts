@@ -117,9 +117,12 @@ export default defineInkbrushConfig({
   // prewarm keeps the cached snapshot build fresh in the background (a
   // rebuild once the site has been quiet for 30 s after a change), so a
   // share spends only the seconds of packing and uploading.
+  // followIdleMinutes: a share republishes to the same link once its note
+  // has been quiet this long after a change (default 20; 0 = by hand only).
   // share: {
   //   gatewayUrl: 'http://gateway.internal:8787',
   //   publicBase: 'https://share.example.com',
   //   prewarm: true,
+  //   followIdleMinutes: 20,
   // },
 });

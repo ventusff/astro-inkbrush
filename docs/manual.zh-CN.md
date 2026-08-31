@@ -176,7 +176,7 @@ export default defineInkbrushConfig({
   autopush: false,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
-  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true },
+  // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
 });
 ```
 
@@ -198,6 +198,7 @@ export default defineInkbrushConfig({
 | `content.locales` | zh/en/de 表 | 笔记语言表——[见下](#contentlocales) |
 | `share` | 关 | 快照分享——[分享](#分享与网关契约)一节 |
 | `share.prewarm` | `false` | 后台保温快照构建——[分享](#分享与网关契约)一节 |
+| `share.followIdleMinutes` | `20` | 笔记安静这么多分钟后分享自动重发;`0` = 只手动发布——[分享](#分享与网关契约)一节 |
 | `server.trustProxy` | `false` | 推导本服务自身 origin 时是否采信 `x-forwarded-host`/`-proto`——有反代在前面就开,否则别开 |
 
 配置在启动时校验:cookie 名/域不合法、`trustedOrigins` 不是纯 origin、
@@ -258,6 +259,7 @@ locales: [
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
 | `WIKI_SHARE_PREWARM` | `share.prewarm`(`0`/`1`) |
+| `WIKI_SHARE_FOLLOW_IDLE_MINUTES` | `share.followIdleMinutes` |
 
 `content.dir` 与 `content.locales` 没有环境变量覆盖——它们是配置文件级的
 决定。功能的**启用**也永远由配置文件决定,环境变量只能覆盖已启用功能的字段。
@@ -370,7 +372,14 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 2. **密码**——从作者浏览器发到编辑机一次,在编辑机上 scrypt 哈希,发给网关的
    只有哈希;明文在哪里都不落盘,仅创建成功时显示一次。一篇笔记同时只有
    一个活跃分享:已有活跃分享时再创建会被拒(409)并回给现有链接。
-3. **撤销**——删掉网关上的目录,链接立刻 404。本地记录(含 `revokedAt`)
+3. **跟随**——分享跟着笔记走。笔记改动后安静满 `share.followIdleMinutes`
+   (默认 20 分钟——一段编辑结束了;存一个块不算一个版本),快照重建,字节与
+   已发布版本不同就以无密码头的 PUT 推到同一个 id:链接、密码、有效期都
+   不变,收件人看到的是新版。弹层里的**发布这一版**立刻做同一件事;
+   **钉住当前版本**把分享冻在此刻(解除后继续跟随)。弹层写明链接现在是哪
+   一版、笔记之后有没有改;分享 chip 上的小点同步这个状态(最新 · 有未发布
+   改动 · 已钉住)。`followIdleMinutes: 0` 关掉自动发布,只手动发。
+4. **撤销**——删掉网关上的目录,链接立刻 404。本地记录(含 `revokedAt`)
    保留在 `.wiki/data/shares.json` 作审计。
 
 收件人打开 `<publicBase>/s/<id>/`,输密码,阅读。
@@ -383,7 +392,7 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
 | 调用 | 含义 |
 |---|---|
 | `GET /admin/s` | 健康/鉴权预检;引擎在昂贵的构建之前先打它(5 秒超时)。401 = token 不对 |
-| `PUT /admin/s/<id>` | 创建/替换快照 `<id>`。请求体 = tar.gz,`index.html` 在包根——解压到你以 `/s/<id>/` 提供服务的目录即可 |
+| `PUT /admin/s/<id>` | 带 `x-share-password`:创建/替换快照 `<id>`。请求体 = tar.gz,`index.html` 在包根——解压到你以 `/s/<id>/` 提供服务的目录即可。不带 `x-share-password`:原地更新已有分享的内容——目录原子替换,密码与创建时间不变(有效期、笔记 id 没送头也不变);id 不存在答 404 |
 | `DELETE /admin/s/<id>` | 删除快照 `<id>`(这里的 404 视为本来就没有) |
 
 PUT 的请求头:
@@ -391,7 +400,7 @@ PUT 的请求头:
 | 头 | 内容 |
 |---|---|
 | `authorization` | `Bearer <SHARE_GATEWAY_TOKEN>` |
-| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>`——N=2¹⁵、r=8、p=1、32 字节哈希。校验访客密码时按内嵌参数重算比对 |
+| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>`——N=2¹⁵、r=8、p=1、32 字节哈希。校验访客密码时按内嵌参数重算比对。内容更新时不带 |
 | `x-share-expires` | 可选的 ISO-8601 时间戳;过期后应答 404/410 |
 | `x-share-note` | 来源笔记 id(含非 ASCII 时 URI 编码)——仅供参考 |
 
@@ -446,7 +455,9 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `GET /identity/users` | 管理员 | 成员表 + 角色词汇表 |
 | `PUT /identity/users` | 管理员 | 全表覆盖写(校验;保护最后一名管理员) |
 | `POST /share` | 需登录 | 创建分享——NDJSON 流:`progress…` → `result`;该笔记已有活跃分享时 409 |
-| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填);每条记录带按请求者算的 `canRevoke` |
+| `GET /share?note=<id>` | 需登录 | 该笔记的活跃分享(note 参数必填);每条记录带按请求者算的 `canRevoke`、相对已发布版本的 `stale`/`noteChangedAt`,响应带本站的 `followIdleMinutes` |
+| `POST /share/<id>/publish` | 需登录 | 按笔记现状重发分享——NDJSON 流:`progress…` → `result`;创建者或管理员(否则 403);发布进行中 409 |
+| `POST /share/<id>/pin` | 需登录 | `{pinned}`——钉住的分享不再跟随笔记;创建者或管理员 |
 | `DELETE /share/<id>` | 需登录 | 撤销——只有创建者本人,或注册表开启时的管理员(否则 403) |
 
 AI 任务每用户最多同时 2 个、全机最多 4 个(超出 429);排队中的任务不占

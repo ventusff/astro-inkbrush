@@ -413,7 +413,7 @@ import { registerClaudeRoutes } from './claude.ts';
 import { registerCommentRoutes } from './comments.ts';
 import { registerIdentityRoutes } from './identity.ts';
 import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
-import { registerShareRoutes } from './share.ts';
+import { registerShareRoutes, startShareFollowing } from './share.ts';
 import { startSnapshotWarmer } from './snapshot.ts';
 import { registerSourceRoutes } from './source.ts';
 
@@ -453,6 +453,9 @@ export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): voi
     if (shareState() === 'ready') startSnapshotWarmer(root);
     else console.warn('[wiki share] prewarm is on but share is unconfigured (gatewayUrl / publicBase / SHARE_GATEWAY_TOKEN) — not warming');
   }
+  // shares follow their notes (a no-op while share is off/unconfigured or
+  // followIdleMinutes is 0)
+  startShareFollowing();
 }
 
 /** the request's own origins — both of them, when both exist:
