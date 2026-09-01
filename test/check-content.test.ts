@@ -122,3 +122,30 @@ test('a config module without plugin lists is accepted; a non-array list is reje
   assert.deepEqual(empty.rehypePlugins, []);
   await assert.rejects(loadSiteConfig(fileURLToPath(new URL('./fixtures/site-config-bad.mjs', import.meta.url))), /must be an array/);
 });
+
+const FRONTMATTER = fileURLToPath(new URL('./fixtures/frontmatter', import.meta.url));
+const SCHEMA = fileURLToPath(new URL('./fixtures/frontmatter-schema.ts', import.meta.url));
+
+test('--frontmatter: every file\'s mapping must satisfy the schema; an absent block is {}; a YAML error is not doubled', async () => {
+  const { loadFrontmatterSchema } = await import('../src/lib/frontmatter-schema.ts');
+  const frontmatter = await loadFrontmatterSchema(SCHEMA);
+  const { checked, findings } = await checkContent(FRONTMATTER, { frontmatter });
+  assert.equal(checked, 4);
+  const f = byFile(findings);
+  assert.deepEqual([...f.keys()].sort(), ['bad-yaml/index.md', 'no-block/index.md', 'too-many/index.md']);
+  assert.match(f.get('too-many/index.md')![0]!, /^frontmatter sources: /);
+  assert.match(f.get('too-many/index.md')![1]!, /^frontmatter tags\[1\]: /);
+  assert.match(f.get('no-block/index.md')![0]!, /^frontmatter title: /);
+  // the unparseable block is one YAML finding, not a YAML finding plus a schema finding on {}
+  assert.equal(f.get('bad-yaml/index.md')!.length, 1);
+  assert.match(f.get('bad-yaml/index.md')![0]!, /YAML/);
+  // without the schema only the YAML error remains
+  assert.deepEqual([...byFile((await checkContent(FRONTMATTER)).findings).keys()], ['bad-yaml/index.md']);
+});
+
+test('--frontmatter on the CLI: findings fail the run; an unloadable schema module is a usage error', async () => {
+  assert.equal(await main([FRONTMATTER, '--frontmatter', SCHEMA]), 1);
+  assert.equal(await main([FRONTMATTER, '--glob', 'ok/index.md', '--frontmatter', SCHEMA]), 0);
+  assert.equal(await main([FRONTMATTER, '--frontmatter', fileURLToPath(new URL('./fixtures/frontmatter-schema-none.mjs', import.meta.url))]), 2);
+  assert.equal(await main([FRONTMATTER, '--frontmatter']), 2);
+});

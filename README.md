@@ -84,7 +84,9 @@ yourself in the browser on the
   expressions swallowing your prose, single-line `$$x$$`, formulas KaTeX
   can't render, and more — each reported with file:line:column and a caret.
 - 🩺 **Check CLIs** — `check-content.mjs` (compile every source file with
-  the dialect, the guard and — given `--config` — your site's plugins),
+  the dialect, the guard and — given `--config` — your site's plugins;
+  given `--frontmatter`, hold every file's frontmatter to your
+  content-collection schema before the build does),
   `check-wikilinks.mjs` (dead or ambiguous `[[wikilinks]]`, dubious
   anchors — with the library's own parser and resolution rules) and
   `check-dist.mjs` (broken links, dangling anchors, locale doubling, nested
@@ -154,8 +156,10 @@ export default defineConfig({
   },
   // the same plugins go to the CMS, so its preview and its save-time
   // validation render a note the way your pages do; urlFor is your
-  // note-id → URL rule — without it the engine assumes `/${id}/`
-  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` } })] : [])],
+  // note-id → URL rule — without it the engine assumes `/${id}/`;
+  // frontmatter is your content-collection schema, so a save is refused
+  // for the frontmatter the build would refuse
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/`, frontmatter: notesSchema } })] : [])],
 });
 ```
 

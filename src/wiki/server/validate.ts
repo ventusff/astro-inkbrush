@@ -7,10 +7,11 @@
  * (for .mdx) an MDX compile. Math
  * (remark-math) follows the same rule as the preview: mounted only when the
  * site hands over no plugins of its own — a site with hooks brings its own
- * math or has none. The frontmatter must parse as YAML. This approximates
- * the site's build with the plugins it declares to the integration; plugins
- * a site mounts elsewhere are outside it. A note that fails is refused
- * before any write.
+ * math or has none. The frontmatter must parse as YAML and, when the site
+ * hands over its schema (`markdown.frontmatter`), satisfy it. This
+ * approximates the site's build with the plugins it declares to the
+ * integration; plugins a site mounts elsewhere are outside it. A note that
+ * fails is refused before any write.
  */
 import { join, resolve, sep } from 'node:path';
 
@@ -38,6 +39,7 @@ export async function validateSource(file: string, source: string): Promise<stri
   const problem = await validateNoteSource(source, {
     site,
     guard: site.guard ?? {},
+    frontmatter: site.frontmatter,
     mdx: file.endsWith('.mdx'),
     path: resolve(root, file),
   });

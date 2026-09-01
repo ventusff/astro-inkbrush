@@ -19,6 +19,7 @@ import type { Options as RemarkRehypeOptions } from 'remark-rehype';
 import type { PluggableList, Processor } from 'unified';
 
 import type { ContentGuardOptions } from './content-guard.ts';
+import type { FrontmatterSchema } from './frontmatter-schema.ts';
 import type { WikilinkResolver } from './wikilinks.ts';
 
 export interface SitePluginSet {
@@ -103,12 +104,16 @@ export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise
  * dev server's save gate (wiki/server/validate.ts) and the playground refuse
  * exactly the same input. Returns an error message, or null when `source`
  * passes. `path` becomes the vfile path (plugin messages, noteIdOf); the
- * caller resolves it.
+ * caller resolves it. With a `frontmatter` schema, the frontmatter mapping
+ * (`{}` when the block is absent) must satisfy it — the check the site's
+ * content collection makes of the file at build time.
  */
 export interface ValidateSourceOptions {
   site: SitePluginSet;
   /** the site's content-guard options (renderedProps / autoNumberedHeadings) */
   guard?: ContentGuardOptions | undefined;
+  /** the site's frontmatter schema (its content-collection schema) */
+  frontmatter?: FrontmatterSchema | undefined;
   /** compile as MDX (.mdx source) instead of the CommonMark reading */
   mdx: boolean;
   path?: string | undefined;
@@ -129,6 +134,11 @@ export async function validateNoteSource(
   const fm = splitFrontmatter(source);
   if (fm.error) {
     return `frontmatter${fm.error.line ? ` (line ${fm.error.line})` : ''}: ${fm.error.message}`;
+  }
+  if (opts.frontmatter) {
+    const { frontmatterProblems } = await import('./frontmatter-schema.ts');
+    const problems = await frontmatterProblems(opts.frontmatter, fm.data);
+    if (problems.length > 0) return problems.join('\n');
   }
   const site = opts.site;
   const bare = site.remarkPlugins === undefined && site.rehypePlugins === undefined;

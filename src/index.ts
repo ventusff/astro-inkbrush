@@ -23,4 +23,5 @@
  */
 export { inkbrush, type InkbrushOptions } from './wiki/integration.ts';
 export type { SiteMarkdownHooks } from './wiki/server/site.ts';
+export type { FrontmatterSchema } from './lib/frontmatter-schema.ts';
 export { rehypeWikiBlocks } from './lib/rehype-wiki-blocks.ts';

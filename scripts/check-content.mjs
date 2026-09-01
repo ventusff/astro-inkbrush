@@ -20,10 +20,14 @@
  * Frontmatter is parsed as YAML 1.2 (the `yaml` package; Astro reads the
  * same grammar). Two frontmatter findings: a YAML error, and a plain value
  * truncated by an unquoted ` #` (`summary: deploy #3 checklist` is the
- * value "deploy" followed by a comment).
+ * value "deploy" followed by a comment). With --frontmatter, the parsed
+ * mapping of every file (`{}` when the block is absent) must also satisfy
+ * the site's schema — the check its content collection makes at build
+ * time, run here before the build.
  *
  * Usage (from the content repo root):
  *   node <engine>/scripts/check-content.mjs . --glob '**\/index.{md,mdx}' --math
+ *   node <engine>/scripts/check-content.mjs . --math --frontmatter _meta/schema.ts
  *
  *   <root>             directory to scan (default .)
  *   --glob <pattern>   files to check, relative to <root> (repeatable;
@@ -42,6 +46,14 @@
  *                      --config: formula braces otherwise read as JSX
  *                      expressions in MDX). Not needed when --config already
  *                      lists remark-math.
+ *   --frontmatter <path>
+ *                      a JS/TS module whose default export (or `frontmatter`
+ *                      / `schema` export) is the notes' frontmatter schema —
+ *                      any Standard Schema (an `astro/zod` schema as it is)
+ *                      — or a factory `({ z }) => schema` called with
+ *                      Astro's zod, so a content repo's schema module needs
+ *                      no dependencies. Every file's frontmatter mapping
+ *                      must satisfy it.
  *   --allow-empty      accept a corpus with zero matching files (without it,
  *                      an empty corpus is a failure — it certifies nothing)
  *   --help             print this usage
@@ -64,6 +76,9 @@ const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
 const { markdownSyntax } = await import(pathToFileURL(join(engineRoot, 'src/lib/markdown-syntax.ts')).href);
 const { remarkContentGuard } = await import(pathToFileURL(join(engineRoot, 'src/lib/content-guard.ts')).href);
 const { splitFrontmatter } = await import(pathToFileURL(join(engineRoot, 'src/lib/frontmatter.ts')).href);
+const { frontmatterProblems, loadFrontmatterSchema } = await import(
+  pathToFileURL(join(engineRoot, 'src/lib/frontmatter-schema.ts')).href
+);
 
 /* ---------------- site config ---------------- */
 
@@ -203,15 +218,13 @@ export function buildPipeline({ math = false, site } = {}) {
   return { remarkPlugins, rehypePlugins, remarkRehypeOptions };
 }
 
-/** Astro hands the parser the file with the frontmatter blanked; the shared
- *  splitter produces the same line-true view */
-function bodyOf(source) {
-  return splitFrontmatter(source).body;
-}
-
-export async function checkSource(source, { path, pipeline }) {
+export async function checkSource(source, { path, pipeline, frontmatter }) {
   const problems = checkFrontmatter(source);
-  const body = bodyOf(source);
+  const fm = splitFrontmatter(source);
+  // a block that does not parse is reported as such; its mapping is empty
+  // and not worth a second finding
+  if (frontmatter && !fm.error) problems.push(...(await frontmatterProblems(frontmatter, fm.data)));
+  const body = fm.body;
   try {
     if (path.endsWith('.mdx')) {
       await compile(
@@ -249,9 +262,13 @@ export async function checkSource(source, { path, pipeline }) {
  * without findings are omitted) and the number of files checked.
  * @param {string} root
  * @param {{ globs?: string[], skip?: string[], math?: boolean, allowEmpty?: boolean,
- *           site?: { remarkPlugins: unknown[], rehypePlugins: unknown[], remarkRehype?: unknown } }} [options]
+ *           site?: { remarkPlugins: unknown[], rehypePlugins: unknown[], remarkRehype?: unknown },
+ *           frontmatter?: import('../src/lib/frontmatter-schema.ts').FrontmatterSchema }} [options]
  */
-export async function checkContent(root, { globs = ['**/index.{md,mdx}'], skip = [], math = false, site } = {}) {
+export async function checkContent(
+  root,
+  { globs = ['**/index.{md,mdx}'], skip = [], math = false, site, frontmatter } = {},
+) {
   const absRoot = resolve(root);
   const pipeline = buildPipeline({ math, site });
   const findings = [];
@@ -259,7 +276,7 @@ export async function checkContent(root, { globs = ['**/index.{md,mdx}'], skip =
   for (const file of [...contentFiles(absRoot, globs, skip)].sort()) {
     checked += 1;
     const path = relative(absRoot, file).replaceAll('\\', '/');
-    const problems = await checkSource(readFileSync(file, 'utf8'), { path, pipeline });
+    const problems = await checkSource(readFileSync(file, 'utf8'), { path, pipeline, frontmatter });
     if (problems.length > 0) findings.push({ file: path, problems });
   }
   return { checked, findings };
@@ -267,7 +284,7 @@ export async function checkContent(root, { globs = ['**/index.{md,mdx}'], skip =
 
 /* ---------------- CLI ---------------- */
 
-const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <dir>]... [--config <path>] [--math] [--allow-empty]
+const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <dir>]... [--config <path>] [--frontmatter <path>] [--math] [--allow-empty]
 
   <root>             directory to scan (default .)
   --glob <pattern>   files to check, relative to <root> (repeatable; default
@@ -280,6 +297,12 @@ const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <
                      guard, rehype plugins after remark-rehype
   --math             mount remark-math (required for math sites without
                      --config; not needed when --config lists remark-math)
+  --frontmatter <path>
+                     JS/TS module whose default export (or \`frontmatter\` /
+                     \`schema\` export) is the notes' frontmatter schema: any
+                     Standard Schema (an astro/zod schema as it is), or a
+                     factory ({ z }) => schema called with Astro's zod; every
+                     file's frontmatter mapping must satisfy it
   --allow-empty      accept a corpus with zero matching files (without it, an
                      empty corpus fails — it certifies nothing)
   --help             print this usage
@@ -287,7 +310,8 @@ const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <
 Every file is compiled with the package's Markdown dialect (GFM with single
 tilde off, CJK-friendly emphasis) and the content guard; with --config, the
 site's own plugins run after them. Frontmatter is parsed as YAML 1.2: a YAML
-error and a plain value truncated by an unquoted \` #\` are findings.
+error and a plain value truncated by an unquoted \` #\` are findings; with
+--frontmatter, so is a mapping the schema rejects.
 Exit code: 0 clean, 1 findings (a nonexistent root and an empty corpus
 without --allow-empty included), 2 usage error.`;
 
@@ -296,7 +320,7 @@ export async function main(argv) {
     console.log(USAGE);
     return 0;
   }
-  const valued = new Set(['--glob', '--skip', '--config']);
+  const valued = new Set(['--glob', '--skip', '--config', '--frontmatter']);
   const flags = new Set(['--math', '--allow-empty']);
   if (valued.has(argv[argv.length - 1])) {
     console.error(`${argv[argv.length - 1]} requires a value\n\n${USAGE}`);
@@ -313,6 +337,7 @@ export async function main(argv) {
   const math = argv.includes('--math');
   const allowEmpty = argv.includes('--allow-empty');
   const configPath = many('config')[0];
+  const schemaPath = many('frontmatter')[0];
 
   const root = resolve(positional[0] ?? '.');
   let rootStat = null;
@@ -336,13 +361,24 @@ export async function main(argv) {
     }
   }
 
+  let frontmatter;
+  if (schemaPath !== undefined) {
+    try {
+      frontmatter = await loadFrontmatterSchema(resolve(schemaPath));
+    } catch (err) {
+      console.error(`cannot load --frontmatter ${schemaPath}: ${err.message}`);
+      return 2;
+    }
+  }
+
   const { checked, findings } = await checkContent(root, {
     globs: globs.length > 0 ? globs : undefined,
     skip: many('skip'),
     math,
     site,
+    frontmatter,
   });
-  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}`;
+  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''}`;
   for (const { file, problems } of findings) {
     console.error(`\n✗ ${file}`);
     for (const p of problems) console.error(`  ${p.split('\n').join('\n  ')}`);

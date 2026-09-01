@@ -81,3 +81,21 @@ test('the message names the file project-relative, never by its absolute path', 
     setProjectRoot(cwd);
   }
 });
+
+test("the site's frontmatter schema gates the save the way its content collection gates the build", async () => {
+  const { loadFrontmatterSchema } = await import('../src/lib/frontmatter-schema.ts');
+  const frontmatter = await loadFrontmatterSchema(new URL('./fixtures/frontmatter-schema.ts', import.meta.url).pathname);
+  const over = '---\ntitle: t\nsources:\n  - title: a\n  - title: b\n  - title: c\n---\n\nbody\n';
+  // no schema: the YAML parses, the note passes
+  assert.equal(await validateSource('a/index.md', over), null);
+  setSiteHooks({ frontmatter });
+  try {
+    assert.match((await validateSource('a/index.md', over)) ?? '', /^frontmatter sources: /);
+    assert.match((await validateSource('a/index.mdx', 'no block\n')) ?? '', /^frontmatter title: /);
+    assert.equal(await validateSource('a/index.md', '---\ntitle: t\nsources:\n  - title: a\n---\n\nbody\n'), null);
+    // a block that does not parse is reported as YAML, ahead of the schema
+    assert.match((await validateSource('a/index.md', '---\ntitle: [x\n---\n')) ?? '', /^frontmatter \(line/);
+  } finally {
+    setSiteHooks(undefined);
+  }
+});

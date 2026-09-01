@@ -36,9 +36,10 @@ npm test
 
 - `inkbrush({ markdown })` integration: injects the client, mounts the
   `/api/wiki/*` middleware, runs server init. `markdown` carries the site's
-  own remark/rehype plugins and its note-id → URL rule, so the editor
-  preview, the save-time validation and the AI gate render a note the way
-  the page does. Dev-mode only; it must inject **nothing** outside WIKI
+  own remark/rehype plugins, its note-id → URL rule and its frontmatter
+  schema (`frontmatter`: any Standard Schema — an `astro/zod` schema as it
+  is), so the editor preview, the save-time validation and the AI gate
+  render and refuse a note the way the page build does. Dev-mode only; it must inject **nothing** outside WIKI
   mode — byte-identical builds are the hard line.
 - `rehypeWikiBlocks`: sites add it (WIKI mode only) to their pipeline for
   block ↔ source-line mapping.
@@ -55,7 +56,10 @@ npm test
   `scripts/check-dist.mjs`: standalone check CLIs that import the dialect
   and link rules from the package root. Given `--config`, the first two
   also mount the site's own plugins and resolver; without it they check
-  the dialect and the guard only, and say so.
+  the dialect and the guard only, and say so. Given `--frontmatter`,
+  check-content also holds every file's frontmatter to the site's schema
+  (a Standard Schema export, or a `({ z }) => schema` factory called with
+  Astro's zod).
 - `<meta name="inkbrush-note" content="<note id>">`: a note page declares
   its identity; the client never parses URLs. Optional
   `inkbrush-note-url` template for locale jumps.

@@ -44,7 +44,13 @@ integrations: [inkbrush({
 
 站点若还给 `markdownProcessor` 传了守门(guard)或 remark-rehype 选项,
 把同样的值也传进来(`markdown.guard`、`markdown.remarkRehype`),保存关卡
-就跑同一套。
+就跑同一套。站点的内容集合 schema 以 `markdown.frontmatter` 传入——
+`astro/zod` 的 schema 原样可用,任何 [Standard Schema](https://standardschema.dev)
+也行——此后构建会拒绝的 frontmatter(缺必填字段、列表超出上限)保存时就被
+拒绝,编辑器里点名是哪个字段。同一份 schema 也能在内容仓的 CI 里先于构建跑:
+`check-content.mjs --frontmatter <模块>` 从一个导出 schema、或导出工厂
+`({ z }) => schema`(以 Astro 自带的 zod 调用)的模块加载它,所以放在内容仓
+笔记旁边的 schema 模块不需要任何依赖。
 
 集成只在 `astro dev` 下运行;其他命令下只打一行警告、什么都不做。WIKI 模式
 还会关掉 Astro 的 dev 工具条(编辑者不需要开发仪表),但保留错误浮层——

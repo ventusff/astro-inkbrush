@@ -11,6 +11,7 @@ import type { Options as RemarkRehypeOptions } from 'remark-rehype';
 import type { PluggableList } from 'unified';
 
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
+import type { FrontmatterSchema } from '../../lib/frontmatter-schema.ts';
 
 export interface SiteMarkdownHooks {
   /** the site's remark plugins, mounted after the dialect (as in its pipeline) */
@@ -25,6 +26,11 @@ export interface SiteMarkdownHooks {
    *  `remarkRehype`), applied by the preview and the save-time validation
    *  of .md notes */
   remarkRehype?: RemarkRehypeOptions | undefined;
+  /** the site's frontmatter schema — its content-collection schema (an
+   *  `astro/zod` schema as it is, or any Standard Schema), so the save gate
+   *  refuses the frontmatter the build refuses; omitted = YAML must parse,
+   *  nothing more */
+  frontmatter?: FrontmatterSchema | undefined;
   /** note id → the URL the site routes it to (default `/${id}/`) */
   urlFor?: ((id: string) => string) | undefined;
 }

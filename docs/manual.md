@@ -50,7 +50,15 @@ integrations: [inkbrush({
 
 A site that also passes `guard` options or `remark-rehype` options to
 `markdownProcessor` hands the same values here (`markdown.guard`,
-`markdown.remarkRehype`) so the save gate runs them too.
+`markdown.remarkRehype`) so the save gate runs them too. Its
+content-collection schema goes in as `markdown.frontmatter` — an
+`astro/zod` schema as it is, or any [Standard Schema](https://standardschema.dev)
+— and the save gate then refuses the frontmatter the build would refuse
+(a required field missing, a list over its limit), with the field named in
+the editor. The same schema runs ahead of the build in a content repo's CI:
+`check-content.mjs --frontmatter <module>` loads it from a module exporting
+the schema or a factory `({ z }) => schema` called with Astro's zod, so the
+module a content repo keeps beside its notes needs no dependencies.
 
 The integration only runs under `astro dev`; in any other command it logs a
 warning and does nothing. In WIKI mode it also turns off Astro's dev toolbar

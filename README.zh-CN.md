@@ -67,7 +67,8 @@ frontmatter 原地编辑,守门拒绝一次坏的保存——见
   MDX 表达式、单行 `$$x$$`、KaTeX 渲不出的公式等——一律构建失败,
   精确到 file:line:column 并画出插标。
 - 🩺 **检查 CLI** —— `check-content.mjs`(用方言、守门、以及传入 `--config`
-  时你站点的插件真编译每个源文件)、`check-wikilinks.mjs`(死链或多义的
+  时你站点的插件真编译每个源文件;传入 `--frontmatter` 时,每个文件的
+  frontmatter 还要在构建之前先过你的内容集合 schema)、`check-wikilinks.mjs`(死链或多义的
   `[[双链]]`、可疑锚点——解析器与解析规则直接取自库本体)与 `check-dist.mjs`
   (构建产物的死链、悬空锚点、语言段重复、`<a>` 嵌套、KaTeX 报错残留,以及
   任何 CMS 注入痕迹)。
@@ -130,8 +131,9 @@ export default defineConfig({
     }),
   },
   // 同一份插件交给 CMS:预览与保存校验就和页面渲染一模一样;urlFor 是
-  // 「笔记 id → URL」规则——不传则引擎默认 `/${id}/`
-  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/` } })] : [])],
+  // 「笔记 id → URL」规则——不传则引擎默认 `/${id}/`;frontmatter 是你的
+  // 内容集合 schema——构建会拒绝的 frontmatter,保存时就被拒绝
+  integrations: [...(WIKI_MODE ? [inkbrush({ markdown: { remarkPlugins, rehypePlugins, urlFor: (id) => `/notes/${id}/`, frontmatter: notesSchema } })] : [])],
 });
 ```
 
