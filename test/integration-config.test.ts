@@ -47,6 +47,12 @@ test('under astro dev: .wiki/ is unwatched, the toolbar off, the client injected
   const vite = update['vite'] as { server: { watch: { ignored: string[] } } };
   assert.ok(vite.server.watch.ignored.includes('**/.wiki/**'));
   assert.deepEqual(update['devToolbar'], { enabled: false });
+  // CodeMirror is pre-bundled through the package that owns it: the bare
+  // name is unresolvable from a pnpm site root, and the nested form falls
+  // back to the root wherever the package itself is not resolvable.
+  const include = (vite as unknown as { optimizeDeps: { include: string[] } }).optimizeDeps.include;
+  assert.equal(include.length, 7);
+  for (const entry of include) assert.match(entry, /^astro-inkbrush > @codemirror\//);
   assert.equal(scripts.length, 1);
   assert.match(scripts[0]!, /client\/index\.ts/);
   assert.deepEqual(warnings, []);

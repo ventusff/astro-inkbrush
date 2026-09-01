@@ -83,10 +83,13 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
             server: { watch: { ignored: ['**/.wiki/**'] } },
             // CodeMirror is reached through a lazy import (editor.ts), which
             // Vite's startup dependency scan does not see, so it is
-            // pre-bundled explicitly. The entry is the bare name when the site
-            // root resolves it (npm file: / in-repo layouts) and the
-            // `astro-inkbrush > dep` form under pnpm's strict layout, where
-            // the dependency exists only in this package's node_modules.
+            // pre-bundled explicitly. Each entry is resolved from this
+            // package's own directory (`astro-inkbrush > dep`): under pnpm's
+            // strict layout the dependency exists only in this package's
+            // node_modules, and where the site root cannot resolve the
+            // package itself (in-repo layouts) Vite falls back to the root.
+            // Node's own resolver is no stand-in for Vite's here — it walks
+            // pnpm's flat store and finds what Vite refuses.
             optimizeDeps: {
               include: [
                 '@codemirror/autocomplete',
@@ -96,14 +99,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
                 '@codemirror/language',
                 '@codemirror/state',
                 '@codemirror/view',
-              ].map((dep) => {
-                try {
-                  createRequire(join(root, 'package.json')).resolve(dep);
-                  return dep;
-                } catch {
-                  return `astro-inkbrush > ${dep}`;
-                }
-              }),
+              ].map((dep) => `astro-inkbrush > ${dep}`),
             },
           },
         });
