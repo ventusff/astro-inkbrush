@@ -3,14 +3,18 @@
  * server's /render endpoint uses (lib/render-pipeline.ts), fed from explicit
  * site inputs instead of server config. Two products:
  *
- *  - preview(markdown):     the editor's live preview (trusted pipeline)
- *  - renderBlock(source):   an edited segment re-rendered for the page, its
- *                           top-level blocks stamped in CURRENT coordinates
- *                           (rehype-wiki-blocks runs on the fragment; the
- *                           fragment-relative stamps are shifted afterwards)
+ *  - preview(markdown):            the editor's live preview (trusted
+ *                                  pipeline, fragment reading)
+ *  - renderSource(source, first):  a slice of the note's current source (an
+ *                                  edited segment, or the whole body for the
+ *                                  footnote section) rendered for the page,
+ *                                  its blocks stamped in CURRENT coordinates:
+ *                                  rehype-wiki-blocks runs on the value, and
+ *                                  `first` — the current line its first line
+ *                                  sits on — shifts the stamps
  *
- * JSX in a fragment follows the dev preview's boundary: it is not rendered
- * as a component (CommonMark reading — it lands as raw markup).
+ * JSX follows the dev preview's boundary: it is not rendered as a component
+ * (CommonMark reading — it lands as raw markup behind an anchor).
  */
 import type { Processor } from 'unified';
 
@@ -33,22 +37,23 @@ export interface RendererOptions {
 
 export interface PlaygroundRenderer {
   preview(markdown: string, notePath?: string): Promise<string>;
-  renderBlock(source: string, curStart: number, notePath?: string): Promise<string>;
+  renderSource(source: string, first: number, notePath?: string): Promise<string>;
 }
 
 export function createRenderer(opts: RendererOptions): PlaygroundRenderer {
   let previewProcessor: Promise<Processor> | null = null;
-  let blockProcessor: Promise<Processor> | null = null;
+  let sourceProcessor: Promise<Processor> | null = null;
 
   const previewP = (): Promise<Processor> =>
     (previewProcessor ??= buildRenderProcessor({
       sanitize: false,
+      fragment: true,
       site: opts.site,
       ...(opts.wikilinks ? { wikilinks: opts.wikilinks } : {}),
     }));
 
-  const blockP = (): Promise<Processor> =>
-    (blockProcessor ??= buildRenderProcessor({
+  const sourceP = (): Promise<Processor> =>
+    (sourceProcessor ??= buildRenderProcessor({
       sanitize: false,
       site: {
         ...opts.site,
@@ -64,9 +69,9 @@ export function createRenderer(opts: RendererOptions): PlaygroundRenderer {
 
   return {
     preview: async (markdown, notePath) => run(await previewP(), markdown, notePath),
-    renderBlock: async (source, curStart, notePath) => {
-      const html = await run(await blockP(), source, notePath);
-      const shift = curStart - 1;
+    renderSource: async (source, first, notePath) => {
+      const html = await run(await sourceP(), source, notePath);
+      const shift = first - 1;
       if (shift === 0) return html;
       return html.replace(
         /data-wiki-src="(\d+)-(\d+)"/g,

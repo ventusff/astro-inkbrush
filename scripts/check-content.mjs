@@ -17,6 +17,11 @@
  * same goes for rehype plugins. Astro's default smartypants pass (quotes
  * and dashes) is not applied.
  *
+ * After the pipeline, the file's block map — the source line stamps the
+ * in-place editor reads and writes blocks by — is verified: stamps must be
+ * well-formed, disjoint and cover every block (src/lib/wiki-blocks-check.ts).
+ * rehype-wiki-blocks is mounted here; a --config module must not list it.
+ *
  * Frontmatter is parsed as YAML 1.2 (the `yaml` package; Astro reads the
  * same grammar). Two frontmatter findings: a YAML error, and a plain value
  * truncated by an unquoted ` #` (`summary: deploy #3 checklist` is the
@@ -79,6 +84,8 @@ const { splitFrontmatter } = await import(pathToFileURL(join(engineRoot, 'src/li
 const { frontmatterProblems, loadFrontmatterSchema } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/frontmatter-schema.ts')).href
 );
+const { rehypeWikiBlocks } = await import(pathToFileURL(join(engineRoot, 'src/lib/rehype-wiki-blocks.ts')).href);
+const { blockStampProblems } = await import(pathToFileURL(join(engineRoot, 'src/lib/wiki-blocks-check.ts')).href);
 
 /* ---------------- site config ---------------- */
 
@@ -203,9 +210,19 @@ export function checkFrontmatter(source) {
 
 /* ---------------- compile ---------------- */
 
+/** the editor's block map for the file must be sound: stamps well-formed,
+ *  disjoint and covering every block */
+function rehypeBlockStamps() {
+  return (tree, file) => {
+    const lines = typeof file.value === 'string' ? file.value.split('\n').length : undefined;
+    const problems = blockStampProblems(tree, lines);
+    if (problems.length > 0) file.fail(`block stamps: ${problems.join('; ')}`);
+  };
+}
+
 /** the site's pipeline up to the point where a finding can surface: dialect
  *  → guard → (--math) → site remark plugins → remark-rehype → site rehype
- *  plugins */
+ *  plugins → block stamps and their check */
 export function buildPipeline({ math = false, site } = {}) {
   const remarkPlugins = [
     ...markdownSyntax(),
@@ -213,7 +230,7 @@ export function buildPipeline({ math = false, site } = {}) {
     ...(math ? [remarkMath] : []),
     ...(site?.remarkPlugins ?? []),
   ];
-  const rehypePlugins = site?.rehypePlugins ?? [];
+  const rehypePlugins = [...(site?.rehypePlugins ?? []), rehypeWikiBlocks, rehypeBlockStamps];
   const remarkRehypeOptions = { allowDangerousHtml: true, passThrough: [], ...(site?.remarkRehype ?? {}) };
   return { remarkPlugins, rehypePlugins, remarkRehypeOptions };
 }
@@ -378,7 +395,7 @@ export async function main(argv) {
     site,
     frontmatter,
   });
-  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''}`;
+  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''} + block stamps`;
   for (const { file, problems } of findings) {
     console.error(`\n✗ ${file}`);
     for (const p of problems) console.error(`  ${p.split('\n').join('\n  ')}`);

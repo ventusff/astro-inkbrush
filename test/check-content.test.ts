@@ -1,8 +1,8 @@
 /**
  * check-content: the frontmatter checks (YAML errors, ` #` truncation,
- * CRLF accepted), the dialect + guard compile for md and mdx, --math, and
- * the site plugin module loaded through --config — over
- * test/fixtures/content and test/fixtures/site-config.ts.
+ * CRLF accepted), the dialect + guard compile for md and mdx, --math, the
+ * site plugin module loaded through --config, and the block-stamp check —
+ * over test/fixtures/content and test/fixtures/site-config*.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -42,7 +42,7 @@ test('frontmatter: a YAML error and ` #` truncation are findings; CRLF and quote
 
 test('without --config: dialect + guard, YAML findings, docs/ skipped, CRLF accepted', async () => {
   const { checked, findings } = await checkContent(CONTENT);
-  assert.equal(checked, 8);
+  assert.equal(checked, 9);
   const f = byFile(findings);
   assert.deepEqual([...f.keys()].sort(), ['bad-yaml/index.md', 'guard/index.mdx', 'math/index.mdx', 'truncated/index.md']);
   assert.match(f.get('guard/index.mdx')![0]!, /`\*\*` is unpaired/);
@@ -73,7 +73,15 @@ test('--glob and --skip narrow the file set', async () => {
   assert.equal(only.checked, 2);
   assert.deepEqual(only.findings, []);
   const skipped = await checkContent(CONTENT, { skip: ['guard', 'math/'] });
-  assert.equal(skipped.checked, 6);
+  assert.equal(skipped.checked, 7);
+});
+
+test('the block map is verified: footnotes and raw HTML pass, an unreachable block is a finding', async () => {
+  const clean = await checkContent(CONTENT, { globs: ['footnotes/index.md'] });
+  assert.deepEqual(clean.findings, []);
+  const site = await loadSiteConfig(fileURLToPath(new URL('./fixtures/site-config-unstamped.mjs', import.meta.url)));
+  const f = byFile((await checkContent(CONTENT, { site, globs: ['good/index.md'] })).findings);
+  assert.match(f.get('good/index.md')![0]!, /^block stamps: <div> has no source range/);
 });
 
 test('a trailing valued option is a usage error', async () => {

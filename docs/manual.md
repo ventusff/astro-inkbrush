@@ -94,6 +94,16 @@ could be a body block already). YAML gets no preview (the page head
 re-renders from it on save); the save gate requires it to parse. The ✦ is
 not offered there.
 
+A block is a top-level unit of the note's Markdown — a paragraph, heading,
+list, table, code fence, display formula, callout, component. Two cases
+edit where they render rather than where they are written: a **footnote
+definition** is a block of its own, reached by hovering its entry in the
+footnote list (its preview shows the definition's text under its
+`[^label]`), and a **raw HTML block** of a `.md` note edits behind the
+element it produces (in MDX it is a component block). Component blocks edit
+as source, without preview. Content CI verifies the block map of every note
+(`check-content`: stamps well-formed, disjoint, covering every block).
+
 ### AI assist (✦)
 
 Requires a local [`claude` CLI](https://claude.com/claude-code) on the

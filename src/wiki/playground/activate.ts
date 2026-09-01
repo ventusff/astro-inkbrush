@@ -94,7 +94,7 @@ export async function activate(config: PlaygroundConfig, noteId: string): Promis
   await applyOverlayToDom(
     overlay,
     nodes,
-    (source, curStart) => renderer.renderBlock(source, curStart, `/${note.file}`),
+    (source, first) => renderer.renderSource(source, first, `/${note.file}`),
     { jsxEditedNote: strings.jsxEditedNote, frontmatterEditedNote: strings.frontmatterEditedNote },
   );
 

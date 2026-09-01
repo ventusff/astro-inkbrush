@@ -1,11 +1,15 @@
 /**
  * Block discovery + the floating edit handle (Notion-style gutter).
  *
- * rehype-wiki-blocks stamped every top-level block: markdown blocks carry
- * `data-wiki-src="start-end"` themselves; JSX components are preceded by an
- * invisible `<template data-wiki-src … data-wiki-jsx>` anchor bound here to
- * its next element sibling; the frontmatter's `<template data-wiki-src …
- * data-wiki-frontmatter>` anchor binds to the site's
+ * rehype-wiki-blocks stamped every block: markdown blocks carry
+ * `data-wiki-src="start-end"` themselves (a footnote definition on its item
+ * in the footnote section); JSX components and raw HTML blocks are preceded
+ * by an invisible `<template data-wiki-src …>` anchor (`data-wiki-jsx`
+ * names the component) bound here to the element directly following it —
+ * the rendered output. A stamped element there (another anchor, or a block
+ * of its own) means the component rendered nothing, and the anchor binds
+ * nothing rather than the next block. The frontmatter's `<template
+ * data-wiki-src … data-wiki-frontmatter>` anchor binds to the site's
  * `[data-inkbrush-slot="frontmatter"]` element — the page head, meta strip
  * or whatever the layout renders from the frontmatter (no slot, no
  * frontmatter block: a heading guessed from the page could be a stamped
@@ -55,10 +59,9 @@ function collectBlocks(): BlockRef[] {
       frontmatter = true;
       el = frontmatterHost();
     } else if (node.tagName === 'TEMPLATE') {
-      jsx = node.dataset['wikiJsx'] ?? 'component';
+      jsx = node.dataset['wikiJsx'] ?? null;
       el = node.nextElementSibling as HTMLElement | null;
-      // skip fellow anchors (two adjacent JSX components)
-      while (el?.tagName === 'TEMPLATE') el = el.nextElementSibling as HTMLElement | null;
+      if (el?.hasAttribute('data-wiki-src')) continue;
     } else {
       el = node;
     }
@@ -329,9 +332,16 @@ export function mountBlocks(ctx: PageContext): void {
   listen(
     'scroll',
     () => {
-      if (!active || editing) return;
-      // follow the active block while scrolling; hide once it leaves view
-      if (!positionHandle(active)) hideHandle();
+      if (editing) return;
+      if (active) {
+        // follow the active block while scrolling; hide once it leaves view
+        if (!positionHandle(active)) hideHandle();
+        return;
+      }
+      // a block focused while off-screen (smooth scrolling delivers it after
+      // focusin) gets its handle once the scroll brings it into view
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && byEl.has(focused)) showHandle(byEl.get(focused)!);
     },
     { passive: true },
   );

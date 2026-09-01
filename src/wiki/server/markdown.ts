@@ -56,6 +56,9 @@ async function buildProcessor(sanitize: boolean): Promise<Processor> {
   return buildRenderProcessor({
     sanitize,
     site: siteHooks(),
+    // the preview renders a block, not the note: a footnote definition
+    // being edited must stay visible
+    fragment: !sanitize,
     ...(sanitize
       ? {}
       : {

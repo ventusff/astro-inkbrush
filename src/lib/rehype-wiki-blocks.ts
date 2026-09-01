@@ -6,12 +6,23 @@
  *
  *  - markdown-derived elements get `data-wiki-src="start-end"` directly;
  *  - JSX components can't receive extra attributes (Astro components don't
- *    spread unknown props), so an invisible `<template data-wiki-src …>`
- *    anchor is inserted BEFORE them and the client binds it to its next
- *    element sibling. `<template>` renders nothing and is layout-inert —
+ *    spread unknown props), so an invisible `<template data-wiki-src …
+ *    data-wiki-jsx>` anchor is inserted BEFORE them and the client binds it
+ *    to the element that directly follows it. A raw HTML block of a `.md`
+ *    note (a `raw` node — Astro turns it into elements only after the
+ *    site's rehype plugins ran) gets the same anchor, marked
+ *    `data-wiki-html`. `<template>` renders nothing and is layout-inert —
  *    the one thing that could notice it is a CSS adjacency selector
- *    (`X + Y`) between top-level blocks, which sites should avoid in
- *    WIKI mode.
+ *    (`X + Y`) between top-level blocks, which sites should avoid in WIKI
+ *    mode.
+ *  - footnote definitions render away from where they are written:
+ *    remark-rehype gathers every referenced definition into one
+ *    `section[data-footnotes]` at the end of the document. The section
+ *    carries no stamp; each `li` in it is stamped with its own definition's
+ *    lines, so a footnote edits where it renders and two definitions
+ *    written apart never share one range. Document order is therefore not
+ *    source order — a consumer of the stamps keys on the range, never on
+ *    the position among the stamped nodes.
  *  - the frontmatter is rendered by the site's layout (title, description,
  *    taxonomy), never by this pipeline, so it gets a `<template
  *    data-wiki-src="1-N" data-wiki-frontmatter>` anchor as the first child
@@ -24,7 +35,12 @@
  * Position fallbacks (in order): the node's own position → first/last
  * positioned descendant (e.g. div.tbl-wrap wrappers) → the gap between the
  * neighbouring positioned siblings (e.g. KaTeX display blocks, whose nodes
- * carry no position), trimmed to non-empty source lines.
+ * carry no position), trimmed to non-empty source lines and never over a
+ * range another block already owns (a footnote definition written after
+ * the last block is not part of that block's gap).
+ *
+ * Stamps are pairwise disjoint by construction; lib/wiki-blocks-check.ts
+ * states the invariants and check-content verifies them per note.
  */
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
@@ -70,14 +86,45 @@ function isBlank(line: string | undefined): boolean {
   return line === undefined || line.trim() === '';
 }
 
+/** the footnote section remark-rehype appends: `section[data-footnotes]` */
+export function isFootnoteSection(node: AnyNode): boolean {
+  return (
+    node.type === 'element' &&
+    node.tagName === 'section' &&
+    node.properties?.['dataFootnotes'] !== undefined
+  );
+}
+
+/** the `li` elements of a footnote section, one per rendered definition */
+export function footnoteItems(section: AnyNode): AnyNode[] {
+  const items: AnyNode[] = [];
+  for (const child of section.children ?? []) {
+    if (child.type !== 'element' || child.tagName !== 'ol') continue;
+    for (const li of child.children ?? []) {
+      if (li.type === 'element' && li.tagName === 'li') items.push(li);
+    }
+  }
+  return items;
+}
+
+/** a block stamped on the element itself */
+function stampsInPlace(node: AnyNode): boolean {
+  return node.type === 'element' && !isFootnoteSection(node);
+}
+
+/** a block stamped through an anchor inserted before it */
+function stampsByAnchor(node: AnyNode): boolean {
+  return node.type === 'mdxJsxFlowElement' || node.type === 'raw';
+}
+
 /**
  * The raw file behind the vfile, null when unreadable. fs is reached through
  * `process.getBuiltinModule`, never an import: the module also runs in
- * browser bundles (the playground renders patched fragments with it), where
- * there is no `process` and no file behind the vfile; and under Vite a
- * workspace-linked copy of this package is evaluated by the module runner,
- * whose dynamic `import()` is dead once config loading has finished while the
- * pipeline keeps running.
+ * browser bundles (the playground renders the current source with it),
+ * where there is no `process` and no file behind the vfile; and under Vite
+ * a workspace-linked copy of this package is evaluated by the module
+ * runner, whose dynamic `import()` is dead once config loading has finished
+ * while the pipeline keeps running.
  */
 function readRaw(path: string): string | null {
   const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } })
@@ -104,8 +151,8 @@ export function rehypeWikiBlocks() {
     // on disk: same line count → none; otherwise the value is located inside
     // the raw text and the lines before it are the offset (a line-count
     // difference would miscount the trimmed tail). Zero when the raw file is
-    // unreadable — the browser playground renders fragments with no file
-    // behind them.
+    // unreadable — the browser playground renders with no file behind the
+    // vfile.
     let offset = 0;
     let value = typeof file.value === 'string' ? file.value : '';
     const raw = file.path ? readRaw(file.path) : null;
@@ -130,16 +177,28 @@ export function rehypeWikiBlocks() {
     }
     const sourceLines = value.split('\n');
 
-    // pass 1: resolve a position for every stampable top-level node
+    // pass 1: resolve a position for every stampable top-level node, and
+    // for every footnote item (its definition's lines)
     const resolved: (Pos | null)[] = children.map((node) => {
-      if (node.type !== 'element' && node.type !== 'mdxJsxFlowElement') return null;
+      if (!stampsInPlace(node) && !stampsByAnchor(node)) return null;
       return ownPos(node) ?? descendantPos(node);
     });
+    const items: { li: AnyNode; pos: Pos }[] = [];
+    for (const node of children) {
+      if (!isFootnoteSection(node)) continue;
+      for (const li of footnoteItems(node)) {
+        const pos = ownPos(li) ?? descendantPos(li);
+        if (pos) items.push({ li, pos });
+      }
+    }
+    /** every range already owned by a block, for gap trimming */
+    const owned: Pos[] = [...resolved.filter((p): p is Pos => p !== null), ...items.map((i) => i.pos)];
 
-    // pass 2: gap-fill nodes that still have no position from their neighbours
+    // pass 2: gap-fill nodes that still have no position from their
+    // neighbours, keeping clear of ranges other blocks own
     for (let i = 0; i < children.length; i++) {
       const node = children[i]!;
-      if (resolved[i] || (node.type !== 'element' && node.type !== 'mdxJsxFlowElement')) continue;
+      if (resolved[i] || (!stampsInPlace(node) && !stampsByAnchor(node))) continue;
       let prevEnd = 0;
       for (let j = i - 1; j >= 0; j--) {
         const p = resolved[j] ?? ownPos(children[j]!);
@@ -158,32 +217,46 @@ export function rehypeWikiBlocks() {
       }
       let start = prevEnd + 1;
       let end = nextStart - 1;
+      for (const p of owned) {
+        if (p.start >= start && p.start <= end) end = p.start - 1;
+        if (p.end >= start && p.end <= end) start = p.end + 1;
+      }
       // trim surrounding blank lines (1-based line numbers)
       while (start <= end && isBlank(sourceLines[start - 1])) start++;
       while (end >= start && isBlank(sourceLines[end - 1])) end--;
-      if (start <= end) resolved[i] = { start, end };
+      if (start <= end) {
+        resolved[i] = { start, end };
+        owned.push(resolved[i]!);
+      }
     }
+
+    const stampOf = (pos: Pos): string => `${pos.start + offset}-${pos.end + offset}`;
 
     // pass 3: stamp (iterate backwards so template insertion keeps indices valid)
     for (let i = children.length - 1; i >= 0; i--) {
       const node = children[i]!;
       const pos = resolved[i];
       if (!pos) continue;
-      const value = `${pos.start + offset}-${pos.end + offset}`;
       if (node.type === 'element') {
         node.properties ??= {};
-        node.properties['data-wiki-src'] = value;
-      } else if (node.type === 'mdxJsxFlowElement') {
+        node.properties['data-wiki-src'] = stampOf(pos);
+      } else {
         children.splice(i, 0, {
           type: 'element',
           tagName: 'template',
           properties: {
-            'data-wiki-src': value,
-            'data-wiki-jsx': node.name ?? 'component',
+            'data-wiki-src': stampOf(pos),
+            ...(node.type === 'raw'
+              ? { 'data-wiki-html': '' }
+              : { 'data-wiki-jsx': node.name ?? 'component' }),
           },
           children: [],
         });
       }
+    }
+    for (const { li, pos } of items) {
+      li.properties ??= {};
+      li.properties['data-wiki-src'] = stampOf(pos);
     }
 
     // pass 4: the frontmatter anchor — only for the whole note, so a fragment

@@ -14,6 +14,11 @@
  * Math follows the bare-vs-hooks rule: a site that declares no plugins at
  * all gets remark-math + rehype-katex; a site with hooks brings its own
  * math or has none.
+ *
+ * `fragment` marks the value as a piece of a note rather than a note (the
+ * editor's live preview): a footnote definition nothing in the piece
+ * references renders in place (lib/fragment-definitions.ts) instead of
+ * vanishing into a footnote section that never lists it.
  */
 import type { Options as RemarkRehypeOptions } from 'remark-rehype';
 import type { PluggableList, Processor } from 'unified';
@@ -39,6 +44,9 @@ export interface RenderPipelineOptions {
         noteIdOf?: ((path: string | undefined) => string | undefined) | undefined;
       }
     | undefined;
+  /** the value is a fragment of a note: unreferenced footnote definitions
+   *  render in place (trusted pipeline only) */
+  fragment?: boolean | undefined;
 }
 
 export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise<Processor> {
@@ -52,6 +60,7 @@ export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise
     rehypeKatex,
     rehypeStringify,
     { remarkWikilinks },
+    { remarkFragmentDefinitions },
   ] = await Promise.all([
     import('unified'),
     import('remark-parse').then((m) => m.default),
@@ -62,6 +71,7 @@ export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise
     import('rehype-katex').then((m) => m.default),
     import('rehype-stringify').then((m) => m.default),
     import('./wikilinks.ts'),
+    import('./fragment-definitions.ts'),
   ]);
 
   const { sanitize, site } = opts;
@@ -71,6 +81,7 @@ export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise
   if (sanitize) {
     p.use(remarkMath).use(remarkRehype);
   } else {
+    if (opts.fragment) p.use(remarkFragmentDefinitions);
     if (bare) p.use(remarkMath);
     p.use(site.remarkPlugins ?? []);
     if (opts.wikilinks) {
