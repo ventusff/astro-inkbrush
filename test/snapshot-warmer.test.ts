@@ -38,6 +38,10 @@ test('a build stamped after every input is fresh; a newer input makes it stale',
   roots.push(root);
   assert.equal(snapshotCache(root).fresh, true);
   writeFileSync(join(root, 'src', 'a.md'), '# a2\n');
+  // the rewrite must postdate the stamp by more than a clock tick — a write
+  // landing in the stamp's own millisecond is not "newer"
+  const later = Date.now() / 1000 + 1;
+  utimesSync(join(root, 'src', 'a.md'), later, later);
   const { fresh, latestInput } = snapshotCache(root);
   assert.equal(fresh, false);
   assert.ok(Date.now() - latestInput < 5000, 'latestInput dates the change');
