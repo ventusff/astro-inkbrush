@@ -202,7 +202,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         ...defaultKeymap,
         ...historyKeymap,
       ]),
-      ...(block.frontmatter ? [yaml()] : [markdown(), wikilinkCompletion()]),
+      ...(block.frontmatter ? [yaml()] : [markdown(), wikilinkCompletion(ctx)]),
       EditorView.lineWrapping,
       cmTheme,
       EditorView.contentAttributes.of({ 'aria-label': title }),

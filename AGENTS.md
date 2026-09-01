@@ -53,7 +53,11 @@ npm test
   preview, backlink indexes and the inbox importer. Pass `{ mdx: true }`
   when the source is MDX, or JSX-wrapped prose is masked as HTML.
   `astro-inkbrush/wikilinks/core` is its browser-safe half — grammar,
-  resolver and transform, importing nothing — and `astro-inkbrush/wiki-blocks`
+  resolver, the locale rule (`localePrefixOf`) and `wikilinkCandidates`,
+  the editor's [[ completion (the resolver read backwards: the note's own
+  language, another only by its spelled prefix; every spelling offered must
+  resolve to its note from the source note — a unit test holds that
+  round trip) — importing nothing — and `astro-inkbrush/wiki-blocks`
   exports the block stamper alone: browser bundles (the playground, a
   site's browser-side preview) import these two, never the root or the
   full module.

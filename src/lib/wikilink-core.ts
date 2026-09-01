@@ -16,6 +16,10 @@
  * A miss never fails the build: it renders span.wikilink-dead and fires
  * onBroken; strict checking belongs to lint.
  *
+ * The locale rule — which locale an id lives in — is localePrefixOf, the one
+ * definition the resolver, the editor's [[ completion (wikilinkCandidates,
+ * the resolver read backwards) and the servers' note metadata share.
+ *
  * A backslash-escaped opener (`\[[x]]`, `[\[x]]`) is literal text, never a
  * wikilink. The transform sees the parsed tree, where the parser has already
  * consumed the escape, so it maps each match back to the vfile source
@@ -67,6 +71,21 @@ export function defaultSlugify(text: string): string {
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '') || 'section'
   );
+}
+
+/* ---------------- locale rule ---------------- */
+
+/**
+ * The locale prefix an id lives under: the table's prefix it carries (the
+ * bare locale segment — an id equal to `zh` — counts as that locale), else
+ * '' — the default locale, whose notes live unprefixed. Tables with or
+ * without a row for the default locale read the same.
+ */
+export function localePrefixOf(id: string, locales: readonly { prefix: string }[]): string {
+  for (const l of locales) {
+    if (l.prefix !== '' && (id === l.prefix.slice(0, -1) || id.startsWith(l.prefix))) return l.prefix;
+  }
+  return '';
 }
 
 /* ---------------- resolver ---------------- */
@@ -123,7 +142,7 @@ export function buildWikilinkResolver(opts: {
 
     // 1) the source note's locale mirror wins ([[X]] inside an en note → en/X
     //    when it exists); the default locale's empty prefix names no mirror
-    const fromPrefix = locales.find((l) => l.prefix !== '' && fromNoteId?.startsWith(l.prefix))?.prefix ?? '';
+    const fromPrefix = fromNoteId === undefined ? '' : localePrefixOf(fromNoteId, locales);
     if (fromPrefix && byId.has(`${fromPrefix}${t}`)) return ok(`${fromPrefix}${t}`);
     // 2) exact id (including explicit en/-prefixed spellings)
     if (byId.has(t)) return ok(t);
@@ -133,6 +152,76 @@ export function buildWikilinkResolver(opts: {
     if (hits && hits.length > 1) return { kind: 'ambiguous', candidates: hits };
     return { kind: 'missing' };
   };
+}
+
+/* ---------------- completion candidates ---------------- */
+
+export interface WikilinkCandidate {
+  /** the text between the brackets that resolves to `note` from the source note */
+  spelling: string;
+  note: WikiNoteInfo;
+}
+
+/** match score of a candidate against the typed text: smaller sorts first;
+ *  null = no match. Substring matching (CJK queries work per character
+ *  run), case-insensitive. */
+function candidateRank(spelling: string, note: WikiNoteInfo, query: string): number | null {
+  if (!query) return 100;
+  const s = spelling.toLowerCase();
+  if (s.startsWith(query)) return 0;
+  if (s.includes(query)) return 1;
+  if (note.brand?.toLowerCase().includes(query)) return 2;
+  if (note.aliases.some((a) => a.toLowerCase().includes(query))) return 2;
+  if (note.title.toLowerCase().includes(query)) return 3;
+  return null;
+}
+
+/**
+ * The notes a [[wikilink]] typed inside `fromNoteId` can name, each with
+ * the spelling that resolves to it there — the resolver's rules read
+ * backwards, over the same notes and locale table:
+ *
+ *  - the source note's own locale, spelled without its locale prefix (the
+ *    mirror rule takes `guide` typed in `zh/other` to `zh/guide`; in the
+ *    default locale the spelling is the id itself). Notes of other locales
+ *    are not offered: a link typed in a language names that language's
+ *    pages;
+ *  - a locale whose prefix the author spells (`de/`) — that locale's notes
+ *    by their full id (the exact-id rule).
+ *
+ * `query` is the text typed so far; a candidate stays when its spelling,
+ * brand, an alias or its title contains it (case-insensitive substring).
+ * Order: spelling prefix → spelling substring → brand or alias → title, then
+ * by spelling. Every spelling returned resolves to its note from
+ * `fromNoteId` through buildWikilinkResolver.
+ */
+export function wikilinkCandidates(opts: {
+  notes: readonly WikiNoteInfo[];
+  locales?: readonly { prefix: string }[] | undefined;
+  /** the note being edited; absent → the default locale */
+  fromNoteId?: string | undefined;
+  query?: string | undefined;
+}): WikilinkCandidate[] {
+  const locales = opts.locales ?? DEFAULT_LOCALES;
+  const query = (opts.query ?? '').trim().toLowerCase();
+  const own = opts.fromNoteId === undefined ? '' : localePrefixOf(opts.fromNoteId, locales);
+  // a spelled prefix opens that locale by full id (the own locale included:
+  // `zh/guide` typed in a zh note is an exact id too)
+  const spelled = locales.find((l) => l.prefix !== '' && query.startsWith(l.prefix.toLowerCase()));
+  const scope = spelled ? spelled.prefix : own;
+  const strip = spelled ? '' : own;
+
+  const scored: { candidate: WikilinkCandidate; score: number }[] = [];
+  for (const note of opts.notes) {
+    if (localePrefixOf(note.id, locales) !== scope) continue;
+    // the bare locale segment (an id equal to `zh`) has no local spelling:
+    // its full id is the exact one
+    const spelling = strip && note.id.startsWith(strip) ? note.id.slice(strip.length) : note.id;
+    const score = candidateRank(spelling, note, query);
+    if (score !== null) scored.push({ candidate: { spelling, note }, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.candidate.spelling.localeCompare(b.candidate.spelling));
+  return scored.map((s) => s.candidate);
 }
 
 /* ---------------- remark transform ---------------- */

@@ -17,7 +17,7 @@
  */
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 import type { SitePluginSet } from '../../lib/render-pipeline.ts';
-import type { WikiNoteInfo } from '../../lib/wikilink-core.ts';
+import { localePrefixOf, type WikiNoteInfo } from '../../lib/wikilink-core.ts';
 import { ApiError, type RequestOptions, type WikiTransport } from '../client/api';
 import type { MeResponse, NoteMeta, RevisionRecord, WikiUser } from '../shared/types';
 import type { NoteOverlay } from './overlay';
@@ -72,18 +72,13 @@ async function sliceHash(source: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 }
 
-function localeOfId(id: string, locales: ManifestLocale[]): string {
-  for (const l of locales) {
-    if (l.prefix !== '' && (id === l.prefix.replace(/\/$/, '') || id.startsWith(l.prefix))) return l.code;
-  }
-  return locales.find((l) => l.prefix === '')?.code ?? 'en';
-}
-
 function metaOf(note: PlaygroundNote, manifest: PlaygroundManifest): NoteMeta {
-  const lang = localeOfId(note.id, manifest.locales);
-  const baseId = manifest.locales
-    .filter((l) => l.prefix !== '')
-    .reduce((id, l) => (id.startsWith(l.prefix) ? id.slice(l.prefix.length) : id), note.id);
+  const prefix = localePrefixOf(note.id, manifest.locales);
+  const lang =
+    manifest.locales.find((l) => l.prefix === prefix)?.code ??
+    manifest.locales.find((l) => l.prefix === '')?.code ??
+    'en';
+  const baseId = prefix && note.id.startsWith(prefix) ? note.id.slice(prefix.length) : note.id;
   const exists = new Set(manifest.notes.map((n) => n.id));
   return {
     id: note.id,
@@ -92,7 +87,7 @@ function metaOf(note: PlaygroundNote, manifest: PlaygroundManifest): NoteMeta {
     lang,
     locales: manifest.locales.map((l) => {
       const id = l.prefix === '' ? baseId : `${l.prefix}${baseId}`;
-      return { code: l.code, id, label: l.label, exists: exists.has(id), current: l.code === lang };
+      return { code: l.code, prefix: l.prefix, id, label: l.label, exists: exists.has(id), current: l.code === lang };
     }),
   };
 }

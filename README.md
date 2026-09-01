@@ -40,7 +40,8 @@ yourself in the browser on the
 
 - ✏️ **In-place block editing** — Wikipedia-style, per block. CodeMirror 6
   with a live server-rendered preview that runs your site's own Markdown
-  plugins, `[[` autocompletion, optimistic locking (a block changed by
+  plugins, `[[` autocompletion scoped to the note's language, optimistic
+  locking (a block changed by
   someone else is refused, never overwritten), and a whole-file build gate —
   the dialect, the content guard, your plugins, MDX compilation — before
   anything is written. The frontmatter is a block too, edited as YAML from

@@ -72,7 +72,9 @@ overlay — when content breaks, that overlay *is* the editor's error UI.
 Hover any block and click the ✎ handle: the rendered block collapses into a
 CodeMirror editor over that block's MDX source, with a live server-rendered
 preview (350 ms debounce; JSX component blocks skip the preview and say so),
-`[[` autocompletion over your note titles and aliases, ⌘/Ctrl+Enter to save,
+`[[` autocompletion over the note's own language — its pages by id, title,
+brand and alias, spelled as a link in that language is written; another
+language opens once its prefix is typed (`[[de/`) — ⌘/Ctrl+Enter to save,
 Esc to cancel. Two gates protect every save:
 
 - **Optimistic lock** — the block's content hash travels with the edit; if
@@ -513,7 +515,8 @@ and holds no accounts.
 ## Wikilinks
 
 `[[target]]`, `[[target|label]]`, `[[target#anchor]]` — available in notes
-and the editor preview, with `[[` autocompletion in the editor. Comments
+and the editor preview, with `[[` autocompletion in the editor (scoped to
+the note's language; a typed locale prefix opens another). Comments
 render math but not wikilinks: a comment must not mint site-internal
 links. A `\[[escaped]]` opener stays literal text everywhere. `![[embeds]]` and the citation idiom `[[1]](#ref)` are deliberately
 not wikilinks. Resolution order:

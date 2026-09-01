@@ -66,6 +66,9 @@ export type NoteLocale = string;
 
 export interface NoteLocaleInfo {
   code: NoteLocale;
+  /** this locale's id prefix ('' for the default locale) — the locale table
+   *  the client's [[ completion scopes candidates with */
+  prefix: string;
   /** note id in this locale, e.g. "en/getting-started" (the default locale
    *  has no prefix) */
   id: string;
