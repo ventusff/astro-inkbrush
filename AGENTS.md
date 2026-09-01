@@ -52,6 +52,11 @@ npm test
   dialect's parser), pipeline-agnostic, shared by site rendering, editor
   preview, backlink indexes and the inbox importer. Pass `{ mdx: true }`
   when the source is MDX, or JSX-wrapped prose is masked as HTML.
+  `astro-inkbrush/wikilinks/core` is its browser-safe half — grammar,
+  resolver and transform, importing nothing — and `astro-inkbrush/wiki-blocks`
+  exports the block stamper alone: browser bundles (the playground, a
+  site's browser-side preview) import these two, never the root or the
+  full module.
 - `scripts/check-content.mjs` / `scripts/check-wikilinks.mjs` /
   `scripts/check-dist.mjs`: standalone check CLIs that import the dialect
   and link rules from the package root. Given `--config`, the first two
@@ -109,9 +114,10 @@ npm test
   transport — every edit stays in the visitor's browser, nothing reaches
   the repo or other visitors. It is never part of the integration, never
   injected, and consumer sites must not mount it. A build that does mount
-  it also ships block stamps and a sources manifest, and declares the shape
-  to check-dist with `--playground`; default builds keep the full check and
-  stay byte-identical.
+  it also ships block stamps, each note page's own source (a JSON island in
+  the head) and the index manifest (locales + note identities), and declares
+  the shape to check-dist with `--playground`; default builds keep the full
+  check and stay byte-identical.
 - UI strings live in `src/wiki/client/strings.ts` (English + Chinese,
   selected by the page's `<html lang>`); server messages are English.
 - Comments and documentation are English; the README and manual ship in

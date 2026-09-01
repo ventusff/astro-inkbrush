@@ -43,8 +43,6 @@
  * kept and reopened, and since a static page head cannot re-render from it
  * the slot carries an explanatory note until Reset.
  */
-import { splitFrontmatter } from '../../lib/frontmatter.ts';
-
 export interface StampedRange {
   start: number;
   end: number;
@@ -225,8 +223,10 @@ function spanOf(
 }
 
 /** the 1-based line the note body starts on: after the frontmatter block,
- *  else the first line */
-function bodyStartOf(source: string): number {
+ *  else the first line. The frontmatter splitter (a YAML parser) is loaded
+ *  here, on the one path that needs it, and never by activation itself. */
+async function bodyStartOf(source: string): Promise<number> {
+  const { splitFrontmatter } = await import('../../lib/frontmatter.ts');
   const fm = splitFrontmatter(source);
   return fm.present ? source.slice(0, fm.end).split('\n').length + 1 : 1;
 }
@@ -360,7 +360,7 @@ export async function applyOverlayToDom(
   // the footnote section follows the whole document: rebuilt from the
   // current body whenever the page has one or the source defines one
   if (section || FOOTNOTE_DEFINITION.test(overlay.currentSource)) {
-    const bodyStart = bodyStartOf(overlay.currentSource);
+    const bodyStart = await bodyStartOf(overlay.currentSource);
     const body = overlay.currentSource.split('\n').slice(bodyStart - 1).join('\n');
     const tpl = document.createElement('template');
     tpl.innerHTML = await renderSource(body, bodyStart);

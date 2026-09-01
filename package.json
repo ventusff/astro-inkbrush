@@ -32,6 +32,8 @@
     "./config": "./src/wiki/config.ts",
     "./session": "./src/wiki/server/session.ts",
     "./wikilinks": "./src/lib/wikilinks.ts",
+    "./wikilinks/core": "./src/lib/wikilink-core.ts",
+    "./wiki-blocks": "./src/lib/rehype-wiki-blocks.ts",
     "./markdown": "./src/lib/markdown.ts",
     "./render-pipeline": "./src/lib/render-pipeline.ts",
     "./playground": "./src/wiki/playground/index.ts"

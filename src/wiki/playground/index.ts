@@ -5,10 +5,21 @@
  * This is a deliberately separate, opt-in surface for demo/debug sites
  * only. It is never part of the integration, never injected, and a build
  * that does not import it carries zero bytes of it; consumer sites keep the
- * dev-server CMS and the byte-identical static builds they have today. A
- * site that mounts it must also ship block stamps and a sources manifest
- * (see the demo of astro-inkstone for the reference wiring) and declare the
- * exception to check-dist with an explicit --allow.
+ * dev-server CMS and the byte-identical static builds they have today.
+ *
+ * A site that mounts it ships four things per playground build, and
+ * declares the exception to check-dist with an explicit --allow (see the
+ * demo of astro-inkstone for the reference wiring):
+ *
+ *  - block stamps (`data-wiki-src`) — rehypeWikiBlocks in the build pipeline;
+ *  - `<meta name="inkbrush-note" content="<note id>">` in each note page;
+ *  - the page's own source — `<script type="application/json"
+ *    data-inkbrush-source>` in the head holding `{ file, source }`, the
+ *    note's repo-relative path and its full file text, from the same build
+ *    as the stamps (the two can never skew);
+ *  - the index manifest at `manifestUrl` — the locale table and every
+ *    note's identity (id, title, brand, aliases; no sources), what wikilink
+ *    resolution and the note list need.
  *
  * What the visitor gets: the ordinary block editor (CodeMirror, live
  * preview, save validation, revision history with revert) against a
@@ -17,8 +28,10 @@
  *
  * bootPlayground() is the light entry: it seats the badge in the site's
  * chrome (the account slot; fixed corner only when no slot exists) and
- * probes IndexedDB; the pipeline + editor chunk loads only for a visitor
- * who has local edits or clicks the badge.
+ * probes IndexedDB. The activation chunk and the index manifest load when
+ * a visitor shows intent (pointer or focus on the badge) and no later than
+ * the click; the site's plugin graph and the editor load after activation,
+ * in idle time. A visitor with local edits activates without a click.
  */
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 import type { SitePluginSet } from '../../lib/render-pipeline.ts';
@@ -74,11 +87,12 @@ export const DEFAULT_STRINGS: PlaygroundStrings = {
 };
 
 export interface PlaygroundConfig {
-  /** URL of the build-time sources manifest (base-prefixed by the site) */
+  /** URL of the index manifest (base-prefixed by the site) */
   manifestUrl: string;
-  /** site inputs, built once the manifest is loaded. May be async — a site
-   *  should dynamic-import its pipeline here, so the boot chunk every page
-   *  loads stays free of the site's plugin graph */
+  /** site inputs, requested once — on the first render or save, or in the
+   *  idle time after activation. May be async: a site dynamic-imports its
+   *  pipeline here, so the boot chunk every page loads and the activation
+   *  chunk both stay free of the site's plugin graph */
   configure(manifest: PlaygroundManifest): PlaygroundSiteConfig | Promise<PlaygroundSiteConfig>;
   guestName?: string | undefined;
   strings?: Partial<PlaygroundStrings> | undefined;
@@ -139,6 +153,19 @@ const BADGE_CSS = `
 .inkbrush-playground-badge [hidden] { display: none; }
 `;
 
+/** what a click needs, started ahead of it: the activation chunk and the
+ *  index manifest */
+interface Warmed {
+  chunk: Promise<typeof import('./activate')>;
+  manifest: Promise<PlaygroundManifest>;
+}
+
+async function fetchManifest(url: string): Promise<PlaygroundManifest> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`playground manifest: ${res.status} ${url}`);
+  return (await res.json()) as PlaygroundManifest;
+}
+
 export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
   if (document.readyState === 'loading') {
     await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
@@ -193,6 +220,22 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
     void resetAll().then(() => window.location.reload());
   });
 
+  // Intent warms the click path: the first pointer, touch or focus on the
+  // badge starts the chunk and the manifest; the click then finds them in
+  // flight or done. A failed warm is dropped so the click can retry it.
+  let warmed: Warmed | null = null;
+  const warm = (): Warmed => {
+    if (!warmed) {
+      const manifest = fetchManifest(config.manifestUrl);
+      manifest.catch(() => undefined);
+      warmed = { chunk: import('./activate'), manifest };
+    }
+    return warmed;
+  };
+  for (const type of ['pointerenter', 'touchstart', 'focus'] as const) {
+    main.addEventListener(type, () => void warm(), { once: true, passive: true });
+  }
+
   let activating = false;
   let active = false;
   const start = async (): Promise<void> => {
@@ -200,8 +243,9 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
     activating = true;
     main.disabled = true;
     try {
-      const { activate } = await import('./activate');
-      const result = await activate(config, noteId);
+      const { chunk, manifest } = warm();
+      const { activate } = await chunk;
+      const result = await activate(config, noteId, manifest);
       if (!result) {
         setLabel(s.activateFailed, s.activateFailed);
         return;
@@ -215,6 +259,7 @@ export async function bootPlayground(config: PlaygroundConfig): Promise<void> {
       reset.hidden = false;
     } catch (err) {
       console.error('[playground] activation failed:', err);
+      warmed = null;
       setLabel(s.activateFailed, s.activateFailed);
     } finally {
       main.disabled = false;

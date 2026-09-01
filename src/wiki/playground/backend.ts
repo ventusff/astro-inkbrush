@@ -1,7 +1,8 @@
 /**
  * The browser-local backend: the same /api/wiki surface the editor already
- * speaks, served as a WikiTransport from the sources manifest + the
- * visitor's IndexedDB — no server, no network, nothing leaves the browser.
+ * speaks, served as a WikiTransport from the page's own source, the index
+ * manifest and the visitor's IndexedDB — no server, no network, nothing
+ * leaves the browser.
  *
  * Implemented: me / logout / meta / notes / block GET+PUT / render /
  * revisions / revert. Everything else (claude, comments, share, inbox,
@@ -11,10 +12,12 @@
  * PUT keeps the dev server's save contract: optimistic lock on the slice
  * hash, then the whole reconstructed source must pass the same validation
  * the save gate runs (lib/render-pipeline.ts validateNoteSource) before the
- * override persists.
+ * override persists. The validator, the content guard and the site's plugin
+ * graph load on the first save, not before.
  */
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
-import { validateNoteSource, type SitePluginSet } from '../../lib/render-pipeline.ts';
+import type { SitePluginSet } from '../../lib/render-pipeline.ts';
+import type { WikiNoteInfo } from '../../lib/wikilink-core.ts';
 import { ApiError, type RequestOptions, type WikiTransport } from '../client/api';
 import type { MeResponse, NoteMeta, RevisionRecord, WikiUser } from '../shared/types';
 import type { NoteOverlay } from './overlay';
@@ -27,32 +30,39 @@ export interface ManifestLocale {
   label: string;
 }
 
-export interface ManifestNote {
-  id: string;
-  /** repo-relative source path (shown in the editor head, vfile path) */
-  file: string;
-  title: string;
-  brand?: string | undefined;
-  aliases: string[];
-  /** full raw file text, frontmatter included */
-  source: string;
-  mdx: boolean;
-}
+/** one row of the index: a note's identity — what wikilink resolution and
+ *  the note list need; sources travel with their pages */
+export type ManifestNote = WikiNoteInfo;
 
+/** the index manifest: every note's identity plus the locale table */
 export interface PlaygroundManifest {
   locales: ManifestLocale[];
   notes: ManifestNote[];
 }
 
+/** the note a page carries: its id (the page's <meta name="inkbrush-note">)
+ *  and its repo-relative source path (the page's source island) */
+export interface PlaygroundNote {
+  id: string;
+  /** repo-relative source path (shown in the editor head, vfile path) */
+  file: string;
+  mdx: boolean;
+}
+
+/** the site's save-gate inputs, requested on the first save */
+export interface ValidationInputs {
+  site: SitePluginSet;
+  guard?: ContentGuardOptions | undefined;
+}
+
 export interface LocalBackendOptions {
-  manifest: PlaygroundManifest;
+  manifest: Promise<PlaygroundManifest>;
   /** the page's note and its overlay (one note per page) */
-  note: ManifestNote;
+  note: PlaygroundNote;
   overlay: NoteOverlay;
   renderer: PlaygroundRenderer;
   guest: WikiUser;
-  site: SitePluginSet;
-  guard?: ContentGuardOptions | undefined;
+  inputs: () => Promise<ValidationInputs>;
 }
 
 const uid = (): string => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -69,7 +79,7 @@ function localeOfId(id: string, locales: ManifestLocale[]): string {
   return locales.find((l) => l.prefix === '')?.code ?? 'en';
 }
 
-function metaOf(note: ManifestNote, manifest: PlaygroundManifest): NoteMeta {
+function metaOf(note: PlaygroundNote, manifest: PlaygroundManifest): NoteMeta {
   const lang = localeOfId(note.id, manifest.locales);
   const baseId = manifest.locales
     .filter((l) => l.prefix !== '')
@@ -78,7 +88,7 @@ function metaOf(note: ManifestNote, manifest: PlaygroundManifest): NoteMeta {
   return {
     id: note.id,
     file: note.file,
-    title: note.title,
+    title: manifest.notes.find((n) => n.id === note.id)?.title ?? note.id,
     lang,
     locales: manifest.locales.map((l) => {
       const id = l.prefix === '' ? baseId : `${l.prefix}${baseId}`;
@@ -127,9 +137,13 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       ...edit.next.split('\n'),
       ...overlay.currentSource.split('\n').slice(seg.curEnd),
     ].join('\n');
+    const [{ validateNoteSource }, { site, guard }] = await Promise.all([
+      import('../../lib/render-pipeline.ts'),
+      opts.inputs(),
+    ]);
     const problem = await validateNoteSource(nextSource, {
-      site: opts.site,
-      ...(opts.guard ? { guard: opts.guard } : {}),
+      site,
+      ...(guard ? { guard } : {}),
       mdx: note.mdx,
       path: `/${note.file}`,
     });
@@ -191,15 +205,12 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       if (method === 'GET' && p === '/me') return me;
       if (method === 'POST' && p === '/logout') return { ok: true };
       if (method === 'GET' && p === '/notes') {
-        return {
-          notes: manifest.notes.map(({ id, title, brand, aliases }) => ({ id, title, brand, aliases })),
-        };
+        return { notes: (await manifest).notes };
       }
       if (method === 'GET' && p.startsWith('/meta/')) {
         const id = decodeURIComponent(p.slice('/meta/'.length));
-        const found = manifest.notes.find((n) => n.id === id);
-        if (!found) throw new ApiError(404, `Note not found: ${id}`);
-        return metaOf(found, manifest);
+        if (id !== note.id) throw new ApiError(404, `Not this page's note: ${id}`);
+        return metaOf(note, await manifest);
       }
       if (p.startsWith('/block/')) {
         const id = decodeURIComponent(p.slice('/block/'.length));

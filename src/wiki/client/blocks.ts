@@ -28,7 +28,7 @@
 import { aiAvailability, currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
 import { S } from './strings';
-import { h, icon, toast } from './ui';
+import { h, icon, toast, whenIdle } from './ui';
 
 export interface BlockRef {
   el: HTMLElement;
@@ -410,5 +410,9 @@ export function mountBlocks(ctx: PageContext): void {
       else block.el.setAttribute('aria-describedby', saved.describedby);
     }
   };
+  // the editor is what a visitor on a note page asks for next: its chunk
+  // (CodeMirror) loads in idle time, so the first edit opens at once
+  whenIdle(() => void import('./editor'));
+
   import.meta.hot?.dispose(unmount);
 }

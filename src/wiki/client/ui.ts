@@ -37,6 +37,15 @@ export function uid(prefix: string): string {
   return `wiki-${prefix}-${idSeq}`;
 }
 
+/** run `fn` in the browser's idle time — warming a lazy chunk the visitor is
+ *  about to need. Skipped when the visitor asked the browser to save data. */
+export function whenIdle(fn: () => void): void {
+  const connection = (navigator as { connection?: { saveData?: boolean } }).connection;
+  if (connection?.saveData) return;
+  if ('requestIdleCallback' in window) window.requestIdleCallback(() => fn(), { timeout: 3000 });
+  else setTimeout(fn, 300);
+}
+
 /** `<time datetime>` rendered through the shared locale-aware formatter */
 export function time(value: number | string | Date, style: DateStyle = 'datetime'): HTMLTimeElement {
   const date = new Date(value);

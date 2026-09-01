@@ -13,19 +13,22 @@
  *                                  `first` — the current line its first line
  *                                  sits on — shifts the stamps
  *
+ * The inputs (the site's plugin graph and the wikilink resolver) come from
+ * an async provider and are requested on the first render — never by
+ * activation itself, which renders nothing on a clean page. Everything a
+ * render needs beyond this module (the pipeline factory, unified and the
+ * plugin graph, the block stamper) is a lazy chunk; warm() loads the preview
+ * path ahead of the first edit.
+ *
  * JSX follows the dev preview's boundary: it is not rendered as a component
  * (CommonMark reading — it lands as raw markup behind an anchor).
  */
 import type { Processor } from 'unified';
 
-import { rehypeWikiBlocks } from '../../lib/rehype-wiki-blocks.ts';
-import {
-  buildRenderProcessor,
-  type SitePluginSet,
-} from '../../lib/render-pipeline.ts';
-import type { WikilinkResolver } from '../../lib/wikilinks.ts';
+import type { SitePluginSet } from '../../lib/render-pipeline.ts';
+import type { WikilinkResolver } from '../../lib/wikilink-core.ts';
 
-export interface RendererOptions {
+export interface RendererInputs {
   site: SitePluginSet;
   wikilinks?:
     | {
@@ -38,29 +41,41 @@ export interface RendererOptions {
 export interface PlaygroundRenderer {
   preview(markdown: string, notePath?: string): Promise<string>;
   renderSource(source: string, first: number, notePath?: string): Promise<string>;
+  /** build the preview processor now (its chunks and the plugin graph) */
+  warm(): Promise<void>;
 }
 
-export function createRenderer(opts: RendererOptions): PlaygroundRenderer {
+export function createRenderer(inputs: () => Promise<RendererInputs>): PlaygroundRenderer {
   let previewProcessor: Promise<Processor> | null = null;
   let sourceProcessor: Promise<Processor> | null = null;
 
   const previewP = (): Promise<Processor> =>
-    (previewProcessor ??= buildRenderProcessor({
-      sanitize: false,
-      fragment: true,
-      site: opts.site,
-      ...(opts.wikilinks ? { wikilinks: opts.wikilinks } : {}),
-    }));
+    (previewProcessor ??= (async () => {
+      const [{ buildRenderProcessor }, { site, wikilinks }] = await Promise.all([
+        import('../../lib/render-pipeline.ts'),
+        inputs(),
+      ]);
+      return buildRenderProcessor({
+        sanitize: false,
+        fragment: true,
+        site,
+        ...(wikilinks ? { wikilinks } : {}),
+      });
+    })());
 
   const sourceP = (): Promise<Processor> =>
-    (sourceProcessor ??= buildRenderProcessor({
-      sanitize: false,
-      site: {
-        ...opts.site,
-        rehypePlugins: [...(opts.site.rehypePlugins ?? []), rehypeWikiBlocks],
-      },
-      ...(opts.wikilinks ? { wikilinks: opts.wikilinks } : {}),
-    }));
+    (sourceProcessor ??= (async () => {
+      const [{ buildRenderProcessor }, { rehypeWikiBlocks }, { site, wikilinks }] = await Promise.all([
+        import('../../lib/render-pipeline.ts'),
+        import('../../lib/rehype-wiki-blocks.ts'),
+        inputs(),
+      ]);
+      return buildRenderProcessor({
+        sanitize: false,
+        site: { ...site, rehypePlugins: [...(site.rehypePlugins ?? []), rehypeWikiBlocks] },
+        ...(wikilinks ? { wikilinks } : {}),
+      });
+    })());
 
   const run = async (p: Processor, markdown: string, notePath?: string): Promise<string> => {
     const file = await p.process(notePath ? { value: markdown, path: notePath } : markdown);
@@ -77,6 +92,9 @@ export function createRenderer(opts: RendererOptions): PlaygroundRenderer {
         /data-wiki-src="(\d+)-(\d+)"/g,
         (_m, a: string, b: string) => `data-wiki-src="${Number(a) + shift}-${Number(b) + shift}"`,
       );
+    },
+    warm: async () => {
+      await previewP();
     },
   };
 }

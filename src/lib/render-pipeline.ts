@@ -25,7 +25,7 @@ import type { PluggableList, Processor } from 'unified';
 
 import type { ContentGuardOptions } from './content-guard.ts';
 import type { FrontmatterSchema } from './frontmatter-schema.ts';
-import type { WikilinkResolver } from './wikilinks.ts';
+import type { WikilinkResolver } from './wikilink-core.ts';
 
 export interface SitePluginSet {
   remarkPlugins?: PluggableList | undefined;
@@ -70,7 +70,7 @@ export async function buildRenderProcessor(opts: RenderPipelineOptions): Promise
     import('rehype-sanitize'),
     import('rehype-katex').then((m) => m.default),
     import('rehype-stringify').then((m) => m.default),
-    import('./wikilinks.ts'),
+    import('./wikilink-core.ts'),
     import('./fragment-definitions.ts'),
   ]);
 
