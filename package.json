@@ -24,7 +24,13 @@
     "wiki",
     "digital-garden",
     "obsidian",
-    "self-hosted"
+    "self-hosted",
+    "withastro",
+    "content-editor",
+    "revision-history",
+    "ai-assistant",
+    "claude",
+    "astro-cms"
   ],
   "exports": {
     ".": "./src/index.ts",
