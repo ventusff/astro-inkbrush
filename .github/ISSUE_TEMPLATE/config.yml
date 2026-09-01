@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/ventusff/astro-inkbrush/discussions
+    about: Ask, show what you built, or float an idea in Discussions.
+  - name: astro-inkstone (the design layer and manual)
+    url: https://github.com/ventusff/astro-inkstone/issues
+    about: The paired repository — file it there when the problem lives on that side.

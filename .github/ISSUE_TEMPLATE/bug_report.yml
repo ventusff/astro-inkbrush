@@ -1,0 +1,47 @@
+name: Bug report
+description: Something renders, builds or behaves wrongly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. A minimal reproduction saves a round trip.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: A note, a config snippet, or a repository that shows it. Screenshots help for anything visual.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Where it seems to live
+      options:
+        - Block editing / save gate
+        - Revision history
+        - Comments
+        - AI assist
+        - Obsidian inbox
+        - Shares / snapshots
+        - Authentication
+        - The check CLIs (check-content, check-wikilinks, check-dist)
+        - The browser playground
+        - Not sure
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: package commit or tag, Astro version, Node version, browser.
+      placeholder: "astro-inkstone v0.2.1 · astro 7.2 · node 24 · Chrome 128"
+    validations:
+      required: true
