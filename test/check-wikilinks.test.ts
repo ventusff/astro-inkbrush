@@ -31,6 +31,29 @@ test('anchors: ATX headings slugged, closing hashes dropped, explicit {#id} kept
   assert.deepEqual([...anchorsOf(text, defaultSlugify)].sort(), ['custom-id', 'custom-name', 'deep-dive']);
 });
 
+test('anchors: the attribute block may be trailing inline code (the MDX form); inline code stays in the slug', () => {
+  const text = [
+    '## 贯穿各层的工程决策 `{#crosscut toc="贯穿各层的决策"}`',
+    '',
+    '### Use `foo()` here',
+    '',
+    '## Empty `{}` block',
+    '',
+    '## Shown `{#id}` syntax is content',
+    '',
+    'export const x = `',
+    '## not a heading',
+    '`',
+    '',
+    '{/* ## not a heading either */}',
+  ].join('\n');
+  const anchors = anchorsOf(text, defaultSlugify, { mdx: true });
+  assert.deepEqual(
+    [...anchors].sort(),
+    ['crosscut', 'empty-block', 'shown-id-syntax-is-content', 'use-foo-here', '贯穿各层的工程决策'].sort(),
+  );
+});
+
 test('anchors: duplicate headings take -2, -3 suffixes; setext headings count', () => {
   const text = ['Top Title', '=========', '', '## Setup', '', '## Setup', '', '## Setup', ''].join('\n');
   assert.deepEqual([...anchorsOf(text, defaultSlugify)].sort(), ['setup', 'setup-2', 'setup-3', 'top-title']);
@@ -47,7 +70,7 @@ test('anchors: an explicit id reserves its slug in the dedup pool', () => {
 test('the built-in resolver: missing, ambiguous, anchor and unmatched are each reported once', () => {
   const result = checkWikilinks(NOTES);
   assert.equal(result.notes, 5);
-  assert.equal(result.wikilinks, 11);
+  assert.equal(result.wikilinks, 12);
   assert.deepEqual(lines(result.report).sort(), [
     'FAIL ambiguous alpha: [[shared]] → beta / gamma',
     'FAIL missing alpha: [[cards/one]]',
@@ -68,9 +91,11 @@ test('--allow: a listed target that resolves to nothing is INFO, not FAIL', () =
 });
 
 test('MDX notes: JSX children are prose, fenced code is not, and anchors resolve across files', () => {
-  // beta/index.mdx links [[alpha#Deep Dive]] and [[alpha#custom-id]] from inside <Aside>; neither warns
+  // beta/index.mdx links [[alpha#Deep Dive]] and [[alpha#custom-id]] from inside <Aside>; neither warns,
+  // and alpha's [[beta#third]] finds the id written as trailing inline code in the MDX heading
   const { report } = checkWikilinks(NOTES);
   assert.equal(report.some((r) => r.note === 'beta'), false);
+  assert.equal(report.some((r) => r.message.includes('[[beta#third]]')), false);
 });
 
 test('--locale-prefix: a link inside a mirror resolves to the mirror first', () => {

@@ -28,12 +28,16 @@
  * there.
  *
  * Anchor checking is best effort: the target note's headings are read by
- * parsing its masked source with the dialect, their text is slugged with
- * the anchor slugifier, duplicate slugs take `-2`, `-3`, … suffixes and an
- * explicit `{#id}` wins — the model most site sluggers implement. It
- * matches the site's real ids only as far as --config injects the site's
- * own slugifier; a site with different dedup or numbering rules can still
- * diverge, which is why an anchor miss is a WARN, never a FAIL.
+ * parsing its source with the dialect (headings inside code, HTML, math or
+ * MDX expressions do not count), their text is slugged with the anchor
+ * slugifier, duplicate slugs take `-2`, `-3`, … suffixes and an explicit
+ * `{#id}` wins — the model most site sluggers implement. The attribute
+ * block may end the heading bare (`## Title {#id}`) or, as MDX requires
+ * (a bare `{…}` there is an expression), as trailing inline code
+ * (`## Title \`{#id toc="…"}\``). It matches the site's real ids only as
+ * far as --config injects the site's own slugifier; a site with different
+ * dedup or numbering rules can still diverge, which is why an anchor miss
+ * is a WARN, never a FAIL.
  *
  * Usage (from the site or content repo root):
  *   node <engine>/scripts/check-wikilinks.mjs <content-dir> [flags]
@@ -193,13 +197,16 @@ function literalText(node) {
 }
 
 /**
- * Ids a [[note#anchor]] can target, best effort. The masked source is
- * parsed with the dialect, so ATX and setext headings count and anything in
- * code, HTML or math does not. Each heading contributes:
+ * Ids a [[note#anchor]] can target, best effort. The source is parsed with
+ * the dialect and a heading counts only where the prose mask leaves it
+ * standing — so ATX and setext headings in prose count and anything inside
+ * code blocks, HTML, math or MDX expressions does not, while inline code
+ * inside a heading stays part of the heading (site sluggers read it, and in
+ * MDX it is where the attribute block lives). Each heading contributes:
  *
- *  - its explicit `{#id}` when the text carries one (used as spelled, and
- *    occupying its slug in the dedup pool the way site sluggers reserve
- *    explicit ids);
+ *  - its explicit `{#id}` when the text carries one, bare or as trailing
+ *    inline code (used as spelled, and occupying its slug in the dedup pool
+ *    the way site sluggers reserve explicit ids);
  *  - the slug of its text, deduplicated with `-2`, `-3`, … suffixes when an
  *    earlier heading generates the same slug. A heading with an explicit id
  *    also contributes its text slug (without a dedup slot) so a site whose
@@ -208,9 +215,15 @@ function literalText(node) {
 export function anchorsOf(text, slugify, mask = {}) {
   const set = new Set();
   const used = new Set();
-  const tree = headingParser.parse(maskNonProse(text, mask));
+  const masked = maskNonProse(text, mask);
+  const tree = headingParser.parse(text);
+  const inProse = (node) => {
+    const start = node.position?.start.offset;
+    return typeof start !== 'number' || masked[start] === text[start];
+  };
   const walk = (node) => {
     if (node.type === 'heading') {
+      if (!inProse(node)) return;
       let heading = literalText(node).replace(/\s+/g, ' ').trim();
       const explicit = /\{#([^}\s]+)[^}]*\}\s*$/.exec(heading);
       if (explicit) {

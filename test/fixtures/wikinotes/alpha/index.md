@@ -5,7 +5,7 @@ aliases: [first]
 
 ## Deep Dive
 
-Links: [[beta]], [[beta#Second Heading]], [[beta#nope|bad anchor]], [[compost-heap]], [[shared]], [[cards/one]].
+Links: [[beta]], [[beta#Second Heading]], [[beta#third]], [[beta#nope|bad anchor]], [[compost-heap]], [[shared]], [[cards/one]].
 
 ### Custom {#custom-id}
 
