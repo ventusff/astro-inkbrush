@@ -4,19 +4,25 @@
  * the share module (/me → share: 'ready' | 'unconfigured'; 'off' ⇒ not
  * mounted at all).
  *
- * States: no active share → create form (generated editable password +
- * expiry) → busy (NDJSON progress from the minutes-long first build) →
- * result (URL + password, shown ONCE — the server only stores the scrypt
- * hash); active share → URL + published-version state + expiry + publish /
- * pin / revoke. The chip carries a dot for the active share: current,
- * unpublished changes, or pinned.
+ * States: no active share → create form (who may read — password / anyone
+ * with the link / everyone — with the password or the address that choice
+ * calls for, and an expiry) → busy (NDJSON progress from the minutes-long
+ * first build) → result (URL, plus a password shown ONCE — the server only
+ * stores the scrypt hash); active share → URL + who may read + published-
+ * version state + expiry + publish / pin / revoke, and a fold that moves
+ * the share to another visibility or address while the link stays. The
+ * chip carries a dot for the active share: current, unpublished changes, or
+ * pinned.
  */
+import { aliasFor, validAlias } from '../shared/share-alias';
 import type {
   ShareCreateRequest,
   ShareListResponse,
   SharePinRequest,
   ShareRecord,
   ShareStreamEvent,
+  ShareVisibility,
+  ShareVisibilityRequest,
 } from '../shared/types';
 import { api, ApiError, stream } from './api';
 import { currentUser, onAuthChange, shareAvailability } from './auth';
@@ -75,12 +81,133 @@ function expiryLabel(expiresAt: string | null): string {
   return S.share.expiresOn(formatDate(expiresAt, 'date'));
 }
 
+function visibilityLabel(visibility: ShareVisibility): string {
+  if (visibility === 'password') return S.share.visPassword;
+  if (visibility === 'link') return S.share.visLink;
+  return S.share.visPublic;
+}
+
 /** the chip dot's state for an active share */
 type DotState = 'current' | 'stale' | 'pinned';
 
 function dotState(record: ShareRecord): DotState {
   if (record.pinned) return 'pinned';
   return record.stale ? 'stale' : 'current';
+}
+
+/* ---------------- who may read ---------------- */
+
+interface IdentityForm {
+  el: HTMLElement;
+  visibility: () => ShareVisibility;
+  setDisabled: (value: boolean) => void;
+  /** the request the form describes, or the message to show instead */
+  request: () => ShareVisibilityRequest | string;
+  /** fires when the choice changes */
+  onChange: (fn: (visibility: ShareVisibility) => void) => void;
+}
+
+/**
+ * The "who may read" choice with the field that choice calls for: a
+ * generated, editable password, or an address prefilled from the note id.
+ * Validation mirrors the server's rule, so a refused request is rare and
+ * the server's message is the fallback.
+ */
+function identityForm(noteId: string, initial: ShareVisibility, initialAlias: string | null): IdentityForm {
+  const name = uid('share-visibility');
+  const listeners: Array<(visibility: ShareVisibility) => void> = [];
+  const inputs: HTMLInputElement[] = [];
+  const passwordId = uid('share-password');
+  const aliasId = uid('share-alias');
+  const password = h('input', {
+    id: passwordId,
+    class: 'wiki-input wiki-share-mono',
+    value: genPassword(),
+    autocomplete: 'off',
+    spellcheck: false,
+  });
+  const alias = h('input', {
+    id: aliasId,
+    class: 'wiki-input wiki-share-mono',
+    value: initialAlias ?? aliasFor(noteId),
+    autocomplete: 'off',
+    spellcheck: false,
+  });
+  const passwordRow = h(
+    'div',
+    { class: 'wiki-share-row' },
+    h('label', { class: 'wiki-form-label', for: passwordId }, S.share.password),
+    password,
+  );
+  const aliasRow = h(
+    'div',
+    { class: 'wiki-share-row' },
+    h('label', { class: 'wiki-form-label', for: aliasId }, S.share.alias),
+    alias,
+    h('div', { class: 'wiki-share-hint' }, S.share.aliasHint),
+  );
+  const visibility = (): ShareVisibility => (inputs.find((input) => input.checked)?.value as ShareVisibility | undefined) ?? initial;
+  const sync = (): void => {
+    const current = visibility();
+    passwordRow.hidden = current !== 'password';
+    aliasRow.hidden = current !== 'public';
+  };
+  const choice = (value: ShareVisibility, label: string, hint: string): HTMLElement => {
+    const input = h('input', { type: 'radio', name, value, checked: value === initial });
+    inputs.push(input);
+    input.addEventListener('change', () => {
+      sync();
+      for (const fn of listeners) fn(value);
+    });
+    return h(
+      'label',
+      { class: 'wiki-share-choice' },
+      input,
+      h('span', { class: 'wiki-share-choice-name' }, label),
+      h('span', { class: 'wiki-share-choice-hint' }, hint),
+    );
+  };
+  sync();
+  const el = h(
+    'div',
+    { class: 'wiki-share-identity' },
+    h(
+      'fieldset',
+      { class: 'wiki-share-visibility' },
+      h('legend', { class: 'wiki-form-label' }, S.share.visibility),
+      choice('password', S.share.visPassword, S.share.visPasswordHint),
+      choice('link', S.share.visLink, S.share.visLinkHint),
+      choice('public', S.share.visPublic, S.share.visPublicHint),
+    ),
+    passwordRow,
+    aliasRow,
+  );
+  return {
+    el,
+    visibility,
+    setDisabled: (value) => {
+      for (const input of inputs) input.disabled = value;
+      password.disabled = value;
+      alias.disabled = value;
+    },
+    request: () => {
+      const current = visibility();
+      if (current === 'password') {
+        const pass = password.value.trim();
+        if (pass.length < 6) return S.share.passwordMin;
+        return { visibility: current, password: pass };
+      }
+      if (current === 'public') {
+        const address = alias.value.trim();
+        if (address && !validAlias(address)) return S.share.aliasInvalid;
+        return address ? { visibility: current, alias: address } : { visibility: current };
+      }
+      return { visibility: current };
+    },
+    onChange: (fn) => {
+      listeners.push(fn);
+    },
+  };
 }
 
 /* ---------------- popover panels ---------------- */
@@ -122,15 +249,94 @@ async function reloadActive(ctx: PanelCtx): Promise<void> {
   }
 }
 
+/** a failed stream, as a toast — the gateway being down gets its own line */
+function reportFailure(err: unknown, fallback: string): void {
+  toast(
+    err instanceof ApiError && err.status === 502
+      ? S.share.gatewayUnreachable(err.message)
+      : err instanceof Error
+        ? err.message
+        : fallback,
+    'err',
+  );
+}
+
+interface ChangeForm {
+  el: HTMLElement;
+  setDisabled: (value: boolean) => void;
+}
+
+/** the fold that moves an active share to another visibility or address;
+ *  `setBusy` is the panel's — one operation at a time across every control */
+function changeForm(ctx: PanelCtx, record: ShareRecord, setBusy: (value: boolean) => void, status: HTMLElement): ChangeForm {
+  const form = identityForm(ctx.noteId, record.visibility, record.alias);
+  const apply = h('button', { type: 'submit', class: 'wiki-btn wiki-btn-primary' }, S.share.apply);
+  const submit = async (): Promise<void> => {
+    if (apply.disabled) return;
+    const request = form.request();
+    if (typeof request === 'string') {
+      toast(request, 'err');
+      return;
+    }
+    setBusy(true);
+    status.textContent = S.share.publishing;
+    try {
+      let result: ShareRecord | null = null;
+      for await (const event of stream<ShareStreamEvent>(`/share/${record.id}/visibility`, request)) {
+        if (event.kind === 'progress') status.textContent = event.message;
+        else if (event.kind === 'result') result = event.share;
+        else if (event.kind === 'error') throw new Error(event.message);
+      }
+      if (!result) throw new Error(S.share.streamEnded);
+      setBusy(false);
+      ctx.reflect(result);
+      // a share moved to a password gets a fresh one, shown once like at creation
+      ctx.render(activeView(ctx, result, request.password));
+      toast(S.share.visibilityChanged);
+    } catch (err) {
+      setBusy(false);
+      status.textContent = '';
+      reportFailure(err, S.share.visibilityFailed);
+    }
+  };
+  const el = h(
+    'form',
+    {
+      class: 'wiki-share-panel',
+      onsubmit: (e: Event) => {
+        e.preventDefault();
+        void submit();
+      },
+    },
+    form.el,
+    apply,
+  );
+  return {
+    el,
+    setDisabled: (value) => {
+      form.setDisabled(value);
+      apply.disabled = value;
+    },
+  };
+}
+
+/**
+ * The active share's panel. `password` is the one shown once — at creation,
+ * or after a move to a password — and rides along every re-render of this
+ * panel, so pinning or publishing does not take it away before the author
+ * has copied it.
+ */
 function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTMLElement {
   // the server computes permission per requester (creator or admin);
   // an absent flag means an older server — keep the buttons usable
   const mayManage = record.canRevoke !== false;
   const status = h('div', { class: 'wiki-share-status', role: 'status', 'aria-live': 'polite' });
   const buttons: HTMLButtonElement[] = [];
+  let change: ChangeForm | null = null;
   const setBusy = (value: boolean): void => {
     ctx.setBusy(value);
     for (const button of buttons) button.disabled = value || !mayManage;
+    change?.setDisabled(value);
   };
 
   const publishBtn = h(
@@ -152,19 +358,12 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
           if (!result) throw new Error(S.share.streamEnded);
           setBusy(false);
           ctx.reflect(result);
-          ctx.render(activeView(ctx, result));
+          ctx.render(activeView(ctx, result, password));
           toast(S.share.published);
         } catch (err) {
           setBusy(false);
           status.textContent = '';
-          toast(
-            err instanceof ApiError && err.status === 502
-              ? S.share.gatewayUnreachable(err.message)
-              : err instanceof Error
-                ? err.message
-                : S.share.publishFailed,
-            'err',
-          );
+          reportFailure(err, S.share.publishFailed);
           // the share may have moved meanwhile (the follower publishing the
           // same note answers 409): show the record as it is now
           void reloadActive(ctx);
@@ -186,7 +385,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
           const { share } = await api.post<{ share: ShareRecord }>(`/share/${record.id}/pin`, body);
           setBusy(false);
           ctx.reflect(share);
-          ctx.render(activeView(ctx, share));
+          ctx.render(activeView(ctx, share, password));
           toast(share.pinned ? S.share.pinned : S.share.unpinned);
         } catch (err) {
           setBusy(false);
@@ -220,16 +419,19 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
     S.share.revoke,
   );
   buttons.push(publishBtn, pinBtn, revokeBtn);
+  if (mayManage) change = changeForm(ctx, record, setBusy, status);
 
   return h(
     'div',
     { class: 'wiki-share-panel' },
     copyRow(S.share.link, record.url),
-    password !== undefined
-      ? copyRow(S.share.password, password)
-      : h('div', { class: 'wiki-share-hint' }, S.share.passwordOnce),
-    password !== undefined
+    h('div', { class: 'wiki-share-hint' }, S.share.readableBy(visibilityLabel(record.visibility))),
+    record.visibility === 'password' && password !== undefined ? copyRow(S.share.password, password) : null,
+    record.visibility === 'password' && password !== undefined
       ? h('div', { class: 'wiki-share-hint' }, S.share.savePasswordNow)
+      : null,
+    record.visibility === 'password' && password === undefined
+      ? h('div', { class: 'wiki-share-hint' }, S.share.passwordOnce)
       : null,
     versionLine(ctx, record),
     // publishing is an action only while there is something to publish
@@ -237,20 +439,15 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
     status,
     h('div', { class: 'wiki-share-meta' }, expiryLabel(record.expiresAt)),
     h('div', { class: 'wiki-share-actions' }, pinBtn, revokeBtn),
-    mayManage ? null : h('div', { class: 'wiki-share-hint' }, S.share.revokeNotAllowed),
+    change
+      ? h('details', { class: 'wiki-share-change' }, h('summary', {}, S.share.changeVisibility), change.el)
+      : h('div', { class: 'wiki-share-hint' }, S.share.revokeNotAllowed),
   );
 }
 
 function createForm(ctx: PanelCtx): HTMLElement {
-  const passwordId = uid('share-password');
+  const form = identityForm(ctx.noteId, 'password', null);
   const expiryId = uid('share-expiry');
-  const password = h('input', {
-    id: passwordId,
-    class: 'wiki-input wiki-share-mono',
-    value: genPassword(),
-    autocomplete: 'off',
-    spellcheck: false,
-  });
   const expiry = h(
     'select',
     { id: expiryId, class: 'wiki-input' },
@@ -258,25 +455,34 @@ function createForm(ctx: PanelCtx): HTMLElement {
     h('option', { value: '30' }, S.share.days30),
     h('option', { value: '' }, S.share.never),
   );
+  // a password is handed out and should lapse; a link or a public address is
+  // meant to keep working — until the author picks an expiry of their own
+  let expiryChosen = false;
+  expiry.addEventListener('change', () => {
+    expiryChosen = true;
+  });
+  form.onChange((visibility) => {
+    if (!expiryChosen) expiry.value = visibility === 'password' ? '7' : '';
+  });
   const status = h('div', { class: 'wiki-share-status', role: 'status', 'aria-live': 'polite' });
   const submit = h('button', { class: 'wiki-btn wiki-btn-primary', type: 'submit' }, S.share.create);
 
   const create = async (): Promise<void> => {
-    const pass = password.value.trim();
-    if (pass.length < 6) {
-      toast(S.share.passwordMin, 'err');
+    const request = form.request();
+    if (typeof request === 'string') {
+      toast(request, 'err');
       return;
     }
     ctx.setBusy(true);
     submit.disabled = true;
-    password.disabled = true;
+    form.setDisabled(true);
     expiry.disabled = true;
     status.textContent = S.share.building;
     try {
       let result: ShareRecord | null = null;
       const body: ShareCreateRequest = {
         note: ctx.noteId,
-        password: pass,
+        ...request,
         expiresDays: expiry.value ? (Number(expiry.value) as 7 | 30) : null,
       };
       for await (const event of stream<ShareStreamEvent>('/share', body)) {
@@ -287,21 +493,15 @@ function createForm(ctx: PanelCtx): HTMLElement {
       if (!result) throw new Error(S.share.streamEnded);
       ctx.setBusy(false);
       ctx.reflect(result);
-      ctx.render(activeView(ctx, result, pass));
+      ctx.render(activeView(ctx, result, request.password));
       toast(S.share.created);
     } catch (err) {
       ctx.setBusy(false);
       submit.disabled = false;
-      password.disabled = false;
+      form.setDisabled(false);
       expiry.disabled = false;
       status.textContent = '';
-      const message =
-        err instanceof ApiError && err.status === 502
-          ? S.share.gatewayUnreachable(err.message)
-          : err instanceof Error
-            ? err.message
-            : S.share.shareFailed;
-      toast(message, 'err');
+      reportFailure(err, S.share.shareFailed);
     }
   };
 
@@ -315,7 +515,7 @@ function createForm(ctx: PanelCtx): HTMLElement {
       },
     },
     h('div', { class: 'wiki-share-hint' }, S.share.intro),
-    h('div', { class: 'wiki-share-row' }, h('label', { class: 'wiki-form-label', for: passwordId }, S.share.password), password),
+    form.el,
     h('div', { class: 'wiki-share-row' }, h('label', { class: 'wiki-form-label', for: expiryId }, S.share.expires), expiry),
     submit,
     status,

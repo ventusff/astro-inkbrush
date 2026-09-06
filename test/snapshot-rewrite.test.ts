@@ -374,6 +374,16 @@ test('non-ASCII and spaced filenames keep their literal characters', () => {
   assert.equal(rewriteRef('图 一.jpg', PAGE), './docs/en/sample-note/图 一.jpg');
 });
 
+test('an indexable snapshot keeps the page as built — no robots meta', () => {
+  const out = rewriteHtml('<head><link rel="stylesheet" href="/_astro/a.css"></head>', PAGE, { indexable: true });
+  assert.doesNotMatch(out, /name=["']?robots/i);
+  assert.match(out, /href="\.\/_astro\/a\.css"/);
+  // a page that carries its own robots meta keeps it either way
+  const own = '<head><meta name="robots" content="max-snippet:-1"></head>';
+  assert.match(rewriteHtml(own, PAGE, { indexable: true }), /max-snippet:-1/);
+  assert.equal(rewriteHtml(own, PAGE).match(/name=["']?robots/gi)?.length, 1);
+});
+
 test('robots meta is not injected twice regardless of quoting', () => {
   for (const head of [
     '<head><meta name=robots content=\'noindex\'></head>',

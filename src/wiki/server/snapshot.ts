@@ -917,6 +917,12 @@ function collectHtmlRefs(html: string): Array<{ ref: string; required: boolean }
   return refs;
 }
 
+export interface SnapshotOptions {
+  /** leave the page indexable: no robots meta is injected (a public share);
+   *  by default the page asks search engines to stay away */
+  indexable?: boolean | undefined;
+}
+
 /**
  * Re-base a built page for life at the share root, and harden it a little.
  *
@@ -924,11 +930,12 @@ function collectHtmlRefs(html: string): Array<{ ref: string; required: boolean }
  * (a page-relative ref cannot be told apart from an already-re-based one), and
  * `buildSnapshot` always re-reads the page from the build output.
  */
-export function rewriteHtml(html: string, pageDir: string): string {
+export function rewriteHtml(html: string, pageDir: string, { indexable = false }: SnapshotOptions = {}): string {
   let out = mapHtmlRefs(html, (ref, kind) => (kind === 'js' ? `.${ref}` : rewriteRef(ref, pageDir)));
 
-  // noindex — the gateway also sends X-Robots-Tag; this covers saved copies
-  if (!/name=["']?robots["'\s>]/i.test(out)) {
+  // noindex — the gateway also sends X-Robots-Tag; this covers saved copies.
+  // A public share is the one page meant to be found, so it stays as built.
+  if (!indexable && !/name=["']?robots["'\s>]/i.test(out)) {
     out = out.replace(/<head([^>]*)>/i, '<head$1><meta name="robots" content="noindex,nofollow">');
   }
 
@@ -983,6 +990,7 @@ export async function buildSnapshot(
   noteRoute: string,
   onProgress: Progress = () => undefined,
   signal?: AbortSignal,
+  options: SnapshotOptions = {},
 ): Promise<Snapshot> {
   const outDir = await ensureBuild(root, onProgress, signal);
   signal?.throwIfAborted();
@@ -1068,7 +1076,7 @@ export async function buildSnapshot(
     }
 
     const pageDir = relative(outDir, dirname(htmlPath)).split(sep).join('/');
-    const rewritten = rewriteHtml(html, pageDir);
+    const rewritten = rewriteHtml(html, pageDir, options);
     assertClean(executableMarkup(rewritten), 'index.html');
     writeFileSync(join(snapDir, 'index.html'), rewritten);
     mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });

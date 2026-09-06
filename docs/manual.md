@@ -445,10 +445,19 @@ from the list is refused (403) on its next request.
 With `share` configured, a **Share** chip appears in the
 `[data-inkbrush-slot="share"]` slot (the site must provide the slot — no
 slot, no button) and any signed-in user can publish the current note as a
-password-gated static snapshot:
+static snapshot. First, **who can read**:
 
-1. **Create** — the popover pre-generates a 10-character password (editable;
-   6 characters minimum) and offers 7 days / 30 days / no expiry. The server
+| visibility | who reads | search engines |
+|---|---|---|
+| password | whoever has the link **and** the password | noindex |
+| link | whoever has the link — the unguessable id is the key | noindex |
+| public | everyone; may live at a readable address `<publicBase>/<alias>/`, defaulting to the note id | indexed, canonical, in the sitemap |
+
+1. **Create** — with a password, the popover pre-generates a 10-character
+   one (editable; 6 characters minimum); public, it offers the address
+   (1–64 lowercase letters, digits and inner hyphens; empty = the id
+   address). Expiry is 7 days / 30 days / never (7 days by default for a
+   password share, never for the other two). The server
    runs a **WIKI-free, production-mode `astro build`** (`NODE_ENV=production`
    whatever the dev server's own environment says) with the site's own
    installed astro binary, an allowlisted environment and a 10-minute cap.
@@ -462,14 +471,28 @@ password-gated static snapshot:
    of packing and uploading. The server then extracts the route's
    `index.html` plus its complete asset closure (HTML attributes → CSS
    `url()`/`@import` → the JS import graph), rewrites references to be
-   `./`-relative, injects `noindex`, and PUTs a tar.gz to the gateway. Share
-   ids are 10-character base58 — no `0/O/I/l`, readable aloud.
-2. **Password** — travels once from the author's browser to the editing
-   machine, is scrypt-hashed there, and only the hash reaches the gateway;
-   the plaintext never persists anywhere. It is shown exactly once, at
-   creation. One note has at most one active share: creating over a live
-   one is refused (409) with the existing link.
-3. **Follow** — a share follows its note. Once the note has been quiet for
+   `./`-relative, injects `noindex` unless the share is public, and PUTs a
+   tar.gz to the gateway. Share ids are 10-character base58 — no `0/O/I/l`,
+   readable aloud.
+2. **Password** — only a password share has one. It travels once from the
+   author's browser to the editing machine, is scrypt-hashed there, and only
+   the hash reaches the gateway; the plaintext never persists anywhere. It
+   is shown exactly once, at creation. One note has at most one active
+   share: creating over a live one is refused (409) with the existing link.
+3. **Change who can read** — an active share moves to another visibility,
+   password or address: the popover's **Change who can read** fold posts
+   `POST /share/<id>/visibility`. `/s/<id>/` is the permanent handle and
+   always works; a changed readable address retires the old one at once,
+   and `/s/<id>/` redirects to the new. Moving to a password mints a fresh
+   one, shown once, and voids earlier unlock cookies. Only **becoming
+   public** touches content: the snapshot is republished as indexable while
+   the gateway still keeps the share private, and the gateway's record is
+   changed last — a failure leaves an indexable page nothing indexes; a
+   pinned share is not made public (that would publish the note as it is
+   now) — unpin first. Every other move (leaving public, password ↔ link,
+   a new address) changes the gateway's record only, no content travels.
+   When the gateway's answer is uncertain, the record takes its word.
+4. **Follow** — a share follows its note. Once the note has been quiet for
    `share.followIdleMinutes` (default 20) after a change — an editing
    session has ended; a single block save is not a version — the snapshot
    is rebuilt and, when its bytes differ from the published version, PUT to
@@ -481,11 +504,13 @@ password-gated static snapshot:
    changed since; the share chip carries the same as a dot (current ·
    unpublished changes · pinned). `followIdleMinutes: 0` turns automatic
    publishing off — shares then publish by hand only.
-4. **Revoke** — deletes the gateway directory; the link 404s immediately.
+5. **Revoke** — deletes the gateway directory; the link 404s immediately.
    The local record (with `revokedAt`) is kept in `.wiki/data/shares.json`
    for audit.
 
-The recipient opens `<publicBase>/s/<id>/`, enters the password, reads.
+The recipient opens the link and reads — after the password for a password
+share; a public share lives at `<publicBase>/<alias>/` (`/s/<id>/` redirects
+there; the id stays the permanent handle).
 
 ### The gateway admin API (implement your own)
 
@@ -496,21 +521,27 @@ work with nginx + a tiny app in front of a directory tree):
 | Call | Meaning |
 |---|---|
 | `GET /admin/s` | Health/auth pre-flight; the engine calls it (5 s timeout) before an expensive build. 401 ⇒ bad token |
-| `PUT /admin/s/<id>` | With `x-share-password`: create/replace snapshot `<id>`. Body: tar.gz with `index.html` at the archive root — extract into the directory you serve at `/s/<id>/`. Without `x-share-password`: update the content of an existing share in place — swap the directory atomically, keep the password and creation time (expiry and note too unless the header is sent); answer 404 for an unknown id |
-| `DELETE /admin/s/<id>` | Remove snapshot `<id>` (a 404 here is treated as already-gone) |
+| `PUT /admin/s/<id>` | With `x-share-visibility` (or just `x-share-password`): create/replace snapshot `<id>`. Body: tar.gz with `index.html` at the archive root — extract into the directory you serve at `/s/<id>/`. With neither header: update the content of an existing share in place — swap the directory atomically, keep visibility, password, alias and creation time (expiry and note too unless the header is sent); answer 404 for an unknown id |
+| `PATCH /admin/s/<id>` | JSON `{ visibility?, passwordHash?, alias?, expiresAt? }` — change what the share is without touching its content; `null` clears alias / expiry. Moving to password needs `passwordHash`; leaving password drops the hash; leaving public drops the alias; a taken alias is a 409 |
+| `DELETE /admin/s/<id>` | Remove snapshot `<id>` (a 404 here is treated as already-gone); frees the alias |
 
 Request headers on PUT:
 
 | Header | Content |
 |---|---|
 | `authorization` | `Bearer <SHARE_GATEWAY_TOKEN>` |
-| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` — N=2¹⁵, r=8, p=1, 32-byte hash. Verify a visitor's password by re-computing with the embedded parameters. Absent on a content update |
+| `x-share-visibility` | `password` / `link` / `public`, sent at creation. Absent with `x-share-password` present = `password` |
+| `x-share-password` | `scrypt$N$r$p$<salt-b64url>$<hash-b64url>` — N=2¹⁵, r=8, p=1, 32-byte hash. Verify a visitor's password by re-computing with the embedded parameters. Required by a password share, refused by the other two; absent on a content update |
+| `x-share-alias` | A public share's readable address (1–64 lowercase letters, digits and inner hyphens); serve it at `/<alias>/` and redirect `/s/<id>/` there |
 | `x-share-expires` | Optional ISO-8601 timestamp; serve 404/410 after it |
 | `x-share-note` | The source note id (URI-encoded when not printable ASCII) — informational |
 
-The gateway's public side then gates `GET /s/<id>/…` behind a password
-prompt checked against the stored hash. It never sees a plaintext password
-and holds no accounts.
+The gateway's public side then serves by visibility: a password share's
+`GET /s/<id>/…` sits behind a password prompt checked against the stored
+hash; a link share is served as it is with `X-Robots-Tag: noindex`; a
+public share carries no robots header, a canonical link, and a place in
+`/sitemap.xml` (which `/robots.txt` points at). The gateway never sees a
+plaintext password and holds no accounts.
 
 ## Wikilinks
 
@@ -565,7 +596,8 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `DELETE /comments/<id>?cid=` | signed-in | Own comments only (403 otherwise) |
 | `GET /identity/users` | admin | Members + role vocabulary |
 | `PUT /identity/users` | admin | Full-list overwrite (validated; last admin protected) |
-| `POST /share` | signed-in | Create share — NDJSON `progress…` → `result`; 409 when the note already has an active share |
+| `POST /share` | signed-in | Create share — `{note, visibility?, password?, alias?, expiresDays?}` (no visibility = password); NDJSON `progress…` → `result`; 409 when the note already has an active share |
+| `POST /share/<id>/visibility` | signed-in | Change who can read — `{visibility, password?, alias?}`, the rules of creation; NDJSON `progress…` → `result`; creator or admin (403 otherwise); 409 while a publish is running |
 | `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required); each record carries `canRevoke` for the requester, `stale`/`noteChangedAt` against the published version, and the response the deployment's `followIdleMinutes` |
 | `POST /share/<id>/publish` | signed-in | Republish the share from the note as it is now — NDJSON `progress…` → `result`; creator or admin (403 otherwise); 409 while a publish is running |
 | `POST /share/<id>/pin` | signed-in | `{pinned}` — a pinned share never follows its note; creator or admin |

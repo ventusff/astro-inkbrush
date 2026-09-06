@@ -194,6 +194,21 @@ interface Strings {
     chipReady: string;
     chipUnconfigured: string;
     intro: string;
+    visibility: string;
+    visPassword: string;
+    visPasswordHint: string;
+    visLink: string;
+    visLinkHint: string;
+    visPublic: string;
+    visPublicHint: string;
+    alias: string;
+    aliasHint: string;
+    aliasInvalid: string;
+    readableBy: (label: string) => string;
+    changeVisibility: string;
+    apply: string;
+    visibilityChanged: string;
+    visibilityFailed: string;
     link: string;
     password: string;
     expires: string;
@@ -433,7 +448,22 @@ const en: Strings = {
     chipReady: 'Share this note',
     chipUnconfigured:
       'Share is enabled, but gatewayUrl / publicBase / SHARE_GATEWAY_TOKEN is missing',
-    intro: 'Publish a password-gated static snapshot of this note.',
+    intro: 'Publish a static snapshot of this note — for the holders of a password, for anyone with the link, or for everyone.',
+    visibility: 'Who can read',
+    visPassword: 'With the password',
+    visPasswordHint: 'The link and a password; the password is shown once.',
+    visLink: 'Anyone with the link',
+    visLinkHint: 'The unguessable link is the key; search engines are asked to stay away.',
+    visPublic: 'Everyone',
+    visPublicHint: 'Open to all and to search engines, at a readable address.',
+    alias: 'Address',
+    aliasHint: 'Lowercase letters, digits and hyphens; leave empty to use the id.',
+    aliasInvalid: 'Address: lowercase letters, digits and inner hyphens, up to 64 characters',
+    readableBy: (label) => `Readable by: ${label}`,
+    changeVisibility: 'Change who can read',
+    apply: 'Apply',
+    visibilityChanged: 'Share updated',
+    visibilityFailed: 'Could not change the share',
     link: 'Link',
     password: 'Password',
     expires: 'Expires',
@@ -680,7 +710,22 @@ const zh: Strings = {
     chip: '分享',
     chipReady: '分享本篇',
     chipUnconfigured: '已启用但配置不完整（缺 gatewayUrl / publicBase / SHARE_GATEWAY_TOKEN）',
-    intro: '发布本篇的密码门控静态快照。',
+    intro: '把本篇发布为静态快照：凭密码、有链接就能看，或完全公开。',
+    visibility: '谁能看',
+    visPassword: '凭密码',
+    visPasswordHint: '有链接还得有密码；密码只在创建时显示一次。',
+    visLink: '有链接就能看',
+    visLinkHint: '链接本身就是钥匙，猜不出来；并告诉搜索引擎不要收录。',
+    visPublic: '完全公开',
+    visPublicHint: '所有人和搜索引擎都能看，有一个可读的地址。',
+    alias: '地址',
+    aliasHint: '小写字母、数字和连字符；留空则用随机 id。',
+    aliasInvalid: '地址只能是小写字母、数字和中间的连字符，最多 64 个字符',
+    readableBy: (label) => `可见范围：${label}`,
+    changeVisibility: '改谁能看',
+    apply: '应用',
+    visibilityChanged: '分享已更新',
+    visibilityFailed: '修改失败',
     link: '链接',
     password: '密码',
     expires: '有效期',

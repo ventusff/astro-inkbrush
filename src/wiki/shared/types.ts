@@ -135,15 +135,29 @@ export type ClaudeStreamEvent =
   | { kind: 'result'; ok: boolean; summary: string; sessionId: string | null }
   | { kind: 'error'; message: string };
 
-/** one published password-gated snapshot of a note (`.wiki/data/shares.json`) */
+/**
+ * Who may read a share:
+ *   password — whoever has the link and the password;
+ *   link     — whoever has the link (the unguessable id is the key), kept
+ *              out of search engines;
+ *   public   — everyone, indexable, at a readable address when it has one.
+ */
+export type ShareVisibility = 'password' | 'link' | 'public';
+
+/** one published snapshot of a note (`.wiki/data/shares.json`) */
 export interface ShareRecord {
   /** 10-char base58 id — doubles as the gateway path /s/<id> */
   id: string;
   note: string;
   /** the site route the snapshot serves, e.g. "/notes/getting-started/" */
   route: string;
-  /** public URL recipients open (<publicBase>/s/<id>/) */
+  /** public URL recipients open: <publicBase>/<alias>/ for a public share
+   *  with an alias, <publicBase>/s/<id>/ otherwise */
   url: string;
+  /** records written before visibility existed read as password shares */
+  visibility: ShareVisibility;
+  /** the readable address of a public share, or null */
+  alias: string | null;
   /** creator's email — persisted and present in the create response;
    *  omitted from the list response */
   createdBy?: string;
@@ -179,9 +193,22 @@ export interface SharePinRequest {
  *  the note id via the site's URL rule on the server side */
 export interface ShareCreateRequest {
   note: string;
-  password: string;
+  /** omitted = password (the request shape of older clients) */
+  visibility?: ShareVisibility;
+  /** required by a password share (6 characters minimum), refused by the others */
+  password?: string;
+  /** a public share's readable address (optional; omitted = the id address) */
+  alias?: string;
   /** 7 · 30 · null/omitted = never */
   expiresDays?: 7 | 30 | null;
+}
+
+/** POST /api/wiki/share/<id>/visibility request body — the same rules as
+ *  creation: a password with 'password', an optional alias with 'public' */
+export interface ShareVisibilityRequest {
+  visibility: ShareVisibility;
+  password?: string;
+  alias?: string;
 }
 
 /** NDJSON stream of POST /api/wiki/share (a cold snapshot build can take minutes) */

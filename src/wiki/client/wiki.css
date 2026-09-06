@@ -1223,6 +1223,9 @@ select.wiki-members-role {
   flex-direction: column;
   gap: 4px;
 }
+.wiki-share-row[hidden] {
+  display: none;
+}
 .wiki-share-copy {
   display: flex;
   gap: 6px;
@@ -1247,6 +1250,67 @@ select.wiki-members-role {
 }
 .wiki-share-error {
   color: var(--wiki-danger);
+}
+/* who may read: three choices, the checked one carries the accent */
+.wiki-share-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wiki-share-visibility {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.wiki-share-visibility legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+.wiki-share-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: start;
+  padding: 7px 9px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wiki-share-choice:has(input:checked) {
+  border-color: var(--wiki-accent);
+  background: color-mix(in srgb, var(--wiki-accent) 6%, transparent);
+}
+.wiki-share-choice input {
+  margin: 3px 0 0;
+  accent-color: var(--wiki-accent);
+}
+.wiki-share-choice-name {
+  font: 500 12.5px/1.4 var(--wiki-font);
+  color: var(--wiki-on-surface);
+}
+.wiki-share-choice-hint {
+  grid-column: 2;
+  font: 400 11.5px/1.45 var(--wiki-font);
+  color: var(--wiki-muted);
+}
+.wiki-share-change summary {
+  cursor: pointer;
+  font: 500 12px/1.5 var(--wiki-font);
+  color: var(--wiki-muted);
+  list-style: none;
+}
+.wiki-share-change summary::before {
+  content: '▸ ';
+}
+.wiki-share-change[open] summary::before {
+  content: '▾ ';
+}
+.wiki-share-change[open] summary {
+  margin-bottom: 10px;
 }
 .wiki-share-meta {
   font: 500 11px/1 var(--wiki-font);

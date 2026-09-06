@@ -1,11 +1,14 @@
 /**
- * Share module — password-gated public snapshots of single notes, hosted by
- * a static-snapshot gateway. The gateway is a pluggable contract, not a
- * bundled service: anything that implements the small admin API
- * (`PUT/DELETE/GET /admin/s/<id>`, Bearer auth, tar.gz body on PUT) works.
+ * Share module — static snapshots of single notes, hosted by a snapshot
+ * gateway and readable by whoever the share's visibility says: the holders
+ * of a password, anyone holding the (unguessable) link, or everyone — a
+ * public share is indexable and may live at a readable alias. The gateway
+ * is a pluggable contract, not a bundled service: anything that implements
+ * the small admin API (`PUT/PATCH/DELETE/GET /admin/s/<id>`, Bearer auth,
+ * tar.gz body on PUT) works.
  *
  * The engine only ever talks outbound to that admin API (`share.gatewayUrl`
- * + Bearer SHARE_GATEWAY_TOKEN); the password is scrypt-hashed on this side,
+ * + Bearer SHARE_GATEWAY_TOKEN); a password is scrypt-hashed on this side,
  * so the gateway never sees the plaintext. The snapshotted route is the
  * note's own route by the site's URL rule (`inkbrush({ markdown: { urlFor } })`,
  * default `/<id>/`), so a share record always names the page it serves.
@@ -28,6 +31,7 @@ import { Readable } from 'node:stream';
 
 import * as tar from 'tar';
 
+import { isShareVisibility, parseIdentity, type ShareIdentity } from '../shared/share-identity.ts';
 import type {
   GoogleAuthState,
   ShareCreateRequest,
@@ -35,6 +39,8 @@ import type {
   SharePinRequest,
   ShareRecord,
   ShareStreamEvent,
+  ShareVisibility,
+  ShareVisibilityRequest,
 } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
 import { findUser as findIdentityUser, identityConfig } from './identity.ts';
@@ -116,14 +122,24 @@ function sharesFile(): string {
 
 /** stored records; records written before the follow fields existed read
  *  as unpinned, published at creation, with no fingerprint (the first
- *  follow uploads regardless) */
+ *  follow uploads regardless), and those written before visibility existed
+ *  as password shares at their id address */
 function readShares(): ShareRecord[] {
   return readJson<ShareRecord[]>(sharesFile(), []).map((record) => ({
     ...record,
+    visibility: record.visibility ?? 'password',
+    alias: record.alias ?? null,
     pinned: record.pinned ?? false,
     publishedAt: record.publishedAt ?? record.createdAt,
   }));
 }
+
+/** where recipients open the share: a public share at its alias, every
+ *  other share at its id */
+function shareUrl(conf: ShareConf, id: string, alias: string | null): string {
+  return alias ? `${conf.publicBase}/${alias}/` : `${conf.publicBase}/s/${id}/`;
+}
+
 
 /** read-modify-write of the share list under its lock */
 function updateShares(update: (shares: ShareRecord[]) => void): Promise<void> {
@@ -248,14 +264,15 @@ interface Bundle {
 }
 
 /** the note's snapshot, packed for upload: build (cached while fresh),
- *  extract the page and its asset closure, fingerprint, tar. The caller
- *  removes the temp files */
+ *  extract the page and its asset closure — indexable for a public share,
+ *  noindex otherwise — fingerprint, tar. The caller removes the temp files */
 async function packSnapshot(
   route: string,
+  visibility: ShareVisibility,
   progress: (message: string) => void,
   signal: AbortSignal,
 ): Promise<Bundle> {
-  const snapshot = await buildSnapshot(projectRoot(), route, progress, signal);
+  const snapshot = await buildSnapshot(projectRoot(), route, progress, signal, { indexable: visibility === 'public' });
   const fingerprint = snapshotFingerprint(snapshot);
   const tgzPath = `${snapshot.dir}.tgz`;
   progress(`Packing snapshot (${snapshot.files.length + 1} files)…`);
@@ -300,29 +317,75 @@ async function uploadBundle(
   );
 }
 
+/** the gateway's refusal of a change, as the author reads it */
+async function gatewayRefusal(res: Response, what: string): Promise<string> {
+  const text = (await res.text()).slice(0, 300);
+  if (res.status === 409) return `The share gateway refused: ${text}`;
+  return `gateway ${what} failed (HTTP ${res.status}): ${text}`;
+}
+
+/** PATCH what a share is — visibility, credential, alias — content untouched */
+async function patchGateway(
+  conf: ShareConf,
+  id: string,
+  patch: { visibility: ShareVisibility; passwordHash?: string; alias: string | null },
+): Promise<void> {
+  const res = await gatewayFetch(
+    conf,
+    `/admin/s/${id}`,
+    { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) },
+    30_000,
+  );
+  if (res.status === 404) {
+    throw new Error('The share gateway no longer holds this share, or does not know share visibilities yet');
+  }
+  if (!res.ok) throw new Error(await gatewayRefusal(res, 'update'));
+}
+
 /* ---------------- republish (follow + "publish this version") ---------------- */
+
+/** one publish per share at a time: a click, the follower and a visibility
+ *  change cannot overlap on one share */
+async function withPublishing<T>(id: string, work: () => Promise<T>): Promise<T> {
+  if (publishing.has(id)) throw new Error('This share is being published right now — wait for it to finish');
+  publishing.add(id);
+  try {
+    return await work();
+  } finally {
+    publishing.delete(id);
+  }
+}
+
+/** the share as it is stored right now — a caller that captured a record
+ *  earlier (the follower's candidate list, a route before its preflight)
+ *  publishes what the share has become, not what it was */
+function activeShare(id: string): ShareRecord {
+  const record = readShares().find((r) => r.id === id && isActive(r));
+  if (!record) throw new Error('Share not found');
+  return record;
+}
 
 /**
  * Republish an active share from the note as it is now. The snapshot is
- * uploaded only when its bytes differ from the published version; either
- * way the record's published version moves to now. A gateway that no
- * longer holds the share (404) is reported — the share must be revoked and
- * created again, the credentials cannot be recreated here.
+ * uploaded only when its bytes differ from the published version (or when
+ * forced); either way the record's published version moves to now. A
+ * gateway that no longer holds the share (404) is reported — the share
+ * must be revoked and created again, the credentials cannot be recreated
+ * here. The caller holds the share's publishing slot.
  */
-async function republish(
+async function republishHeld(
   conf: ShareConf,
   record: ShareRecord,
   progress: (message: string) => void,
   signal: AbortSignal,
+  force = false,
 ): Promise<ShareRecord> {
-  if (publishing.has(record.id)) throw new Error('This share is being published right now — wait for it to finish');
-  publishing.add(record.id);
   let bundle: Bundle | null = null;
   try {
-    bundle = await packSnapshot(record.route, progress, signal);
+    bundle = await packSnapshot(record.route, record.visibility, progress, signal);
     signal.throwIfAborted();
     const publishedAt = new Date().toISOString();
-    if (bundle.fingerprint === record.publishedHash) {
+    if (!force && bundle.fingerprint === record.publishedHash) {
       progress('The published snapshot already matches — nothing to upload');
     } else {
       progress('Uploading to the share gateway…');
@@ -330,9 +393,7 @@ async function republish(
       if (put.status === 404) {
         throw new Error('The share gateway no longer holds this share — revoke it and share the note again');
       }
-      if (!put.ok) {
-        throw new Error(`gateway update failed (HTTP ${put.status}): ${(await put.text()).slice(0, 300)}`);
-      }
+      if (!put.ok) throw new Error(await gatewayRefusal(put, 'update'));
     }
     let current: ShareRecord | null = null;
     await updateShares((shares) => {
@@ -346,8 +407,99 @@ async function republish(
     return current;
   } finally {
     discardBundle(bundle);
-    publishing.delete(record.id);
   }
+}
+
+/** republish by id, from the share as it is once the slot is ours; the
+ *  follower passes `unlessPinned` — a share pinned meanwhile is left alone */
+function republish(
+  conf: ShareConf,
+  id: string,
+  progress: (message: string) => void,
+  signal: AbortSignal,
+  { unlessPinned = false } = {},
+): Promise<ShareRecord> {
+  return withPublishing(id, () => {
+    const record = activeShare(id);
+    if (unlessPinned && record.pinned) return Promise.resolve(record);
+    return republishHeld(conf, record, progress, signal);
+  });
+}
+
+/**
+ * The gateway's word on what a share is, written over the local record —
+ * for the moment a change may or may not have reached it (a timeout, a
+ * failure after its answer). Best effort: a gateway that cannot be asked
+ * leaves the record as it is.
+ */
+async function reconcile(conf: ShareConf, id: string): Promise<void> {
+  const res = await gatewayFetch(conf, '/admin/s', {}, 5000);
+  if (!res.ok) return;
+  const rows = (await res.json()) as Array<{ id: string; visibility?: unknown; alias?: unknown; alive?: unknown }>;
+  const row = rows.find((r) => r.id === id);
+  if (!row || row.alive !== true || !isShareVisibility(row.visibility)) return;
+  const visibility = row.visibility;
+  const alias = typeof row.alias === 'string' ? row.alias : null;
+  await updateShares((shares) => {
+    const stored = shares.find((r) => r.id === id);
+    if (!stored || stored.revokedAt) return;
+    stored.visibility = visibility;
+    stored.alias = alias;
+    stored.url = shareUrl(conf, id, alias);
+  });
+}
+
+/**
+ * Move an active share to another visibility, credential or address; the
+ * id address stays. Only entering `public` touches content: the page is
+ * rebuilt without its robots meta and uploaded while the gateway still
+ * keeps the share private, then the gateway's PATCH opens it — so a failed
+ * PATCH leaves an indexable page that nothing indexes. Leaving public, or
+ * moving between password and link, is the PATCH alone: nothing unpublished
+ * reaches the gateway on the way to a tighter setting. A pinned share is
+ * not made public, since that would publish the note as it is now. When
+ * the PATCH's outcome is uncertain, the record takes the gateway's word.
+ */
+function changeVisibility(
+  conf: ShareConf,
+  id: string,
+  identity: ShareIdentity,
+  progress: (message: string) => void,
+  signal: AbortSignal,
+): Promise<ShareRecord> {
+  return withPublishing(id, async () => {
+    const record = activeShare(id);
+    const alias = identity.visibility === 'public' ? identity.alias : null;
+    const next: ShareRecord = { ...record, visibility: identity.visibility, alias, url: shareUrl(conf, id, alias) };
+    const entersPublic = record.visibility !== 'public' && next.visibility === 'public';
+    if (entersPublic && record.pinned) {
+      throw new Error('Unpin the share first — making it public would publish the note as it is now');
+    }
+    if (entersPublic) await republishHeld(conf, next, progress, signal, true);
+    signal.throwIfAborted();
+    progress('Updating the share gateway…');
+    try {
+      await patchGateway(conf, id, {
+        visibility: next.visibility,
+        ...(next.visibility === 'password' ? { passwordHash: await hashPassword(identity.password) } : {}),
+        alias,
+      });
+      let current: ShareRecord | null = null;
+      await updateShares((shares) => {
+        const stored = shares.find((r) => r.id === id);
+        if (!stored || stored.revokedAt) return;
+        stored.visibility = next.visibility;
+        stored.alias = next.alias;
+        stored.url = next.url;
+        current = stored;
+      });
+      if (!current) throw new Error('The share was revoked while it was being changed');
+      return current;
+    } catch (err) {
+      await reconcile(conf, id).catch(() => undefined);
+      throw err;
+    }
+  });
 }
 
 const FOLLOWER_KEY = '__wikiShareFollower';
@@ -377,7 +529,8 @@ export function startShareFollowing(): void {
             idleMs,
           ),
       ),
-    publish: (record) => republish(conf, record, () => undefined, new AbortController().signal).then(() => undefined),
+    publish: (record) =>
+      republish(conf, record.id, () => undefined, new AbortController().signal, { unlessPinned: true }).then(() => undefined),
     describe: (record) => `${record.note} (${record.id})`,
     log,
   });
@@ -397,11 +550,11 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       if (!conf) return;
       const body = await readBody<ShareCreateRequest>(req);
       const note = typeof body.note === 'string' ? body.note.trim() : '';
-      const password = typeof body.password === 'string' ? body.password : '';
       const expiresDays = body.expiresDays ?? null;
       if (!note || !noteMeta(note)) return fail(res, 404, 'Note not found');
       const route = noteUrl(note);
-      if (password.length < 6) return fail(res, 400, 'Password must be at least 6 characters');
+      const identity = parseIdentity(body);
+      if (typeof identity === 'string') return fail(res, 400, identity);
       if (expiresDays !== null && expiresDays !== 7 && expiresDays !== 30) {
         return fail(res, 400, 'expiresDays must be 7, 30 or null');
       }
@@ -432,7 +585,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
         res.on('close', () => closed.abort());
         let bundle: Bundle | null = null;
         try {
-          bundle = await packSnapshot(route, progress, closed.signal);
+          bundle = await packSnapshot(route, identity.visibility, progress, closed.signal);
           // a disconnected creator stops before the gateway sees anything
           closed.signal.throwIfAborted();
 
@@ -440,20 +593,27 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           const expiresAt = expiresDays ? new Date(Date.now() + expiresDays * 86_400_000).toISOString() : null;
           progress('Uploading to the share gateway…');
           const put = await uploadBundle(conf, id, bundle, {
-            'x-share-password': await hashPassword(password),
+            'x-share-visibility': identity.visibility,
+            ...(identity.visibility === 'password' ? { 'x-share-password': await hashPassword(identity.password) } : {}),
+            ...(identity.alias ? { 'x-share-alias': identity.alias } : {}),
             ...(expiresAt ? { 'x-share-expires': expiresAt } : {}),
             'x-share-note': noteHeader(note),
           });
-          if (!put.ok) {
-            throw new Error(`gateway upload failed (HTTP ${put.status}): ${(await put.text()).slice(0, 300)}`);
+          // a gateway from before visibilities reads a PUT without a password
+          // header as an update of an unknown id
+          if (put.status === 404 && identity.visibility !== 'password') {
+            throw new Error('The share gateway does not know link or public shares yet — update the gateway, or share with a password');
           }
+          if (!put.ok) throw new Error(await gatewayRefusal(put, 'upload'));
 
           const createdAt = new Date().toISOString();
           const record: ShareRecord = {
             id,
             note,
             route,
-            url: `${conf.publicBase}/s/${id}/`,
+            url: shareUrl(conf, id, identity.alias),
+            visibility: identity.visibility,
+            alias: identity.alias,
             createdBy: user!.email,
             createdAt,
             expiresAt,
@@ -537,7 +697,47 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       try {
         const current = await republish(
           conf,
-          record,
+          record.id,
+          (message) => stream.write({ kind: 'progress', message } satisfies ShareStreamEvent),
+          closed.signal,
+        );
+        stream.write({ kind: 'result', ok: true, share: shareView(current, ctx.user!.email) } satisfies ShareStreamEvent);
+      } catch (err) {
+        stream.write({ kind: 'error', message: err instanceof Error ? err.message : String(err) } satisfies ShareStreamEvent);
+      }
+      stream.close();
+    },
+    { auth: true },
+  );
+
+  on(
+    'POST',
+    '/share/:id/visibility',
+    async (ctx) => {
+      const conf = requireShare(ctx);
+      if (!conf) return;
+      const body = await readBody<ShareVisibilityRequest>(ctx.req);
+      if (typeof body.visibility !== 'string') return fail(ctx.res, 400, 'visibility is required');
+      const identity = parseIdentity(body);
+      if (typeof identity === 'string') return fail(ctx.res, 400, identity);
+      const record = readShares().find((r) => r.id === ctx.params['id'] && isActive(r));
+      if (!record) return fail(ctx.res, 404, 'Share not found');
+      if (!canManage(record, ctx.user!.email)) {
+        return fail(ctx.res, 403, 'Only the share creator (or an admin) can change it');
+      }
+      if (publishing.has(record.id)) {
+        return fail(ctx.res, 409, 'This share is being published right now — wait for it to finish');
+      }
+      const unreachable = await gatewayPreflight(conf);
+      if (unreachable) return fail(ctx.res, 502, unreachable);
+      const stream = ndjsonStream(ctx.res);
+      const closed = new AbortController();
+      ctx.res.on('close', () => closed.abort());
+      try {
+        const current = await changeVisibility(
+          conf,
+          record.id,
+          identity,
           (message) => stream.write({ kind: 'progress', message } satisfies ShareStreamEvent),
           closed.signal,
         );

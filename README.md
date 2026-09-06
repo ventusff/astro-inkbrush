@@ -75,9 +75,10 @@ yourself in the browser on the
   sessions (cross-subdomain SSO); an optional file-based member registry —
   when it is on, only current members can edit, and only admins can manage
   it.
-- 📤 **Password-gated sharing** — snapshot a single note (with its full
-  asset closure) into a static bundle and publish it through a tiny
-  gateway API you can implement in an afternoon.
+- 📤 **Sharing** — snapshot a single note (with its full asset closure)
+  into a static bundle and publish it through a tiny gateway API you can
+  implement in an afternoon: behind a password, for anyone with the link,
+  or fully public at a readable address.
 - 🧾 **A Markdown dialect with a conscience** — GFM + CJK-friendly
   emphasis, defined once and used in three places (page rendering, save
   validation, editor preview), plus a build-time **content guard** that
