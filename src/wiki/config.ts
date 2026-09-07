@@ -121,6 +121,22 @@ export interface ServerConfig {
   trustProxy?: boolean;
 }
 
+/** one AI job about to start: which of the three endpoints asked for it */
+export interface ClaudeJob {
+  kind: 'block' | 'ask' | 'translate';
+}
+
+/** what `claude.resolve` may change for one job; an absent field keeps the static config */
+export interface ClaudeJobSettings {
+  bin?: string;
+  /** null = the CLI's own default */
+  model?: string | null;
+  /** `--effort` (low / medium / high / …); null = the CLI's own default */
+  effort?: string | null;
+  /** laid over the child's allowlisted environment; an undefined value removes the variable */
+  env?: Record<string, string | undefined>;
+}
+
 export interface WikiConfigInput {
   /** how the server reads its own environment (proxy trust) */
   server?: ServerConfig;
@@ -168,6 +184,13 @@ export interface WikiConfigInput {
     bin?: string;
     /** `--model` override (default: the CLI's own default) */
     model?: string;
+    /** per-job settings, consulted each time a job starts: the executable,
+     *  the model, the CLI's reasoning effort (`--effort`) and variables laid
+     *  over the child's allowlisted environment (a credential, a state
+     *  directory). Only the fields returned change; the static fields above
+     *  are the fallback. Lets a site keep its model choice and sign-in in
+     *  its own settings store. Default: none */
+    resolve?: (job: ClaudeJob) => ClaudeJobSettings | Promise<ClaudeJobSettings>;
     /** project-relative files or directories a job may read and change
      *  beside the note's own directory — e.g. the demo module a note
      *  mounts. Called per job with the note; default: none */
@@ -232,6 +255,7 @@ export interface WikiConfig {
   claude: {
     bin: string;
     model: string | null;
+    resolve: ((job: ClaudeJob) => ClaudeJobSettings | Promise<ClaudeJobSettings>) | null;
     companions: ((note: { id: string; file: string; dir: string; source: string }) => string[]) | null;
     rules: string[];
   };

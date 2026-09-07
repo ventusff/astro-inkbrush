@@ -93,6 +93,8 @@ export default defineInkbrushConfig({
   // claude: {
   //   bin: 'claude',                 // default 'claude'
   //   model: 'claude-opus-4-8',      // default: the CLI's own
+  //   // per job: model / reasoning effort / credential env from the site's own store
+  //   resolve: (job) => ({ effort: job.kind === 'translate' ? 'high' : null }),
   //   companions: (note) => [`src/demos/${note.id}.ts`],
   //   rules: ['Headings keep their {#anchor} attributes.'],
   // },

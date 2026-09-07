@@ -206,6 +206,7 @@ export function wikiConfig(): WikiConfig {
     claude: {
       bin: envStr('WIKI_CLAUDE_BIN') ?? input.claude?.bin ?? 'claude',
       model: envStr('WIKI_CLAUDE_MODEL') ?? input.claude?.model ?? null,
+      resolve: input.claude?.resolve ?? null,
       companions: input.claude?.companions ?? null,
       rules: input.claude?.rules ?? [],
     },

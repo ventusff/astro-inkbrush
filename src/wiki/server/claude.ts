@@ -167,6 +167,23 @@ async function validateChanges(changes: WorkspaceChange[]): Promise<string | nul
  * applies nothing, and a git failure is reported alongside the successful
  * save.
  */
+/** the settings one job runs with: the static config, then whatever `claude.resolve` changes for it */
+async function jobSettings(kind: 'block' | 'ask' | 'translate'): Promise<{
+  bin: string;
+  model: string | null;
+  effort: string | null;
+  env: Record<string, string | undefined> | undefined;
+}> {
+  const cfg = wikiConfig().claude;
+  const over = cfg.resolve ? await cfg.resolve({ kind }) : {};
+  return {
+    bin: over.bin ?? cfg.bin,
+    model: over.model === undefined ? cfg.model : over.model,
+    effort: over.effort ?? null,
+    env: over.env,
+  };
+}
+
 async function runEditJob(opts: {
   noteId: string;
   scope: string[];
@@ -195,10 +212,12 @@ async function runEditJob(opts: {
     return;
   }
   try {
-    const { bin, model } = wikiConfig().claude;
+    const { bin, model, effort, env } = await jobSettings(opts.via === 'translate' ? 'translate' : 'block');
     const result = await runClaudeJob({
       bin,
       model,
+      effort,
+      env,
       prompt: opts.prompt,
       mode: 'edit',
       cwd: ws.dir,
@@ -415,10 +434,12 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
             rememberSession(event.sessionId, user!.email, id);
           }
         };
-        const { bin, model } = wikiConfig().claude;
+        const { bin, model, effort, env } = await jobSettings('ask');
         const result = await runClaudeJob({
           bin,
           model,
+          effort,
+          env,
           prompt,
           mode: 'readonly',
           cwd: ws.dir,

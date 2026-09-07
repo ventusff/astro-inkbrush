@@ -114,3 +114,25 @@ test('non-JSON lines around a valid result do not break a successful job', async
   assert.deepEqual(result, { ok: true, summary: 'done', sessionId: 's1' });
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('effort becomes --effort; the env overlay is laid over the allowlist, undefined removes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
+  // the child reports its argv and two environment variables through the result line
+  const bin = fakeBin(
+    dir,
+    `const seen = { argv: process.argv.slice(2), token: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null, dir: process.env.CLAUDE_CONFIG_DIR ?? null };
+console.log(JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify(seen), session_id: 's2' }));`,
+  );
+  process.env['CLAUDE_CODE_OAUTH_TOKEN'] = 'from-process';
+  try {
+    const result = await runClaudeJob(jobOpts(bin, dir, { effort: 'high', env: { CLAUDE_CONFIG_DIR: '/tmp/x', CLAUDE_CODE_OAUTH_TOKEN: undefined } }));
+    assert.equal(result.ok, true);
+    const seen = JSON.parse(result.ok ? result.summary : '{}') as { argv: string[]; token: string | null; dir: string | null };
+    assert.ok(seen.argv.includes('--effort') && seen.argv[seen.argv.indexOf('--effort') + 1] === 'high');
+    assert.equal(seen.token, null);
+    assert.equal(seen.dir, '/tmp/x');
+  } finally {
+    delete process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

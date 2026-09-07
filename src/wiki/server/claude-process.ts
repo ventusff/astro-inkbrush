@@ -48,6 +48,10 @@ export interface ClaudeJobOptions {
   bin: string;
   /** `--model` override; null = the CLI's own default */
   model: string | null;
+  /** `--effort` override; null = the CLI's own default */
+  effort?: string | null | undefined;
+  /** laid over the allowlisted environment; an undefined value removes the variable */
+  env?: Record<string, string | undefined> | undefined;
   prompt: string;
   mode: 'edit' | 'readonly';
   /** the job's working directory: the workspace */
@@ -94,15 +98,21 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       (opts.mode === 'edit' ? EDIT_RULES : READ_RULES).join(','),
       ...(opts.resume ? ['--resume', opts.resume] : []),
       ...(opts.model ? ['--model', opts.model] : []),
+      ...(opts.effort ? ['--effort', opts.effort] : []),
     ];
     // allowlisted environment: the child gets process basics, proxies and the
     // CLI's own ANTHROPIC_*/CLAUDE_* variables — never the server's secrets.
     // CLAUDECODE / CLAUDE_CODE_ENTRYPOINT are dropped: a fresh CLI, not a
-    // nested session.
+    // nested session. The caller's overlay (a credential, a state directory)
+    // is laid on last; an undefined value removes the variable.
     const env = childEnv({
       prefixes: ['ANTHROPIC_', 'CLAUDE_'],
       drop: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'],
     });
+    for (const [key, value] of Object.entries(opts.env ?? {})) {
+      if (value === undefined) delete env[key];
+      else env[key] = value;
+    }
 
     let sessionId: string | null = null;
     let finished = false;
