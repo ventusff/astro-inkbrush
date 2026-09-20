@@ -10,15 +10,19 @@
  * - CJK-friendly emphasis and strikethrough: markers hugging CJK punctuation
  *   (`**报文。**同时`) pair up.
  *
- * Parser extensions only, no transformers, so position in a plugin list is
- * irrelevant. The content guard (remarkContentGuard) is a transformer and is
- * mounted by the caller: page builds and save-time validation mount it, the
- * editor preview does not.
+ * Parser extensions, plus one read-only transformer: remarkBlockRanges
+ * records where each top-level block sits in the source, for the block
+ * stamper. A pipeline mounts the dialect first, so the record is taken from
+ * the freshly parsed tree. The content guard (remarkContentGuard) is a
+ * transformer too and is mounted by the caller: page builds and save-time
+ * validation mount it, the editor preview does not.
  */
 import type { RemarkPlugin } from '@astrojs/markdown-remark';
 import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkCjkFriendlyGfmStrikethrough from 'remark-cjk-friendly-gfm-strikethrough';
 import remarkGfm from 'remark-gfm';
+
+import { remarkBlockRanges } from './block-ranges.ts';
 
 /** satisfies both unified's PluggableList and Astro's RemarkPlugins — feed it to either */
 export type MarkdownSyntax = (RemarkPlugin | [RemarkPlugin, unknown])[];
@@ -26,5 +30,10 @@ export type MarkdownSyntax = (RemarkPlugin | [RemarkPlugin, unknown])[];
 const GFM = { singleTilde: false } as const;
 
 export function markdownSyntax(): MarkdownSyntax {
-  return [[remarkGfm, GFM], remarkCjkFriendly, [remarkCjkFriendlyGfmStrikethrough, GFM]];
+  return [
+    [remarkGfm, GFM],
+    remarkCjkFriendly,
+    [remarkCjkFriendlyGfmStrikethrough, GFM],
+    remarkBlockRanges as unknown as RemarkPlugin,
+  ];
 }

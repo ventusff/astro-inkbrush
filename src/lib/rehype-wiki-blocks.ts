@@ -37,7 +37,10 @@
  * neighbouring positioned siblings (e.g. KaTeX display blocks, whose nodes
  * carry no position), trimmed to non-empty source lines and never over a
  * range another block already owns (a footnote definition written after
- * the last block is not part of that block's gap).
+ * the last block is not part of that block's gap). Several position-less
+ * blocks in one gap (display formulas written back to back) each take the
+ * range the dialect recorded for them at parse time (lib/block-ranges.ts),
+ * in order.
  *
  * Stamps are pairwise disjoint by construction; lib/wiki-blocks-check.ts
  * states the invariants and check-content verifies them per note.
@@ -45,6 +48,7 @@
 import type { Root } from 'hast';
 import type { VFile } from 'vfile';
 
+import { recordedBlockRanges } from './block-ranges.ts';
 import { splitFrontmatter } from './frontmatter.ts';
 
 
@@ -194,26 +198,33 @@ export function rehypeWikiBlocks() {
     /** every range already owned by a block, for gap trimming */
     const owned: Pos[] = [...resolved.filter((p): p is Pos => p !== null), ...items.map((i) => i.pos)];
 
-    // pass 2: gap-fill nodes that still have no position from their
-    // neighbours, keeping clear of ranges other blocks own
+    // pass 2: gap-fill nodes that still have no position. A run is every
+    // such node between two positioned siblings; its gap is the lines
+    // between them, clear of ranges other blocks own. When the dialect
+    // recorded exactly one block per node inside the gap, each node takes
+    // its own; otherwise the first node takes the gap, as a lone node does.
+    const stampable = (node: AnyNode): boolean => stampsInPlace(node) || stampsByAnchor(node);
+    const posAt = (j: number): Pos | null => resolved[j] ?? ownPos(children[j]!);
+    const recorded = recordedBlockRanges(file as unknown as { data: Record<string, unknown> });
     for (let i = 0; i < children.length; i++) {
-      const node = children[i]!;
-      if (resolved[i] || (!stampsInPlace(node) && !stampsByAnchor(node))) continue;
+      if (resolved[i] || !stampable(children[i]!)) continue;
       let prevEnd = 0;
       for (let j = i - 1; j >= 0; j--) {
-        const p = resolved[j] ?? ownPos(children[j]!);
+        const p = posAt(j);
         if (p) {
           prevEnd = p.end;
           break;
         }
       }
+      const run: number[] = [];
       let nextStart = sourceLines.length + 1;
-      for (let j = i + 1; j < children.length; j++) {
-        const p = resolved[j] ?? ownPos(children[j]!);
+      for (let j = i; j < children.length; j++) {
+        const p = posAt(j);
         if (p) {
           nextStart = p.start;
           break;
         }
+        if (stampable(children[j]!)) run.push(j);
       }
       let start = prevEnd + 1;
       let end = nextStart - 1;
@@ -224,10 +235,13 @@ export function rehypeWikiBlocks() {
       // trim surrounding blank lines (1-based line numbers)
       while (start <= end && isBlank(sourceLines[start - 1])) start++;
       while (end >= start && isBlank(sourceLines[end - 1])) end--;
-      if (start <= end) {
-        resolved[i] = { start, end };
-        owned.push(resolved[i]!);
-      }
+      if (start > end) continue;
+      const inGap = recorded.filter((r) => r.start >= start && r.end <= end);
+      const ranges = run.length > 1 && inGap.length === run.length ? inGap : [{ start, end }];
+      ranges.forEach((range, k) => {
+        resolved[run[k]!] = range;
+        owned.push(range);
+      });
     }
 
     const stampOf = (pos: Pos): string => `${pos.start + offset}-${pos.end + offset}`;
