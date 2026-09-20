@@ -1,8 +1,9 @@
 /**
  * Save-time validation of a note's full source. The pipeline is the
- * dialect plus the site's own plugins — the same plugin sets the preview
- * renders with (./markdown.ts) — with two additions the page pipeline does
- * not have: the content guard (with the site's own guard options from the
+ * dialect plus the site's own plugins — its page pipeline (`markdown.page`)
+ * when the site declares one, else the plugin sets the preview renders
+ * with (./markdown.ts) — with two additions the page pipeline does not
+ * have: the content guard (with the site's own guard options from the
  * hooks, so the save gate refuses exactly what the build refuses), and
  * (for .mdx) an MDX compile. Math
  * (remark-math) follows the same rule as the preview: mounted only when the
@@ -37,7 +38,7 @@ export async function validateSource(file: string, source: string): Promise<stri
   const site = siteHooks();
   const root = projectRoot();
   const problem = await validateNoteSource(source, {
-    site,
+    site: site.page ?? site,
     guard: site.guard ?? {},
     frontmatter: site.frontmatter,
     mdx: file.endsWith('.mdx'),

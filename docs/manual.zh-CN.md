@@ -42,6 +42,12 @@ integrations: [inkbrush({
 })],
 ```
 
+管线里常有只对整篇成立的插件——标题编号和它的 `§` 交叉引用、阅读时长。
+预览渲染的是单个块,这些插件不进 `remarkPlugins` / `rehypePlugins`;把完整的
+页面管线写成 `markdown.page: { remarkPlugins, rehypePlugins }`,所有整篇关卡
+(手动保存、AI 任务、收件箱导入)就用它编译——指向一个没有编号的标题的交叉
+引用在保存时就被拒绝,而不是把页面弄坏。
+
 站点若还给 `markdownProcessor` 传了守门(guard)或 remark-rehype 选项,
 把同样的值也传进来(`markdown.guard`、`markdown.remarkRehype`),保存关卡
 就跑同一套。站点的内容集合 schema 以 `markdown.frontmatter` 传入——

@@ -26,7 +26,8 @@ export interface InkbrushOptions {
   /** the site's Markdown pipeline beyond the dialect: the remark/rehype
    *  plugins its pages use, its guard and remark-rehype options, and its
    *  note-id → URL rule. The editor preview, the save-time validation and
-   *  the AI gate run them too. */
+   *  the AI gate run them too; `page` names the full page pipeline for the
+   *  whole-note gates when the preview lists leave whole-note plugins out. */
   markdown?: SiteMarkdownHooks;
 }
 

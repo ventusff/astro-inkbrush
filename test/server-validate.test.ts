@@ -66,6 +66,19 @@ test("the site's rehype plugins run for both .md and .mdx", async () => {
   setSiteHooks(undefined);
 });
 
+test("a declared page pipeline replaces the preview lists in the whole-note gate", async () => {
+  const refuse = (message: string) => () => () => {
+    throw new Error(message);
+  };
+  setSiteHooks({ rehypePlugins: [], page: { rehypePlugins: [refuse('page pipeline refused')] } });
+  assert.match((await validateSource('a/index.md', 'text')) ?? '', /page pipeline refused/);
+  assert.match((await validateSource('a/index.mdx', 'text')) ?? '', /page pipeline refused/);
+  // the preview lists alone would have passed it
+  setSiteHooks({ rehypePlugins: [] });
+  assert.equal(await validateSource('a/index.md', 'text'), null);
+  setSiteHooks(undefined);
+});
+
 test('the message names the file project-relative, never by its absolute path', async () => {
   const cwd = projectRoot();
   const escaped = new RegExp(cwd.replaceAll('\\', '\\\\'));

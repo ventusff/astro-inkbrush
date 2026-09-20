@@ -48,6 +48,14 @@ integrations: [inkbrush({
 })],
 ```
 
+A pipeline often carries plugins that only hold for a whole note — heading
+numbering with its `§` cross-references, reading time. The preview renders
+one block, so those stay out of `remarkPlugins` / `rehypePlugins`; name the
+full page pipeline as `markdown.page: { remarkPlugins, rehypePlugins }` and
+every whole-note gate (manual save, AI job, inbox import) compiles with it —
+a cross-reference to a heading that carries no number is refused at save
+time instead of breaking the page.
+
 A site that also passes `guard` options or `remark-rehype` options to
 `markdownProcessor` hands the same values here (`markdown.guard`,
 `markdown.remarkRehype`) so the save gate runs them too. Its

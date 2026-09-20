@@ -12,12 +12,20 @@ import type { PluggableList } from 'unified';
 
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 import type { FrontmatterSchema } from '../../lib/frontmatter-schema.ts';
+import type { SitePluginSet } from '../../lib/render-pipeline.ts';
 
 export interface SiteMarkdownHooks {
   /** the site's remark plugins, mounted after the dialect (as in its pipeline) */
   remarkPlugins?: PluggableList | undefined;
   /** the site's rehype plugins, mounted before sanitising/stringifying */
   rehypePlugins?: PluggableList | undefined;
+  /** the site's full page pipeline, when `remarkPlugins` / `rehypePlugins`
+   *  leave out plugins that only hold for a whole note (heading numbering
+   *  and its cross-references, reading time): the editor preview renders a
+   *  fragment and keeps the lists above, every whole-note gate — manual
+   *  save, AI job, inbox import — compiles with these instead, so it
+   *  refuses what the page build refuses. Omitted = the lists above. */
+  page?: SitePluginSet | undefined;
   /** the site's content-guard options (the `guard` it passes to
    *  markdownProcessor), so the save gate refuses exactly what the build
    *  refuses; omitted = the guard's defaults */

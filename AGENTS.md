@@ -39,7 +39,9 @@ npm test
   own remark/rehype plugins, its note-id → URL rule and its frontmatter
   schema (`frontmatter`: any Standard Schema — an `astro/zod` schema as it
   is), so the editor preview, the save-time validation and the AI gate
-  render and refuse a note the way the page build does. Dev-mode only; it must inject **nothing** outside WIKI
+  render and refuse a note the way the page build does; `markdown.page`
+  names the full page pipeline for the whole-note gates when the preview
+  lists leave whole-note plugins (heading numbering) out. Dev-mode only; it must inject **nothing** outside WIKI
   mode — byte-identical builds are the hard line.
 - `rehypeWikiBlocks`: sites add it (WIKI mode only) to their pipeline for
   block ↔ source-line mapping.
