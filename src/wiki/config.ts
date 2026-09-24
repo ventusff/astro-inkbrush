@@ -93,6 +93,40 @@ export interface ShareGatewayConfig {
   followIdleMinutes?: number;
 }
 
+/** a wiki this one publishes notes to (syndication) */
+export interface SyndicationPeerConfig {
+  /** peer id: lowercase letters, digits and dashes; unique; the key of a
+   *  note's per-peer overrides (`syndication.<id>`) */
+  id: string;
+  /** display title, e.g. 'Chaser Wiki' */
+  title: string;
+  /** git URL of the peer's content repository, e.g.
+   *  'git@github.com:org/wiki.git'; git runs with the server's own
+   *  environment (ssh config, credential helper), as autopush does */
+  repo: string;
+  /** the peer's published branch (default 'main') */
+  branch?: string;
+  /** the notes root inside the peer repository (default '' = the repo root) */
+  contentDir?: string;
+  /** URL template of a copy's page on the peer, with `{id}` for the note
+   *  id: 'https://wiki.example.com/wiki/{id}/' */
+  url: string;
+  /** the locale prefixes the peer serves besides its default locale
+   *  (default: this wiki's own table) */
+  locales?: string[];
+  /** classification values as the peer spells them: field → this wiki's
+   *  value → the peer's (null drops the value) */
+  map?: Record<string, Record<string, string | null>>;
+}
+
+export interface SyndicationConfig {
+  /** how this wiki names itself on peers: copies carry it as `origin.wiki`
+   *  and staging branches live under `syndicate/<name>/`; lowercase
+   *  letters, digits and dashes */
+  name: string;
+  peers: SyndicationPeerConfig[];
+}
+
 export interface IdentityConfig {
   /** directory holding users.json (supports `~/` and paths relative to the
    *  site root); configuring this section = enabling the identity registry.
@@ -213,6 +247,9 @@ export interface WikiConfigInput {
    *  to a snapshot gateway); `false` or omitted = off (routes 404, button not
    *  mounted — zero behaviour change) */
   share?: false | ShareGatewayConfig;
+  /** publishing notes to other inkbrush wikis through their git
+   *  repositories; omitted = off (routes 404, no peer chip) */
+  syndication?: SyndicationConfig;
 }
 
 /** fully resolved config — defaults + env overrides applied (server/config.ts) */
@@ -263,6 +300,21 @@ export interface WikiConfig {
   /** false = share module off (the token only ever lives in the
    *  SHARE_GATEWAY_TOKEN env var) */
   share: false | { gatewayUrl: string; publicBase: string; prewarm: boolean; followIdleMinutes: number };
+  /** `peers` empty = syndication off; `name` is null only then */
+  syndication: { name: string | null; peers: readonly SyndicationPeer[] };
+}
+
+/** a resolved peer: `contentDir` is '' or ends with '/', `locales` are the
+ *  prefixes the peer serves with '' first */
+export interface SyndicationPeer {
+  id: string;
+  title: string;
+  repo: string;
+  branch: string;
+  contentDir: string;
+  url: string;
+  locales: readonly string[];
+  map: Record<string, Record<string, string | null>>;
 }
 
 /** identity helper — gives the root inkbrush.config.ts type checking + completion */

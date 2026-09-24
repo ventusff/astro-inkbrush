@@ -79,6 +79,16 @@ yourself in the browser on the
   into a static bundle and publish it through a tiny gateway API you can
   implement in an afternoon: behind a password, for anyone with the link,
   or fully public at a readable address.
+- 🔁 **Syndication** — publish a note (with its sub-pages, demos,
+  attachments and translations) to another inkbrush wiki and keep it there
+  as a read-only copy that points back home. The two wikis never talk: the
+  copy travels as a commit on a staging branch of the peer's git
+  repository, the peer's own CI runs the engine's gate script on it — its
+  own checks, on exactly the commit that would land — and either promotes
+  it to the published branch or records a verdict the origin reads back.
+  Classification values are mapped per peer, links that would break
+  degrade to text and are reported, and every state (current, behind,
+  changed on the peer, pending, refused) derives from the peer's refs.
 - 🧾 **A Markdown dialect with a conscience** — GFM + CJK-friendly
   emphasis, defined once and used in three places (page rendering, save
   validation, editor preview), plus a build-time **content guard** that

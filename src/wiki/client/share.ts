@@ -564,7 +564,7 @@ export function mountShare(pageCtx: PageContext): void {
   if (state === 'off') return;
   const noteId = pageCtx.meta.id;
 
-  const dot = h('span', { class: 'wiki-share-dot', hidden: true });
+  const dot = h('span', { class: 'wiki-dot', hidden: true });
   const btn = h(
     'button',
     {

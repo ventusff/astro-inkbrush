@@ -41,7 +41,7 @@ import type { RouteRegistrar } from './index.ts';
 import { fail, ndjsonStream, readBody } from './index.ts';
 import { blockEditViolation, revisionSpan, translateViolation } from './job-postconditions.ts';
 import { askPrompt, blockEditPrompt, translatePrompt } from './prompts.ts';
-import { autocommit, journalRevision, noteDir, noteFile, noteMeta, validateSource } from './source.ts';
+import { autocommit, copyOrigin, copyRefusal, journalRevision, noteDir, noteFile, noteMeta, validateSource } from './source.ts';
 import { createWorkspace, type Workspace, type WorkspaceChange } from './workspace.ts';
 
 /* ---------------- capacity & session ownership ---------------- */
@@ -328,6 +328,8 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       // re-checks everything against the file as it is when it starts
       const located = noteFile(id);
       if (!noteMeta(id) || !located) return fail(res, 404, 'Note not found');
+      const copy = copyOrigin(id);
+      if (copy) throw copyRefusal(copy);
       const lineCount = readFileSync(located.file, 'utf8').split('\n').length;
       if (start! < 1 || end! < start! || end! > lineCount) return fail(res, 416, 'line range outside the file');
       const saturated = saturationError(user!.email);
@@ -477,6 +479,9 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const meta = noteMeta(id);
       const located = noteFile(id);
       if (!meta || !located) return fail(res, 404, 'Note not found');
+      // a translation would add a locale root to the copy
+      const copy = copyOrigin(id);
+      if (copy) throw copyRefusal(copy);
       // default target: the default (unprefixed) locale — or, when the note
       // is already in it, the first other locale of the table
       const locales = wikiConfig().content.locales;

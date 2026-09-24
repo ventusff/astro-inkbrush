@@ -1,16 +1,11 @@
 /**
- * Note identity primitives: the id grammar and frontmatter field access.
- * Kept free of config/server imports so both are unit-testable.
+ * Note identity primitives: the id grammar (lib/note-id.ts) and
+ * frontmatter field access. Kept free of config/server imports so both
+ * are unit-testable.
  */
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
 
-/**
- * A note id: slash-separated segments of Unicode letters, numbers, `_`,
- * `.` and `-`; a segment never starts with `.` or `-` (no hidden files, no
- * option-looking names) and never is empty. Matches what the content
- * scanner discovers, so every scanned note is also addressable.
- */
-export const NOTE_ID = /^[\p{L}\p{N}_][\p{L}\p{N}_.-]*(\/[\p{L}\p{N}_][\p{L}\p{N}_.-]*)*$/u;
+export { NOTE_ID } from '../../lib/note-id.ts';
 
 /**
  * A scalar frontmatter field of `source`, read through the shared splitter

@@ -12,7 +12,7 @@
  * toggle); with no slot it falls back to a fixed top-right position, tunable
  * via `--wiki-chip-top` / `--wiki-chip-right`.
  */
-import type { GoogleAuthState, MeResponse, WikiUser } from '../shared/types';
+import type { GoogleAuthState, MeResponse, SyndicationPeerInfo, WikiUser } from '../shared/types';
 import { api } from './api';
 import { S } from './strings';
 import { dismissPopover, h, popover, toast, uid } from './ui';
@@ -27,6 +27,11 @@ export function currentUser(): WikiUser | null {
 /** share module availability as reported by /me (valid after mountAuthChip) */
 export function shareAvailability(): GoogleAuthState {
   return me.share;
+}
+
+/** the wikis this one publishes to, as reported by /me (empty = none) */
+export function syndicationPeers(): SyndicationPeerInfo[] {
+  return me.syndication?.peers ?? [];
 }
 
 /** AI availability as reported by /me — absent means available (see MeResponse.ai) */
@@ -201,7 +206,8 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
         class: 'wiki-btn',
         onclick: async () => {
           await api.post('/logout');
-          me = { user: null, providers: me.providers, share: me.share };
+          // refetch /me so every deployment-level field survives the sign-out
+          me = await api.get<MeResponse>('/me').catch(() => ({ ...me, user: null }));
           notify();
           rerender();
           dismissPopover();

@@ -173,10 +173,18 @@ const MASKED_TYPES = new Set([
 /** JSX elements: the tags (with their attributes) are not prose, the children are */
 const JSX_TYPES = new Set(['mdxJsxFlowElement', 'mdxJsxTextElement']);
 
-interface PositionedNode {
+/** a node of the parsed source as the dialect's parser positions it; the
+ *  fields beyond `type`, `position` and `children` are read structurally
+ *  by consumers that know the node type (`url` on links and images,
+ *  `attributes` on JSX elements) */
+export interface SourceNode {
   type: string;
   position?: { start: { offset?: number | undefined }; end: { offset?: number | undefined } };
-  children?: PositionedNode[];
+  children?: SourceNode[];
+  url?: string;
+  /** a reference (`[text][ref]`) or definition (`[ref]: url`): the normalized label */
+  identifier?: string;
+  attributes?: Array<{ type: string; name?: string; value?: unknown }>;
 }
 
 export interface MaskOptions {
@@ -208,7 +216,7 @@ function blankRange(chars: string[], start: number, end: number): void {
   }
 }
 
-function offsetsOf(node: PositionedNode): [number, number] | null {
+function offsetsOf(node: SourceNode): [number, number] | null {
   const start = node.position?.start.offset;
   const end = node.position?.end.offset;
   return start !== undefined && end !== undefined ? [start, end] : null;
@@ -219,19 +227,28 @@ function offsetsOf(node: PositionedNode): [number, number] | null {
  * is cut by a table-cell boundary (a `[[…]]` spanning two cells is two
  * fragments of text to the parser, never one wikilink).
  */
+/**
+ * The source parsed by the dialect's parser with its frontmatter block
+ * blanked (offsets unchanged), as a positioned tree. With `mdx: true` the
+ * MDX grammar applies; MDX that does not parse falls back to the
+ * CommonMark reading, so parsing never throws.
+ */
+export function parseSourceTree(source: string, options: MaskOptions = {}): SourceNode {
+  const text = splitFrontmatter(source).body;
+  try {
+    return parserFor(options.mdx === true).parse(text) as unknown as SourceNode;
+  } catch {
+    return parserFor(false).parse(text) as unknown as SourceNode;
+  }
+}
+
 function proseOf(source: string, options: MaskOptions): { masked: string; cuts: number[] } {
   const chars = source.split('');
   const cuts: number[] = [];
   const fm = splitFrontmatter(source);
   if (fm.present) blankRange(chars, fm.start, fm.end);
-  const text = chars.join('');
-  let tree: PositionedNode;
-  try {
-    tree = parserFor(options.mdx === true).parse(text) as unknown as PositionedNode;
-  } catch {
-    tree = parserFor(false).parse(text) as unknown as PositionedNode;
-  }
-  const walk = (node: PositionedNode): void => {
+  const tree = parseSourceTree(source, options);
+  const walk = (node: SourceNode): void => {
     const range = offsetsOf(node);
     if (MASKED_TYPES.has(node.type)) {
       const kept = options.keepMath === true && (node.type === 'math' || node.type === 'inlineMath');

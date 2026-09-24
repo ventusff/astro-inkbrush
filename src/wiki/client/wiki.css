@@ -99,6 +99,8 @@
 .wiki-toasts *,
 .wiki-share-slot,
 .wiki-share-slot *,
+.wiki-sync-slot,
+.wiki-sync-slot *,
 .wiki-fab {
   box-sizing: border-box;
 }
@@ -122,7 +124,10 @@
 .wiki-handle button[hidden],
 .wiki-ai-quick[hidden],
 .wiki-ai-log[hidden],
-.wiki-share-slot[hidden] {
+.wiki-share-slot[hidden],
+.wiki-sync-slot[hidden],
+.wiki-btn[hidden],
+.wiki-dot[hidden] {
   display: none;
 }
 
@@ -140,7 +145,13 @@
 .wiki-members-remove:focus-visible,
 .wiki-comment-del:focus-visible,
 .wiki-comment-signin button:focus-visible,
-.wiki-history-diff summary:focus-visible {
+.wiki-history-diff summary:focus-visible,
+.wiki-share-change summary:focus-visible,
+.wiki-sync-fold summary:focus-visible,
+.wiki-sync-link:focus-visible,
+.wiki-sync-linkbtn:focus-visible,
+.wiki-sync-row-title:focus-visible,
+.wiki-sync-problems:focus-visible {
   outline: 2px solid var(--wiki-focus);
   outline-offset: 2px;
 }
@@ -281,6 +292,16 @@
 }
 .wiki-btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
+}
+/* the answer to a question whose action cannot be taken back */
+.wiki-btn-danger {
+  background: var(--wiki-danger);
+  border-color: var(--wiki-danger);
+  color: var(--wiki-on-accent);
+}
+.wiki-btn-danger:hover:not(:disabled) {
+  border-color: var(--wiki-danger);
+  filter: brightness(1.08);
 }
 .wiki-btn-google .wiki-g-mark {
   font: 700 12px/1 var(--wiki-font);
@@ -1154,6 +1175,60 @@ select.wiki-members-role {
   }
 }
 
+/* ---------------- state dots ---------------- */
+
+/* One vocabulary for the outward chips (share, syndication) and the rows
+   listing their targets. Tokens only: teal is calm (current), the accent
+   asks for a look (stale), a hollow pulsing teal ring waits on someone
+   else (checking), danger is a conflict — drawn as a diamond, so it never
+   relies on hue alone next to the accent — and faint is out of play
+   (pinned, off). */
+.wiki-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wiki-faint);
+}
+.wiki-dot[data-state='current'] {
+  background: var(--wiki-ai);
+}
+.wiki-dot[data-state='stale'] {
+  background: var(--wiki-accent);
+}
+.wiki-dot[data-state='checking'] {
+  background: var(--wiki-surface);
+  box-shadow: inset 0 0 0 1.6px var(--wiki-ai);
+  animation: wiki-dot-pulse 1.6s ease-in-out infinite;
+}
+.wiki-dot[data-state='conflict'] {
+  background: var(--wiki-danger);
+  border-radius: 1px;
+  transform: rotate(45deg) scale(0.9);
+}
+.wiki-dot[data-state='pinned'],
+.wiki-dot[data-state='off'] {
+  background: var(--wiki-faint);
+}
+@keyframes wiki-dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wiki-dot[data-state='checking'] {
+    animation: none;
+  }
+}
+/* on a chip the dot rides the top-right corner, ringed off the chip */
+.wiki-chip > .wiki-dot {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  border: 1.5px solid var(--wiki-surface);
+}
+
 /* ---------------- share module ---------------- */
 
 .wiki-share-slot {
@@ -1172,32 +1247,8 @@ select.wiki-members-role {
   opacity: 0.55;
   cursor: not-allowed;
 }
-/* the active share's state rides on the chip: current · unpublished
-   changes · pinned. Tokens only — teal is calm, the accent asks for a look */
 .wiki-share-chip {
   position: relative;
-}
-.wiki-share-dot {
-  position: absolute;
-  top: 2px;
-  right: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  border: 1.5px solid var(--wiki-surface);
-  background: var(--wiki-faint);
-}
-.wiki-share-dot[data-state='current'] {
-  background: var(--wiki-ai);
-}
-.wiki-share-dot[data-state='stale'] {
-  background: var(--wiki-accent);
-}
-.wiki-share-dot[data-state='pinned'] {
-  background: var(--wiki-faint);
-}
-.wiki-share-dot[hidden] {
-  display: none;
 }
 .wiki-share-stale {
   color: var(--wiki-on-surface);
@@ -1331,6 +1382,259 @@ select.wiki-members-role {
 .wiki-share-revoke:hover:not(:disabled) {
   border-color: var(--wiki-danger);
   color: var(--wiki-danger);
+}
+
+/* ---------------- syndication ---------------- */
+
+.wiki-sync-slot {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wiki-sync-chip {
+  position: relative;
+  gap: 6px;
+  padding: 3px 11px;
+}
+.wiki-sync-chip svg {
+  width: 13px;
+  height: 13px;
+}
+.wiki-popover:has(.wiki-sync-panel) {
+  min-width: 300px;
+}
+/* one fieldset holds a popover's controls: disabling it pauses them all */
+.wiki-sync-view {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.wiki-sync-panel,
+.wiki-sync-block,
+.wiki-sync-overrides,
+.wiki-sync-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wiki-sync-panel {
+  gap: 10px;
+}
+.wiki-sync-standing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 500 13px/1.4 var(--wiki-font);
+  color: var(--wiki-on-surface);
+}
+.wiki-sync-hint {
+  font: 400 12px/1.55 var(--wiki-font);
+  color: var(--wiki-muted);
+}
+.wiki-sync-confirm .wiki-sync-hint {
+  color: var(--wiki-on-surface);
+}
+.wiki-sync-alert,
+.wiki-sync-hint.wiki-sync-alert {
+  color: var(--wiki-danger);
+}
+.wiki-sync-mono {
+  font-family: var(--wiki-mono);
+  font-size: 11.5px;
+}
+.wiki-sync-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font: 400 12px/1.5 var(--wiki-font);
+  color: var(--wiki-muted);
+}
+.wiki-sync-link {
+  color: var(--wiki-accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+.wiki-sync-link:hover {
+  text-decoration: underline;
+}
+.wiki-sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* an answer keeps its label on one line; the pair wraps when it has to */
+.wiki-sync-actions .wiki-btn {
+  flex: 1 1 auto;
+  width: auto;
+  white-space: nowrap;
+}
+.wiki-sync-problems,
+.wiki-sync-errline {
+  margin: 0;
+  border-radius: 6px;
+  background: var(--wiki-code-bg);
+  color: var(--wiki-on-surface);
+  font: 400 11.5px/1.5 var(--wiki-mono);
+  overflow-wrap: anywhere;
+}
+.wiki-sync-problems {
+  max-height: 11em;
+  overflow: auto;
+  padding: 6px 8px 6px 22px;
+}
+.wiki-sync-problems li + li {
+  margin-top: 3px;
+}
+.wiki-sync-errline {
+  padding: 6px 8px;
+}
+.wiki-sync-warning {
+  padding-left: 8px;
+  border-left: 2px solid var(--wiki-accent);
+  font: 400 12px/1.5 var(--wiki-font);
+  color: var(--wiki-on-surface);
+}
+.wiki-sync-fold summary {
+  cursor: pointer;
+  font: 500 12px/1.5 var(--wiki-font);
+  color: var(--wiki-muted);
+  list-style: none;
+}
+.wiki-sync-fold summary::-webkit-details-marker {
+  display: none;
+}
+.wiki-sync-fold summary::before {
+  content: '▸ ';
+}
+.wiki-sync-fold[open] summary::before {
+  content: '▾ ';
+}
+.wiki-sync-fold[open] summary {
+  margin-bottom: 8px;
+}
+.wiki-sync-list {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 9em;
+  overflow: auto;
+  font: 400 12px/1.5 var(--wiki-font);
+  color: var(--wiki-on-surface);
+  overflow-wrap: anywhere;
+}
+.wiki-sync-where {
+  color: var(--wiki-faint);
+}
+.wiki-sync-fields dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+.wiki-sync-fields dl > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wiki-on-surface) 5%, transparent);
+  font: 400 12px/1.45 var(--wiki-font);
+}
+.wiki-sync-fields dt {
+  color: var(--wiki-faint);
+  font-size: 11px;
+}
+.wiki-sync-fields dd {
+  margin: 0;
+  color: var(--wiki-on-surface);
+}
+.wiki-sync-yaml {
+  font: 400 12px/1.5 var(--wiki-mono);
+}
+.wiki-sync-status {
+  font: 400 12px/1.55 var(--wiki-font);
+  color: var(--wiki-muted);
+  overflow-wrap: anywhere;
+}
+.wiki-sync-status:empty {
+  display: none;
+}
+.wiki-sync-body > .wiki-sync-status {
+  margin-top: 8px;
+}
+.wiki-sync-footer {
+  display: flex;
+  padding-top: 8px;
+  border-top: 1px solid var(--wiki-line);
+}
+.wiki-sync-linkbtn {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: 500 12px/1.4 var(--wiki-font);
+  color: var(--wiki-accent);
+  cursor: pointer;
+}
+.wiki-sync-linkbtn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.wiki-sync-linkbtn:disabled {
+  color: var(--wiki-faint);
+  cursor: not-allowed;
+}
+/* the overview: one row per synced note */
+.wiki-sync-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: min(50vh, 360px);
+  overflow: auto;
+}
+.wiki-sync-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 9px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--wiki-line);
+}
+.wiki-sync-row:last-child {
+  border-bottom: 0;
+}
+.wiki-sync-row > .wiki-dot {
+  align-self: start;
+  margin-top: 6px;
+}
+.wiki-sync-row-main {
+  min-width: 0;
+}
+.wiki-sync-row-title {
+  font: 500 13px/1.35 var(--wiki-font);
+  color: var(--wiki-on-surface);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+a.wiki-sync-row-title:hover {
+  text-decoration: underline;
+}
+.wiki-sync-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  font: 400 11.5px/1.5 var(--wiki-font);
+  color: var(--wiki-faint);
+}
+.wiki-sync-row-note {
+  font: 400 11.5px/1.45 var(--wiki-font);
+  color: var(--wiki-muted);
+  overflow-wrap: anywhere;
+}
+.wiki-sync-rowbtn {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 /* ============================================================

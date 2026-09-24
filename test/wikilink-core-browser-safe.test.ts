@@ -1,9 +1,10 @@
 /**
  * wikilink-core is the module browser bundles load (the playground's
  * activation chunk, browser-side render pipelines): it must stay free of
- * imports — no Node builtins, no parser construction, no frontmatter
- * dependency — and wikilinks.ts must keep re-exporting it, so the public
- * astro-inkbrush/wikilinks surface is unchanged.
+ * Node builtins, parser construction and the frontmatter dependency — its
+ * one import is the browser-safe HTML entity table the recognizer reads
+ * character references with — and wikilinks.ts must keep re-exporting it,
+ * so the public astro-inkbrush/wikilinks surface is unchanged.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,11 +13,12 @@ import { test } from 'node:test';
 import * as core from '../src/lib/wikilink-core.ts';
 import * as full from '../src/lib/wikilinks.ts';
 
-test('wikilink-core imports nothing', () => {
+test('wikilink-core imports nothing but the browser-safe entity table', () => {
   const src = readFileSync(new URL('../src/lib/wikilink-core.ts', import.meta.url), 'utf8');
   const imports = [...src.matchAll(/^import\s[^;]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert.deepEqual(imports, []);
+  assert.deepEqual(imports, ['decode-named-character-reference']);
   assert.doesNotMatch(src, /\bimport\(/);
+  assert.doesNotMatch(src, /from 'node:/);
 });
 
 test('wikilinks re-exports the core and keeps the scanner and extractor', () => {

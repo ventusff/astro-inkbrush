@@ -351,3 +351,16 @@ test('defaultSlugify lowercases, hyphenates and keeps CJK', () => {
   assert.equal(defaultSlugify('第 2 节 · 概述'), '第-2-节-概述');
   assert.equal(defaultSlugify('!!!'), 'section');
 });
+
+test('an escaped opener on a continuation line — indented in a list item, behind a blockquote marker — stays literal', () => {
+  const source = '- item\n  \\[[Escaped]] and [[Real]]\n\n> quote\n> \\[[Escaped]] again\n';
+  const tree = unified().use(remarkParse).parse(source) as never;
+  remarkWikilinks({ resolve: () => ({ kind: 'ok', id: 'real', url: '/real/', title: 'Real' }) })(tree, { value: source });
+  const links: string[] = [];
+  const walk = (n: { type: string; url?: string; children?: unknown[] }): void => {
+    if (n.type === 'link' && n.url) links.push(n.url);
+    (n.children as { type: string; url?: string; children?: unknown[] }[] | undefined)?.forEach(walk);
+  };
+  walk(tree);
+  assert.deepEqual(links, ['/real/']);
+});

@@ -157,3 +157,26 @@ test('--frontmatter on the CLI: findings fail the run; an unloadable schema modu
   assert.equal(await main([FRONTMATTER, '--frontmatter', fileURLToPath(new URL('./fixtures/frontmatter-schema-none.mjs', import.meta.url))]), 2);
   assert.equal(await main([FRONTMATTER, '--frontmatter']), 2);
 });
+
+test('the report — per-file findings and the summary line — goes to stdout; usage errors stay on stderr', async () => {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = async (...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> => {
+    try {
+      const { stdout, stderr } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/check-content.mjs', import.meta.url)), ...args]);
+      return { code: 0, stdout, stderr };
+    } catch (err) {
+      const e = err as { code?: number; stdout?: string; stderr?: string };
+      return { code: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+    }
+  };
+  const findings = await run(CONTENT, '--glob', 'bad-yaml/index.md', '--glob', 'good/index.md');
+  assert.equal(findings.code, 1);
+  assert.match(findings.stdout, /✗ bad-yaml\/index\.md/);
+  assert.match(findings.stdout, /1\/2 files have problems/);
+  assert.doesNotMatch(findings.stderr, /files have problems|✗ bad-yaml/);
+  const usage = await run(CONTENT, '--glob');
+  assert.equal(usage.code, 2);
+  assert.match(usage.stderr, /requires a value/);
+  assert.equal(usage.stdout, '');
+});

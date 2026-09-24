@@ -16,8 +16,7 @@
  */
 import { readFileSync, statSync } from 'node:fs';
 
-import { SAML, type Profile } from '@node-saml/node-saml';
-import { ValidateInResponseTo } from '@node-saml/node-saml/lib/types';
+import { SAML, ValidateInResponseTo, type Profile } from '@node-saml/node-saml';
 
 import type { GoogleAuthState } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';

@@ -206,6 +206,13 @@ vault-relative path and of the file name — either match skips the file;
 Publish a single note as a **password-gated static snapshot** on a gateway
 you host — see [Sharing & the gateway contract](#sharing--the-gateway-contract).
 
+### Syndication
+
+Publish a note to another inkbrush wiki and keep it there as a read-only
+copy that points back home — through the peer's git repository and its own
+CI, never through a connection between the two servers. See
+[Syndication: publishing to another wiki](#syndication-publishing-to-another-wiki).
+
 ### The account chip
 
 Shows the signed-in user (and role, when the identity registry is on),
@@ -247,6 +254,7 @@ export default defineInkbrushConfig({
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
+  // syndication: { name: 'vortex-wiki', peers: [{ id: 'chaser', title: 'Chaser Wiki', repo: 'git@github.com:acme/wiki.git', url: 'https://wiki.acme.com/wiki/{id}/' }] },
 });
 ```
 
@@ -270,11 +278,15 @@ export default defineInkbrushConfig({
 | `share.prewarm` | `false` | Keep the snapshot build warm in the background — [sharing](#sharing--the-gateway-contract) |
 | `share.followIdleMinutes` | `20` | A share republishes once its note has been quiet this long; `0` = publish by hand only — [sharing](#sharing--the-gateway-contract) |
 | `server.trustProxy` | `false` | Honor `x-forwarded-host`/`-proto` when deriving the server's own origin — set it exactly when a reverse proxy fronts the editor |
+| `syndication.name` | — | How this wiki names itself on its peers (`origin.wiki` of its copies, the `syndicate/<name>/` branch namespace); required once peers exist — [syndication](#syndication-publishing-to-another-wiki) |
+| `syndication.peers` | `[]` | The wikis this one publishes to: `{ id, title, repo, branch?, contentDir?, url, locales?, map? }` — [syndication](#syndication-publishing-to-another-wiki) |
 
 The configuration is validated at startup: a malformed cookie name or
 domain, a `trustedOrigins` entry that is not a bare origin, a non-http(s)
-provider or gateway URL, an absolute `content.dir`, or `autopush` without
-`autocommit` refuses to start, naming the field.
+provider or gateway URL, an absolute `content.dir`, `autopush` without
+`autocommit`, or a syndication peer without a `{id}` page URL, a
+well-formed unique id or a wiki name to publish under refuses to start,
+naming the field.
 
 Edits to the config apply on the next request (the server hot-reloads) —
 except the inbox watch directory, which is created at dev-server startup and
@@ -338,8 +350,9 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_SHARE_PREWARM` | `share.prewarm` (`0`/`1`) |
 | `WIKI_SHARE_FOLLOW_IDLE_MINUTES` | `share.followIdleMinutes` |
 
-`content.dir` and `content.locales` have no env override — they are
-config-file decisions. Enabling a provider is also always a config-file
+`content.dir`, `content.locales` and `syndication` have no env override —
+they are config-file decisions (and syndication has no secret at all: git
+runs with the server's own environment). Enabling a provider is also always a config-file
 decision; env vars only override fields of a provider the config enabled.
 
 **Secrets are env-only and never enter the config file**:
@@ -551,6 +564,349 @@ public share carries no robots header, a canonical link, and a place in
 `/sitemap.xml` (which `/robots.txt` points at). The gateway never sees a
 plaintext password and holds no accounts.
 
+## Syndication: publishing to another wiki
+
+A note written in one inkbrush wiki can be **published to another** — a
+*peer* — and kept there as a **copy** the peer serves as its own page. The
+note stays owned by its *origin*: the copy is read-only on the peer, it
+records where it came from, and from the origin's note page you see whether
+the copy exists, whether it is current, whether someone touched it on the
+peer, whether the peer is still checking it or refused it — and can publish
+the current version or withdraw the copy in one click. The IndieWeb name
+for this is syndication: the original is canonical, copies point back.
+
+### What travels: the unit
+
+A note is published together with everything that belongs to it — the
+**unit**: the top-level note's directory (hub sub-pages, demo modules,
+attachments) plus the same directory under every locale prefix
+(`chasing/`, `en/chasing/`, `de/chasing/`). A unit is named by its
+top-level id and exists iff `<unit>/index.{md,mdx}` exists. A copy lives at
+exactly the id its original has — no renaming, so links between copies,
+attachment URLs and `demo="<id>/…"` props stay valid unchanged. If the peer
+already holds a note of its own at that id, publishing there **adopts** it
+(replaces it) only when you say so explicitly.
+
+### The two frontmatter fields (declare them in your schema)
+
+```yaml
+# on an original — optional
+syndication: false            # this note is never published anywhere
+# or
+syndication:
+  chaser:                     # a peer id from syndication.peers
+    domains: [infra, llm]     # in the copy on that peer, these fields take these values
+    kind: essay               # (null removes the field from the copy)
+
+# on a copy — stamped by the origin before it commits the copy, always the last key
+origin:
+  wiki: vortex-wiki           # the origin's syndication.name
+  revision: 3f9c2a1b7d4e5f60  # digest of the copy's content
+  synced: 2026-09-23T10:21:07Z
+```
+
+`syndication: false` on any note of the unit refuses the whole unit; the
+field never reaches a copy. A note carrying `origin` is a copy: the engine
+refuses every local edit of its unit (block save, revert, AI edit,
+translation — 423 with `code: 'copy'`), and an origin never publishes a
+copy onward. Both fields are engine-defined; add them to the content repo's
+schema (`_meta/schema.ts` in the zod-factory shape):
+
+```ts
+syndication: z.union([z.literal(false), z.record(z.string(), z.record(z.string(), z.unknown()))]).optional(),
+origin: z.object({ wiki: z.string().min(1), revision: z.string().regex(/^[0-9a-f]{16}$/), synced: z.coerce.date() }).optional(),
+```
+
+### What the copy is: the transform
+
+The copy differs from the original in exactly three ways, all decided at
+the origin from what it knows of both wikis:
+
+- **Frontmatter.** The peer's `map` rewrites classification values
+  (`map: { domains: { ai: 'llm', internal: null } }` → `[ai, internal, x]`
+  becomes `[llm, x]`; lists fold duplicates); then the note's own
+  `syndication.<peer>` overrides replace whole fields; then `syndication`
+  is removed. Each change is a surgical edit of that one key — every other
+  byte of the frontmatter stays as written.
+- **Wikilinks.** A link the peer will resolve to the same note stays as
+  written; one the peer would resolve elsewhere (a title the peer also
+  uses, a locale mirror it lacks) is rewritten to the explicit id; one
+  pointing at a note the peer will not have — outside this unit and not one
+  of this wiki's copies there — becomes its visible text, escaped, and is
+  listed in the plan.
+- **Root-relative links.** A Markdown link to such a note becomes its text;
+  an image or a JSX `href`/`src` is left alone and listed as a warning.
+
+Everything else — bodies, modules, attachments — passes byte-identical.
+The transform is deterministic, so the **revision** — sixteen hex characters
+of a digest over the unit's files (notes by their frontmatter as sorted
+JSON without `origin` plus their body; other files by git blob id) — is
+the same whoever computes it: a reformatted frontmatter or a stamped
+`origin` never changes it, a changed body or attachment always does.
+
+### The transport: the peer's git repository
+
+The two wikis' servers never talk to each other. A copy reaches the peer
+only through the peer's content repository, and lands on its published
+branch only through the peer's own CI:
+
+```
+origin                                       peer's repository (GitHub)               peer's CI
+──────                                       ──────────────────────────               ─────────
+.wiki/data/syndication/<peer>.git  ◀─fetch─  refs/heads/main            (the published tip)
+  (bare, partial: blobs > 1 MiB               refs/heads/syndicate/<name>/<unit>  ◀─── syndication-gate prepare
+   stay on the remote)                        refs/heads/syndication-verdicts     ◀─── syndication-gate finish
+publish ──commit on the tip──push──▶          refs/heads/syndicate/<name>/<unit>  ───▶ its own checks on the promoted commit
+                                                                                        ├─ ok:   push to main, delete the branch, remove <name>/<unit>.json
+                                                                                        └─ fail: <name>/<unit>.json on syndication-verdicts, delete the branch
+```
+
+1. **Publish** (`POST /syndication/<peer>/publish`): fetch the mirror,
+   decide from the peer's tip what is expected there (nothing; a copy at
+   its recorded revision; a native note, only with `adopt`; a changed copy,
+   only with `force`); transform the unit; run *this wiki's* body gates on
+   every note (the page pipeline, the guard, MDX compilation — never the
+   peer's schema, which is the peer's business); stamp `origin`; build one
+   commit on the peer's tip whose tree is the tip with the unit's
+   directories replaced (a temporary index in the bare mirror, so nothing
+   is checked out anywhere); push it with `--force` to
+   `syndicate/<name>/<unit>`; then wait for the gate — up to eight
+   minutes, polling every ten seconds — and answer with the copy's status.
+   The commit's author is the signed-in user (`Name <email>` — the
+   attribution the peer's history carries, by design), its committer the
+   server's git identity, and its message names the submission in
+   trailers the gate verifies:
+
+   ```
+   wiki: chasing synced from vortex-wiki (3f9c2a1b7d4e5f60)
+
+   Syndication-Origin: vortex-wiki
+   Syndication-Unit: chasing
+   Syndication-Action: publish            | withdraw
+   Syndication-Expect: none | adopt | <revision the origin saw>
+   Syndication-Revision: 3f9c2a1b7d4e5f60  (publish only)
+   Syndication-Force: yes                  (only when forced)
+   ```
+
+2. **Withdraw** (`POST /syndication/<peer>/withdraw`): the tip without the
+   unit's directories, pushed the same way; answers at once with the
+   pending submission (the client polls).
+
+3. **The gate** runs in the peer's CI on every push to `syndicate/**`
+   (see the workflow below), bound to the one commit the push delivered
+   (`--staged`). `prepare` re-derives everything from git: the branch
+   names an origin the repository accepts (`--origins`); the branch and
+   the trailers agree; the unit is a note unit of the peer (one id
+   segment; not `_meta`, `docs`, `inbox`, `node_modules`, a locale
+   segment or a dot name — the names the peer's discovery and checks
+   skip — and not a path that is a file on `main`); the commit changes
+   only the unit's directories, with regular files only (no symlink, no
+   submodule, no dot-prefixed path, no note directory holding both
+   index.md and index.mdx); every note carries `origin` with the
+   submitted revision and the files digest to it; the unit's state on the
+   *current* tip of `main` still allows the submission (the same rules
+   the origin applied, so a race with a concurrent change on the peer is
+   refused as `moved` or `changed`, never merged blind); then it builds
+   the **promoted commit** — the current tip with the unit's directories
+   replaced by the staged ones, same author and message — verifies that
+   it differs from the tip only under those directories, and checks it
+   out detached, so the peer's normal checks run on exactly the commit
+   that would land. Anything about the submission the gate cannot read is
+   a refusal too, never a stranded branch. `finish --ok` pushes that commit, as checked, to
+   `main`; a tip that moved meanwhile is refused with exit code 3 and the
+   workflow runs `prepare` and the checks again (up to three rounds) —
+   nothing unchecked is ever pushed. Then the staging branch is deleted
+   only if it still points at the checked commit (a newer submission
+   stays), and the unit's verdict file, if any, is removed. `finish
+   --fail` records the checks' output (up to 200 lines) about the checked
+   commit as `<name>/<unit>.json` on the peer's **`syndication-verdicts`**
+   branch — a commit on that branch's tip (a tip that moved means
+   rebuilding the one-file change), a branch the peer's rulesets keep
+   senders out of — and deletes the staging branch under the same lease.
+
+4. **States**, all derived from the mirror's refs — nothing is stored at
+   the origin that git does not already say: `absent` (the id is free),
+   `occupied` (the peer's own note; publishing adopts it), `foreign` (a copy
+   from another wiki; never touched), `current` (the copy's digest equals
+   its recorded revision equals what publishing now would send), `behind`
+   (intact, but the unit changed here), `changed` (edited on the peer after
+   receipt — its digest differs from its recorded revision; publishing
+   needs `force`). Alongside: a **submission**, named by its staged
+   commit — `pending` while the staging branch exists (whatever its commit
+   says), `rejected` while a verdict is still the answer: a refused
+   publish while what publishing now would send is the revision it
+   refused (a changed note or override makes it moot), a refused
+   withdrawal while the copy exists — with the gate's findings verbatim.
+
+### The peer side: `scripts/syndication-gate.mjs`
+
+Run by the peer's CI inside a checkout of its content repository's own
+published branch — never of the pushed branch: the submitted commit is
+read as git objects (fetched by sha when the checkout lacks them), and
+the only content that reaches the working tree is the promoted commit
+the gate builds. Both subcommands print usage with `--help`:
+
+```
+node <engine>/scripts/syndication-gate.mjs prepare --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --origins <a,b> \
+    [--base main] [--remote origin] [--content-dir ''] [--locales en/,de/]
+    → stdout: the promoted commit's sha; the workspace is checked out at it; exit 0
+    → exit 2: the submission breaks the contract — the verdict is written and pushed
+      (an origin outside --origins is refused with exit 2 and nothing recorded)
+    → any other non-zero exit: the gate itself failed
+node <engine>/scripts/syndication-gate.mjs finish --branch … --staged … --promoted <sha> --origins <a,b> --ok
+    → exit 3: main moved since prepare — run prepare and the checks again
+node <engine>/scripts/syndication-gate.mjs finish --branch … --staged … --promoted <sha> --origins <a,b> --fail --problems <file>
+```
+
+`--staged` is the commit the push delivered (`$GITHUB_SHA`): the whole
+run judges that commit and no other, whatever the branch points at
+later. `--origins` lists the wikis whose copies the repository accepts;
+it has no default, and without it the gate does not run. It
+authenticates nothing by itself: a deploy key cannot be scoped to one
+origin's branches, so every credential the repository accepts can push
+any accepted origin's staging branch — accepting two origins means those
+two wikis trust each other with their copies here. `--content-dir`
+is the notes root inside the repository (default the repository root),
+`--locales` the locale prefixes the peer serves beside its default
+(default the engine's table, `en/,de/`) — a submission touching a locale
+directory the peer does not serve is refused. A reference workflow:
+
+```yaml
+name: Syndication gate
+on:
+  push:
+    branches: ['syndicate/**']
+concurrency:
+  group: syndication-gate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      # the checkout is this repository's own main — the pushed commit is the
+      # sender's and never enters the working tree; the gate reads it as git
+      # objects and checks out only the promoted commit it built
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: gate
+        env:
+          GATE: engine/scripts/syndication-gate.mjs   # the engine checkout of your choice
+          ORIGINS: vortex-wiki                         # the wikis this repository accepts copies from
+          BOT_SSH_KEY_B64: ${{ secrets.BOT_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          # the promotion key exists only while the gate itself runs: written for
+          # prepare and finish, removed before the checks, and the checks run
+          # without the secret in their environment
+          key="$RUNNER_TEMP/bot-key"
+          hide_key() { rm -f "$key"; }
+          restore_key() { (umask 077; printf '%s' "$BOT_SSH_KEY_B64" | base64 -d > "$key"); }
+          gate() { GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes" node "$GATE" "$@"; }
+          for round in 1 2 3; do
+            restore_key
+            set +e
+            promoted=$(gate prepare --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --origins "$ORIGINS")
+            code=$?
+            set -e
+            if [ "$code" = 2 ]; then echo "refused — the verdict is recorded"; exit 0; fi
+            test "$code" = 0
+            hide_key
+            # the checks' report is their stdout (the problems file); stderr stays in this log
+            set +e
+            env -u BOT_SSH_KEY_B64 ./your-content-checks.sh > "$RUNNER_TEMP/checks.log"
+            checks=$?
+            set -e
+            cat "$RUNNER_TEMP/checks.log"
+            restore_key
+            if [ "$checks" != 0 ]; then
+              gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --fail --problems "$RUNNER_TEMP/checks.log"
+              exit 1
+            fi
+            set +e
+            gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --ok
+            code=$?
+            set -e
+            if [ "$code" = 3 ]; then continue; fi   # main moved: prepare and check again
+            exit "$code"
+          done
+          # the rounds ran out: the submission is refused so it never strands (the origin can resubmit)
+          echo "main kept moving for three rounds — resubmit" > "$RUNNER_TEMP/checks.log"
+          restore_key
+          gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --fail --problems "$RUNNER_TEMP/checks.log"
+          exit 1
+```
+
+The peer needs no inkbrush configuration for this: its repository, its CI
+and its schema (which must declare `origin`) are the whole peer side.
+The checks run on the promoted commit, which contains the sender's
+files: they must not execute submitted content (compile and validate it,
+never import a submitted module or run a submitted script), or they must
+run in a separate job that holds no secret. The promotion credential is
+present only while the gate itself runs — never in the checks' files or
+environment, as above.
+Its checks must cover every submitted note — the gate accepts a unit at
+any name its discovery and checks would see; the names they skip
+(`_meta`, `docs`, `inbox`, `node_modules`, locale segments, dot names)
+are reserved so nothing can land where no check looks. `check-content`
+writes its report to stdout, which is what the workflow captures as the
+problems file; the plugins' own chatter on stderr stays in the CI log.
+
+### Hard requirement: rulesets on the receiving repository
+
+A push-triggered workflow runs the definition inside the pushed commit,
+and the peer's checks import the peer's own schema and modules. So the
+sender's credential — the deploy key or app the origin pushes with — must
+be unable to touch anything but its staging branches, or accepting
+syndication means accepting code execution with the peer's promotion
+identity. **Do not accept syndication without both rulesets**
+(Repository settings → Rules → Rulesets):
+
+- **Push ruleset** (target: all pushes) with **Restrict file paths**:
+  `.github/**` and `_meta/**` (add whatever else the peer's checks
+  execute — `package.json`, scripts). Bypass list: the peer's own
+  maintainers and its promotion identity; never the sender.
+- **Branch ruleset** targeting **all branches except `syndicate/**`**
+  (include *All branches*, exclude `refs/heads/syndicate/**`) with
+  **Restrict creations**, **Restrict updates** and **Restrict deletions**.
+  Bypass list: the peer's maintainers and its promotion identity; never
+  the sender. The sender can then create, update and delete only
+  `syndicate/**`, and `main` moves only through the gate.
+
+With those in place the sender's credential can at most stage
+submissions, which the gate judges before anything runs or lands, and
+the verdicts on `syndication-verdicts` — a branch outside `syndicate/**`
+— are the gate's alone. The rulesets tell senders from the peer's own
+people, not senders from each other: with several accepted origins, each
+can stage under any accepted name (see `--origins` above).
+
+### Security model
+
+- **No shared credentials.** The origin pushes with its own git
+  environment (the same ssh configuration or credential helper autopush
+  uses) — write access to the peer's `syndicate/**` branches is all it
+  needs, and the rulesets above are all it gets. The peer's CI promotes
+  with the peer's own identity. No token of one wiki ever reaches the
+  other's server, and the engine reads none: `syndication` has no env
+  variables.
+- **No foreign code runs.** The origin reads the peer's notes (frontmatter
+  as YAML) from its mirror and never imports the peer's schema or modules;
+  the peer runs the engine's gate and its own checks on the promoted
+  commit before anything is published.
+- **Attribution.** The staging and promoted commits carry the signed-in
+  user as author (name and email), the sender's `syndication.name` in the
+  message, and every note of a copy carries `origin`. The `syndication` field
+  (per-peer overrides) never leaves the origin.
+- **Nothing lands blind.** The gate re-decides on the current tip with the
+  same rules the origin applied, so a copy edited on the peer or moved to
+  another revision between the origin's look and the gate's run is refused
+  rather than overwritten, and the origin sees why; what it pushes to
+  `main` is exactly the commit the checks ran on, and a submission
+  replaced during the run is neither judged by its findings nor deleted.
+
 ## Wikilinks
 
 `[[target]]`, `[[target|label]]`, `[[target#anchor]]` — available in notes
@@ -610,6 +966,11 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `POST /share/<id>/publish` | signed-in | Republish the share from the note as it is now — NDJSON `progress…` → `result`; creator or admin (403 otherwise); 409 while a publish is running |
 | `POST /share/<id>/pin` | signed-in | `{pinned}` — a pinned share never follows its note; creator or admin |
 | `DELETE /share/<id>` | signed-in | Revoke — the share's creator, or an admin when the registry is on (403 otherwise) |
+| `GET /syndication?note=<id>` | signed-in | `{unit, isCopy, peers[]}` — the note's unit, its `origin` when the note is a copy here (then `peers` is empty), and per peer the unit's status: `copy` state, `behind`, `revision`/`synced`/`copyUrl`, the `plan` (what publishing would send: counts, classification preview, degraded links, warnings) or `refusals`, and a pending/rejected `submission`; a peer whose repository cannot be fetched answers `state: 'unreachable'` |
+| `GET /syndication/overview` | signed-in | Per peer: every unit of this wiki's the peer holds or is deciding on, with `missing` when the unit no longer exists here |
+| `POST /syndication/<peer>/publish` | signed-in | `{note, adopt?, force?}` → NDJSON `progress` (`stage`: fetching · preparing · checking · submitting · waiting, `seconds` while waiting) → `submitted` `{commit, revision}` once the staging push succeeded → `result` `{status}` or `error` `{code, problems?}`; a status's `submission` names its staged `commit`; codes: the conflicts (`foreign`/`native`/`gone`/`moved`/`changed`/`digest-mismatch`), `invalid` (this wiki's gates), `refused`, `busy`, `pending`, `rejected` (the gate's findings in `problems`), `unreachable` |
+| `POST /syndication/<peer>/withdraw` | signed-in | `{note, force?}` → `{ok, status}` at once, the withdrawal pending on the peer; errors `{error, code, problems?}` (409 conflicts, 502 unreachable) |
+| `POST /syndication/<peer>/overrides` | signed-in | `{note, fields \| null}` → sets or clears `syndication.<peer>` on the unit's root note (validated, journaled, autocommitted) → `{ok, status}` |
 
 AI jobs are capped at 2 in flight per user and 4 machine-wide (429
 beyond); queued jobs hold no capacity. Each job kind carries a
@@ -640,10 +1001,14 @@ astro.config.ts ──WIKI=1──▶ inkbrush() integration   (src/wiki/integra
 
 src/lib/        pipeline-agnostic libraries: markdown-syntax (the dialect),
                 markdown (processor drop-in), content-guard, rehype-wiki-blocks
-                (block ↔ source-line stamping), wikilinks
+                (block ↔ source-line stamping), wikilinks, frontmatter-edit
+                (surgical top-level key edits), syndication-bundle / -transform /
+                -state / -git (the unit, its digest, the copy, the submission
+                rules and the git plumbing both sides of syndication run)
 src/wiki/shared/  cross-boundary types + locales.ts (the locale registry +
                   resolveLocales)
-scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs — standalone check CLIs
+scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs — standalone check CLIs;
+                syndication-gate.mjs — the receiving wiki's gate, run by its CI
 ```
 
 Editing = writing to `<content.dir>` source files; Astro's content HMR
@@ -661,7 +1026,9 @@ and identity records carry emails and roles.
   data/revisions.ndjson     the edit journal
   data/inbox-sync.json      inbox watcher state (content hashes)
   data/shares.json          share records (incl. revoked, for audit)
+  data/syndication/<peer>.git  bare partial mirror of a peer's content repository
   share-dist/               cached WIKI-free build for snapshots
+  tmp/                      scratch directories (a copy being packed), removed when done
 ```
 
 Trust model, stated plainly: **membership is code trust.** Notes are
@@ -683,7 +1050,8 @@ accepts only responses to requests this server issued; the domain
 allowlists are fail-closed; return URLs are open-redirect-guarded; jwt mode
 refuses to start without its secret; membership and roles are re-read per
 request; a mutation from a foreign `Origin` is refused; request bodies are
-capped.
+capped; syndication moves content only through the peer's git repository
+and its CI, with each side's own credentials and no foreign code executed.
 
 ## Production deployment
 

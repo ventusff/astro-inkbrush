@@ -5,9 +5,13 @@ const BASE = '/api/wiki';
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** the whole error body — `error` plus whatever a route adds beside it
+   *  (a refusal code, findings) */
+  body: Record<string, unknown>;
+  constructor(status: number, message: string, body: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -48,7 +52,7 @@ async function request<T>(
     ...(opts?.signal ? { signal: opts.signal } : {}),
   });
   const data = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`, data);
   return data as T;
 }
 
@@ -78,7 +82,7 @@ export async function* stream<T = ClaudeStreamEvent>(
   });
   if (!res.ok || !res.body) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, data.error ?? `HTTP ${res.status}`, data);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

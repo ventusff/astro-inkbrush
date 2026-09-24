@@ -2,7 +2,8 @@
  * Page-level Claude panel: a floating action button opens a slide-in glass
  * sidebar for chatting about the current note (claude-cli --resume keeps the
  * conversation), plus a one-click translate action per configured locale
- * whose twin doesn't exist yet.
+ * whose twin doesn't exist yet — none on a copy synced from another wiki,
+ * whose locales are written at its origin.
  *
  * Panel state (messages, session id, open/closed) lives in sessionStorage so
  * it survives the HMR reloads that follow saved edits; a stored value that
@@ -13,7 +14,7 @@ import { currentUser } from './auth';
 import type { PageContext } from './index';
 import { rememberScroll } from './scroll';
 import { S } from './strings';
-import { h, icon, toast } from './ui';
+import { h, icon, noteHref, toast } from './ui';
 
 interface StoredMessage {
   role: 'user' | 'claude';
@@ -99,10 +100,11 @@ export function mountChatPanel(ctx: PageContext): void {
     icon('close'),
   );
 
-  // one action per other locale: existing → jump there, missing → translate to it
+  // one action per other locale: existing → jump there, missing → translate
+  // to it (never for a copy: its locales are written at its origin)
   const translateButtons: { btn: HTMLButtonElement; code: string; label: string }[] = [];
   const langActions = ctx.meta.locales
-    .filter((l) => !l.current)
+    .filter((l) => !l.current && (l.exists || !ctx.meta.origin))
     .map((l) => {
       if (l.exists) {
         return h(
@@ -111,10 +113,7 @@ export function mountChatPanel(ctx: PageContext): void {
             type: 'button',
             class: 'wiki-btn',
             onclick: () => {
-              // sites customize the jump template via <meta name="inkbrush-note-url" content="/{id}/">
-              const pattern =
-                document.querySelector('meta[name="inkbrush-note-url"]')?.getAttribute('content') ?? '/{id}/';
-              window.location.href = pattern.replace('{id}', l.id);
+              window.location.href = noteHref(l.id);
             },
           },
           icon('globe'),

@@ -27,6 +27,7 @@ import {
   fchmodSync,
   fsyncSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   renameSync,
@@ -50,6 +51,14 @@ export function projectRoot(): string {
 
 export function wikiDataDir(...segments: string[]): string {
   return join(root, '.wiki', 'data', ...segments);
+}
+
+/** a fresh private scratch directory under `.wiki/tmp/` (0700); the caller
+ *  removes it when done */
+export function wikiTempDir(prefix: string): string {
+  const parent = join(root, '.wiki', 'tmp');
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  return mkdtempSync(join(parent, `${prefix}-`));
 }
 
 /** `path` sits under this project's private `.wiki/` state directory */

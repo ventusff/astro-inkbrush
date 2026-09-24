@@ -11,7 +11,9 @@
  * Server responses (errors, Claude tool labels) arrive in English; the zh
  * table remaps the well-known tool verbs and passes everything else through.
  */
-import type { WikiUser } from '../shared/types';
+import type { SyndicationErrorCode, SyndicationStage, SyndicationWarning, WikiUser } from '../shared/types';
+import type { Standing } from './syndication';
+import type { Action, Outcome } from './syndication-state';
 
 export type UiLocale = 'en' | 'zh';
 
@@ -252,6 +254,101 @@ interface Strings {
     dotCurrent: string;
     dotStale: string;
     dotPinned: string;
+  };
+  sync: {
+    title: (peer: string) => string;
+    loading: string;
+    /** the one-line state of a unit on a peer (chip title, popover headline) */
+    standing: Record<Standing, (peer: string) => string>;
+    /** the same state, short, for a row of the overview */
+    rowState: Record<Standing, string>;
+    together: (unit: string) => string;
+    planSummary: (notes: number, files: number, size: string) => string;
+    classification: string;
+    degraded: (count: number, peer: string) => string;
+    degradedIn: (note: string) => string;
+    publish: (peer: string) => string;
+    publishAgain: string;
+    overwrite: string;
+    overwriteConfirm: (peer: string) => string;
+    adopt: string;
+    adoptConfirm: (peer: string) => string;
+    withdraw: string;
+    withdrawConfirm: (peer: string) => string;
+    withdrawChangedConfirm: (peer: string) => string;
+    cancel: string;
+    openCopy: string;
+    synced: (time: string) => string;
+    occupiedExplain: (peer: string) => string;
+    foreignExplain: (peer: string) => string;
+    behindExplain: (synced: string, changed: string | null) => string;
+    changedExplain: string;
+    changedBehind: string;
+    refusedTitle: string;
+    unreachableExplain: (peer: string) => string;
+    /** the headline of a pending withdrawal (a pending publish uses `standing.pending`) */
+    pendingWithdraw: (peer: string) => string;
+    pendingExplain: (time: string) => string;
+    rejectedExplain: (peer: string, time: string) => string;
+    rejectedWithdraw: (peer: string, time: string) => string;
+    problemsFound: string;
+    /** why a publish or withdraw did not go through; `detail` is the
+     *  server's own line (git's error for 'unreachable') */
+    error: Record<SyndicationErrorCode, (peer: string, detail: string) => string>;
+    /** a publish's progress line; `seconds` waited so far on the peer's checks */
+    stage: Record<SyndicationStage, (peer: string, seconds: number | undefined) => string>;
+    warning: Record<SyndicationWarning['kind'], (url: string, note: string, peer: string) => string>;
+    refusal: {
+      never: (note: string) => string;
+      copy: (note: string) => string;
+      frontmatter: (note: string, detail: string) => string;
+      'no-root': (note: string) => string;
+      'no-frontmatter': (note: string) => string;
+      degrade: (note: string, target: string) => string;
+    };
+    /** a failure without a code this client knows, by HTTP status (0: no
+     *  answer arrived); `detail` is the server's line, shown for a 422 only */
+    http: (status: number, detail: string) => string;
+    /** a running operation's line before its first progress */
+    starting: Record<Action, string>;
+    /** how an operation ended, for its toast */
+    outcome: Record<Action, Record<Outcome, (peer: string) => string>>;
+    /** the latest attempt's failure: when, and why */
+    attemptFailed: Record<Action, (time: string, reason: string) => string>;
+    stillOpen: (peer: string) => string;
+    /** this page's attempt whose ending has not shown: what is being checked */
+    unsettledExplain: Record<'publish' | 'withdraw', (peer: string) => string>;
+    queued: string;
+    dequeue: string;
+    rowQueued: string;
+    problemsCount: (count: number) => string;
+    overrides: {
+      fold: string;
+      hint: (peer: string) => string;
+      label: string;
+      save: string;
+      notMap: string;
+      invalid: (message: string) => string;
+      loadFailed: string;
+    };
+    overview: {
+      link: (count: number | null) => string;
+      title: (peer: string) => string;
+      back: string;
+      empty: string;
+      missing: string;
+      publish: string;
+      publishAll: (count: number) => string;
+      /** the overview's live line: the unit running and where it is */
+      progress: (title: string, line: string) => string;
+      done: (accepted: number, pending: number, failed: number) => string;
+      loadFailed: string;
+    };
+    copy: {
+      chip: (wiki: string) => string;
+      notice: (wiki: string) => string;
+      revision: string;
+    };
   };
 }
 
@@ -507,6 +604,200 @@ const en: Strings = {
     dotCurrent: 'Shared · the link is current',
     dotStale: 'Shared · unpublished changes',
     dotPinned: 'Shared · pinned to a version',
+  },
+  sync: {
+    title: (peer) => `Sync to ${peer}`,
+    loading: 'Loading…',
+    standing: {
+      absent: (peer) => `Not on ${peer} yet`,
+      current: (peer) => `Synced to ${peer} · up to date`,
+      behind: (peer) => `Synced to ${peer} · this note changed since`,
+      changed: (peer) => `Someone changed the copy on ${peer}`,
+      occupied: (peer) => `${peer} has a note of its own at this address`,
+      foreign: (peer) => `${peer} holds another wiki's copy at this address`,
+      pending: (peer) => `Submitted · ${peer} is checking it`,
+      rejected: (peer) => `Returned by ${peer}`,
+      refused: () => "This note can't be synced",
+      unreachable: (peer) => `Can't reach ${peer}`,
+      unsettled: (peer) => `Checking how it went on ${peer}`,
+    },
+    rowState: {
+      absent: 'not synced',
+      current: 'up to date',
+      behind: 'changed here',
+      changed: 'changed there',
+      occupied: 'address taken',
+      foreign: 'address taken',
+      pending: 'being checked',
+      rejected: 'returned',
+      refused: "can't sync",
+      unreachable: 'unreachable',
+      unsettled: 'checking how it went',
+    },
+    together: (unit) => `Synced together with ${unit}`,
+    planSummary: (notes, files, size) =>
+      `${notes === 1 ? '1 note' : `${notes} notes`}, ${files === 1 ? '1 file' : `${files} files`} (${size}) will be published`,
+    classification: 'In the copy',
+    degraded: (count, peer) =>
+      `${count === 1 ? '1 link points' : `${count} links point`} to notes ${peer} doesn't have — plain text in the copy`,
+    degradedIn: (note) => `in ${note}`,
+    publish: (peer) => `Publish to ${peer}`,
+    publishAgain: 'Publish this version',
+    overwrite: 'Publish and overwrite',
+    overwriteConfirm: (peer) => `The changes made on ${peer} will be lost.`,
+    adopt: 'Replace it with this note',
+    adoptConfirm: (peer) => `${peer}'s own note is replaced by this one; its old text stays in ${peer}'s git history.`,
+    withdraw: 'Withdraw',
+    withdrawConfirm: (peer) => `Remove the copy from ${peer}?`,
+    withdrawChangedConfirm: (peer) => `Remove the copy from ${peer}, the changes made there included?`,
+    cancel: 'Cancel',
+    openCopy: 'Open copy ↗',
+    synced: (time) => `Synced ${time}`,
+    occupiedExplain: (peer) =>
+      `${peer} already has a note of its own at this address. Publishing replaces it with a copy of this note.`,
+    foreignExplain: (peer) =>
+      `${peer} holds a copy synced from another wiki at this address, so this note can't go there. Move one of the two notes to another address, or have the other wiki withdraw its copy.`,
+    behindExplain: (synced, changed) =>
+      changed
+        ? `This note changed after the synced version (synced ${synced}, last changed ${changed}).`
+        : `This note changed after the synced version (synced ${synced}).`,
+    changedExplain: 'Publishing again overwrites the edits made there.',
+    changedBehind: 'This note has changed as well.',
+    refusedTitle: "Why it can't be synced",
+    unreachableExplain: (peer) => `Reaching ${peer}'s repository failed:`,
+    pendingWithdraw: (peer) => `Withdrawal submitted · ${peer} is checking it`,
+    pendingExplain: (time) => `This usually takes a minute or two (submitted ${time}).`,
+    rejectedExplain: (peer, time) => `${peer}'s checks refused the submission (${time}). Fix what they found, then publish again.`,
+    rejectedWithdraw: (peer, time) => `${peer}'s checks refused the withdrawal (${time}).`,
+    problemsFound: 'What the checks found',
+    error: {
+      foreign: (peer) => `${peer} now holds another wiki's copy at this address.`,
+      native: (peer) => `${peer} has a note of its own at this address — replacing it takes an explicit choice.`,
+      gone: (peer) => `The copy was removed from ${peer} meanwhile — publish again to recreate it.`,
+      moved: (peer) => `The copy on ${peer} changed a moment ago — check its state and try again.`,
+      changed: (peer) => `Someone edited the copy on ${peer} — overwriting it takes an explicit choice.`,
+      'digest-mismatch': () => 'The two wikis compute revisions differently — run the same engine version on both.',
+      invalid: () => "Not submitted — the copy doesn't pass this wiki's checks.",
+      refused: () => "This note can't be synced.",
+      busy: () => 'This note is being published or withdrawn right now — wait for it to finish.',
+      pending: (peer) => `${peer} is still checking the last submission — wait for its answer.`,
+      rejected: (peer) => `Returned by ${peer} — its checks refused the copy.`,
+      unreachable: (peer, detail) => `Can't reach ${peer}: ${detail}`,
+    },
+    stage: {
+      fetching: (peer) => `Reading ${peer}'s repository…`,
+      preparing: () => 'Preparing the copy…',
+      checking: () => "Checking the copy with this wiki's checks…",
+      submitting: (peer) => `Submitting to ${peer}…`,
+      waiting: (peer, seconds) =>
+        seconds === undefined
+          ? `Submitted — waiting for ${peer}'s checks…`
+          : `Submitted — waiting for ${peer}'s checks… (${seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`})`,
+    },
+    warning: {
+      image: (url, note, peer) => `The image ${url} in ${note} lives in a note ${peer} doesn't have — it won't show in the copy.`,
+      element: (url, note, peer) => `The link ${url} in ${note} points to a note ${peer} doesn't have — it will be broken in the copy.`,
+    },
+    refusal: {
+      never: (note) => `${note} says syndication: false — it is never synced anywhere.`,
+      copy: (note) => `${note} is itself a copy synced from another wiki.`,
+      frontmatter: (note, detail) => `The frontmatter of ${note} doesn't parse (${detail}).`,
+      'no-root': (note) => `${note} has no root note in the default language.`,
+      'no-frontmatter': (note) => `${note} has no frontmatter block — a copy needs one.`,
+      degrade: (note, target) =>
+        `In ${note}, the link to ${target} cannot become plain text without changing what the text around it means — rewrite that sentence or link differently.`,
+    },
+    http: (status, detail) =>
+      status === 0
+        ? "Lost the connection to this wiki's server — check the network and try again."
+        : status === 401
+          ? 'Your sign-in has expired — sign in again.'
+          : status === 403
+            ? "You don't have permission to do this."
+            : status === 404
+              ? 'Not found — the note may have been moved or deleted.'
+              : status === 413
+                ? 'The request is too large for this server.'
+                : status === 422
+                  ? `This wiki's checks refused it: ${detail}`
+                  : status >= 500
+                    ? `This wiki's server ran into an error (HTTP ${status}).`
+                    : `The request failed (HTTP ${status}).`,
+    starting: { publish: 'Submitting…', withdraw: 'Withdrawing…', overrides: 'Saving…' },
+    outcome: {
+      publish: {
+        accepted: (peer) => `Synced to ${peer}`,
+        pending: (peer) => `Submitted — ${peer} is still checking it`,
+        rejected: (peer) => `Returned by ${peer} — its checks refused the copy`,
+        failed: (peer) => `The publish to ${peer} didn't go through`,
+        unknown: (peer) => `Submitted, but ${peer} couldn't be read afterwards — its answer shows once it can be reached`,
+      },
+      withdraw: {
+        accepted: (peer) => `Withdrawn from ${peer}`,
+        pending: (peer) => `Withdrawal submitted — ${peer} is checking it`,
+        rejected: (peer) => `${peer}'s checks refused the withdrawal`,
+        failed: (peer) => `The withdrawal from ${peer} didn't go through`,
+        unknown: (peer) => `Withdrawal submitted, but ${peer} couldn't be read afterwards — its answer shows once it can be reached`,
+      },
+      overrides: {
+        accepted: () => 'Saved — the next publish carries it',
+        pending: () => 'Saved — the next publish carries it',
+        rejected: () => 'Saved — the next publish carries it',
+        failed: () => "Saving didn't go through",
+        unknown: () => 'Saved — the next publish carries it',
+      },
+    },
+    attemptFailed: {
+      publish: (time, reason) => `Publishing at ${time} didn't go through: ${reason}`,
+      withdraw: (time, reason) => `Withdrawing at ${time} didn't go through: ${reason}`,
+      overrides: (time, reason) => `Saving at ${time} didn't go through: ${reason}`,
+    },
+    stillOpen: (peer) => `A submission to ${peer} is still waiting on its checks; this keeps asking.`,
+    unsettledExplain: {
+      publish: (peer) =>
+        `The answer to the last publish went missing. This keeps asking ${peer} until it shows whether the copy went in; until then nothing else can be sent.`,
+      withdraw: (peer) =>
+        `The answer to the last withdrawal went missing. This keeps asking ${peer} until it shows whether the copy was removed; until then nothing else can be sent.`,
+    },
+    queued: 'Queued — it publishes after the notes ahead of it.',
+    dequeue: 'Take out of the queue',
+    rowQueued: 'queued',
+    problemsCount: (count) => `What the checks found (${count})`,
+    overrides: {
+      fold: "Change the copy's classification",
+      hint: (peer) =>
+        `Fields written here replace the note's own values in the copy on ${peer}; null drops a field. Leave it empty to keep the note's values.`,
+      label: 'Overrides (YAML)',
+      save: 'Save',
+      notMap: 'Write one "field: value" per line',
+      invalid: (message) => `Not valid YAML: ${message}`,
+      loadFailed: 'Could not load the YAML editor',
+    },
+    overview: {
+      link: (count) => (count === null ? 'All synced notes' : `All synced notes (${count})`),
+      title: (peer) => `Notes synced to ${peer}`,
+      back: '← This note',
+      empty: 'Nothing synced yet',
+      missing: 'gone here',
+      publish: 'Publish',
+      publishAll: (count) => `Publish all behind (${count})`,
+      progress: (title, line) => `${title}: ${line}`,
+      done: (accepted, pending, failed) =>
+        [
+          `${accepted} synced`,
+          pending ? `${pending} still being checked` : '',
+          failed ? `${failed} not synced` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      loadFailed: 'Could not load the synced notes',
+    },
+    copy: {
+      chip: (wiki) => `Copy · from ${wiki}`,
+      notice: (wiki) =>
+        `This note is a copy synced from ${wiki}. Edit it there — changes made here would be overwritten by the next sync.`,
+      revision: 'Revision',
+    },
   },
 };
 
@@ -769,6 +1060,186 @@ const zh: Strings = {
     dotCurrent: '已分享 · 链接是最新版',
     dotStale: '已分享 · 有未发布的改动',
     dotPinned: '已分享 · 已钉住某一版',
+  },
+  sync: {
+    title: (peer) => `同步到 ${peer}`,
+    loading: '加载中…',
+    standing: {
+      absent: (peer) => `还没同步到 ${peer}`,
+      current: (peer) => `已同步到 ${peer}`,
+      behind: (peer) => `有更新还没同步到 ${peer}`,
+      changed: (peer) => `${peer} 那边改过这份副本`,
+      occupied: (peer) => `${peer} 已有一篇同名笔记`,
+      foreign: () => '这个位置被别处同步来的副本占着',
+      pending: (peer) => `已提交，${peer} 正在检查`,
+      rejected: (peer) => `被 ${peer} 退回`,
+      refused: () => '这篇不能同步',
+      unreachable: (peer) => `连不上 ${peer}`,
+      unsettled: (peer) => `正在确认 ${peer} 那边的结果`,
+    },
+    rowState: {
+      absent: '未同步',
+      current: '已同步',
+      behind: '有更新未同步',
+      changed: '对方改过',
+      occupied: '位置被占',
+      foreign: '位置被占',
+      pending: '检查中',
+      rejected: '被退回',
+      refused: '不能同步',
+      unreachable: '连不上',
+      unsettled: '确认结果中',
+    },
+    together: (unit) => `跟 ${unit} 一起同步`,
+    planSummary: (notes, files, size) => `将同步 ${notes} 篇笔记、${files} 个文件（${size}）`,
+    classification: '副本里的分类',
+    degraded: (count, peer) => `${count} 处链接指向 ${peer} 没有的笔记，副本里会变成纯文字`,
+    degradedIn: (note) => `在 ${note}`,
+    publish: (peer) => `同步到 ${peer}`,
+    publishAgain: '同步最新版本',
+    overwrite: '覆盖对方的修改并同步',
+    overwriteConfirm: (peer) => `${peer} 那边的修改会被覆盖掉。`,
+    adopt: '用这篇替换对方那篇',
+    adoptConfirm: (peer) => `${peer} 原来那篇会被这篇替换，旧内容还留在对方的 git 历史里。`,
+    withdraw: '撤回',
+    withdrawConfirm: (peer) => `从 ${peer} 上删掉这份副本？`,
+    withdrawChangedConfirm: (peer) => `连同 ${peer} 那边的修改一起删掉这份副本？`,
+    cancel: '取消',
+    openCopy: '打开副本 ↗',
+    synced: (time) => `同步于 ${time}`,
+    occupiedExplain: (peer) => `${peer} 在同一个位置已经有一篇自己的笔记，同步过去会用这篇的副本替换它。`,
+    foreignExplain: (peer) =>
+      `${peer} 的这个位置被别的 wiki 同步来的副本占着，这篇同步不过去。要么把其中一篇换个路径，要么请那边先撤回它的副本。`,
+    behindExplain: (synced, changed) =>
+      changed ? `这篇在同步之后又改过（同步于 ${synced}，最近修改于 ${changed}）。` : `这篇在同步之后又改过（同步于 ${synced}）。`,
+    changedExplain: '再同步会覆盖那边的修改。',
+    changedBehind: '这篇本身也有新的修改。',
+    refusedTitle: '不能同步的原因',
+    unreachableExplain: (peer) => `访问 ${peer} 的仓库失败：`,
+    pendingWithdraw: (peer) => `撤回已提交，${peer} 正在检查`,
+    pendingExplain: (time) => `通常一两分钟（提交于 ${time}）。`,
+    rejectedExplain: (peer, time) => `${peer} 的检查没通过（${time}），这次提交被退回。按下面的问题改好后再同步。`,
+    rejectedWithdraw: (peer, time) => `${peer} 的检查没通过（${time}），撤回被退回。`,
+    problemsFound: '检查发现的问题',
+    error: {
+      foreign: (peer) => `${peer} 的这个位置已经被别的 wiki 的副本占了。`,
+      native: (peer) => `${peer} 在这个位置有自己的笔记，要替换请点“用这篇替换对方那篇”。`,
+      gone: (peer) => `${peer} 上的副本已经被删掉了，重新同步就会再建一份。`,
+      moved: (peer) => `${peer} 上的副本刚被更新过，看一下最新状态再试。`,
+      changed: (peer) => `${peer} 那边改过这份副本，要覆盖请点“覆盖对方的修改并同步”。`,
+      'digest-mismatch': () => '两边算出的版本号对不上，请把两个 wiki 的引擎升级到同一版本。',
+      invalid: () => '没有提交，副本没通过本站的检查。',
+      refused: () => '这篇不能同步。',
+      busy: () => '这篇正在同步或撤回，等它完成再试。',
+      pending: (peer) => `${peer} 还在检查上一次提交，等它有结果再试。`,
+      rejected: (peer) => `被 ${peer} 退回：对方的检查没通过。`,
+      unreachable: (peer, detail) => `连不上 ${peer}：${detail}`,
+    },
+    stage: {
+      fetching: (peer) => `正在读取 ${peer} 的仓库…`,
+      preparing: () => '正在准备副本…',
+      checking: () => '正在用本站的检查过一遍副本…',
+      submitting: (peer) => `正在提交到 ${peer}…`,
+      waiting: (peer, seconds) =>
+        seconds === undefined
+          ? `已提交，等待 ${peer} 检查…`
+          : `已提交，等待 ${peer} 检查…（已等 ${seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`}）`,
+    },
+    warning: {
+      image: (url, note, peer) => `${note} 里的图片 ${url} 放在 ${peer} 没有的笔记里，副本里会显示不出来。`,
+      element: (url, note, peer) => `${note} 里的链接 ${url} 指向 ${peer} 没有的笔记，副本里会失效。`,
+    },
+    refusal: {
+      never: (note) => `${note} 写了 syndication: false，不同步到任何地方。`,
+      copy: (note) => `${note} 本身就是从别的 wiki 同步来的副本。`,
+      frontmatter: (note, detail) => `${note} 的 frontmatter 解析不了（${detail}）。`,
+      'no-root': (note) => `${note} 没有默认语言的根笔记。`,
+      'no-frontmatter': (note) => `${note} 没有 frontmatter，副本需要它。`,
+      degrade: (note, target) => `${note} 里指向 ${target} 的链接变成纯文字后会改变前后文的意思，请改写这句话或换一种链接写法。`,
+    },
+    http: (status, detail) =>
+      status === 0
+        ? '和本站服务器的连接断了，检查网络后再试。'
+        : status === 401
+          ? '登录已过期，请重新登录。'
+          : status === 403
+            ? '你没有权限做这件事。'
+            : status === 404
+              ? '找不到这篇笔记，可能已被移动或删除。'
+              : status === 413
+                ? '请求太大，本站服务器不接收。'
+                : status === 422
+                  ? `本站的检查没通过：${detail}`
+                  : status >= 500
+                    ? `本站服务器出错了（HTTP ${status}）。`
+                    : `请求失败（HTTP ${status}）。`,
+    starting: { publish: '提交中…', withdraw: '撤回中…', overrides: '保存中…' },
+    outcome: {
+      publish: {
+        accepted: (peer) => `已同步到 ${peer}`,
+        pending: (peer) => `已提交，${peer} 还在检查`,
+        rejected: (peer) => `被 ${peer} 退回：对方的检查没通过`,
+        failed: (peer) => `同步到 ${peer} 没有成功`,
+        unknown: (peer) => `已提交，但之后读不到 ${peer} 的状态，连上后会显示结果`,
+      },
+      withdraw: {
+        accepted: (peer) => `已从 ${peer} 撤回`,
+        pending: (peer) => `撤回已提交，${peer} 正在检查`,
+        rejected: (peer) => `${peer} 的检查没通过，撤回被退回`,
+        failed: (peer) => `从 ${peer} 撤回没有成功`,
+        unknown: (peer) => `撤回已提交，但之后读不到 ${peer} 的状态，连上后会显示结果`,
+      },
+      overrides: {
+        accepted: () => '已保存，下次同步时带过去',
+        pending: () => '已保存，下次同步时带过去',
+        rejected: () => '已保存，下次同步时带过去',
+        failed: () => '保存没有成功',
+        unknown: () => '已保存，下次同步时带过去',
+      },
+    },
+    attemptFailed: {
+      publish: (time, reason) => `${time} 的同步没有成功：${reason}`,
+      withdraw: (time, reason) => `${time} 的撤回没有成功：${reason}`,
+      overrides: (time, reason) => `${time} 的保存没有成功：${reason}`,
+    },
+    stillOpen: (peer) => `还有一次提交在等 ${peer} 检查，这里会接着问。`,
+    unsettledExplain: {
+      publish: (peer) => `上一次同步的结果没有传回来。这里会一直向 ${peer} 确认副本有没有进去，确认之前不能再发起别的操作。`,
+      withdraw: (peer) => `上一次撤回的结果没有传回来。这里会一直向 ${peer} 确认副本有没有删掉，确认之前不能再发起别的操作。`,
+    },
+    queued: '已排队，等前面的笔记同步完再轮到它。',
+    dequeue: '移出队列',
+    rowQueued: '排队中',
+    problemsCount: (count) => `检查发现的问题（${count}）`,
+    overrides: {
+      fold: '修改副本的分类',
+      hint: (peer) => `这里写的字段只替换 ${peer} 副本里的对应值，写 null 表示副本里去掉这个字段；留空就沿用笔记本身的分类。`,
+      label: '替换值（YAML）',
+      save: '保存',
+      notMap: '请按“字段: 值”逐行填写',
+      invalid: (message) => `YAML 格式不对：${message}`,
+      loadFailed: 'YAML 编辑器加载失败',
+    },
+    overview: {
+      link: (count) => (count === null ? '全部同步笔记' : `全部同步笔记（${count}）`),
+      title: (peer) => `同步到 ${peer} 的全部笔记`,
+      back: '← 回到本篇',
+      empty: '还没有同步过的笔记',
+      missing: '本站已没有这篇',
+      publish: '同步',
+      publishAll: (count) => `同步全部有更新的（${count}）`,
+      progress: (title, line) => `${title}：${line}`,
+      done: (accepted, pending, failed) =>
+        [`${accepted} 篇已同步`, pending ? `${pending} 篇还在检查` : '', failed ? `${failed} 篇没成功` : '']
+          .filter(Boolean)
+          .join('，'),
+      loadFailed: '同步笔记列表加载失败',
+    },
+    copy: {
+      chip: (wiki) => `副本 · 来自 ${wiki}`,
+      notice: (wiki) => `这篇是从 ${wiki} 同步来的副本，只能在那边修改；在这里改的内容会在下次同步时被覆盖。`,
+      revision: '版本',
+    },
   },
 };
 

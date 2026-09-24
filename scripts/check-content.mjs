@@ -64,7 +64,9 @@
  *   --help             print this usage
  *
  * Exit code: 0 clean, 1 findings (a nonexistent root and an empty corpus
- * without --allow-empty included), 2 usage error.
+ * without --allow-empty included), 2 usage error. The report — each
+ * file's findings and the summary line — is written to stdout; usage
+ * errors and whatever the plugins print go to stderr.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
@@ -396,16 +398,19 @@ export async function main(argv) {
     frontmatter,
   });
   const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''} + block stamps`;
+  // the report is the tool's output and goes to stdout — a CI captures it
+  // as the findings; what the plugins themselves print (KaTeX warnings)
+  // stays on stderr with the usage errors
   for (const { file, problems } of findings) {
-    console.error(`\n✗ ${file}`);
-    for (const p of problems) console.error(`  ${p.split('\n').join('\n  ')}`);
+    console.log(`\n✗ ${file}`);
+    for (const p of problems) console.log(`  ${p.split('\n').join('\n  ')}`);
   }
   if (findings.length > 0) {
-    console.error(`\n${findings.length}/${checked} files have problems (${scope}).`);
+    console.log(`\n${findings.length}/${checked} files have problems (${scope}).`);
     return 1;
   }
   if (checked === 0 && !allowEmpty) {
-    console.error(`✗ no files matched under ${root} — an empty corpus certifies nothing (pass --allow-empty when that is intended)`);
+    console.log(`✗ no files matched under ${root} — an empty corpus certifies nothing (pass --allow-empty when that is intended)`);
     return 1;
   }
   console.log(`✓ ${checked} files pass (${scope})`);

@@ -127,4 +127,29 @@ export default defineInkbrushConfig({
   //   prewarm: true,
   //   followIdleMinutes: 20,
   // },
+  // Syndication: publish notes to other inkbrush wikis through their git
+  // repositories (omitted = off). `name` is how this wiki names itself on
+  // its peers (copies carry it as origin.wiki; staging branches live under
+  // syndicate/<name>/). Each peer: its content repository (git runs with
+  // this server's own environment — ssh config, credential helper — as
+  // autopush does; no token enters this file), its published branch, the
+  // notes root inside the repository, the URL of a copy's page with {id}
+  // for the note id, the locale prefixes it serves besides its default
+  // (default: this wiki's own table), and a value map that spells this
+  // wiki's classification values the way the peer does (null drops one).
+  // syndication: {
+  //   name: 'vortex-wiki',
+  //   peers: [
+  //     {
+  //       id: 'chaser',
+  //       title: 'Chaser Wiki',
+  //       repo: 'git@github.com:acme/wiki.git',
+  //       branch: 'main',
+  //       contentDir: '',
+  //       url: 'https://wiki.acme.com/wiki/{id}/',
+  //       locales: ['en/', 'de/'],
+  //       map: { domains: { ai: 'llm', internal: null } },
+  //     },
+  //   ],
+  // },
 });

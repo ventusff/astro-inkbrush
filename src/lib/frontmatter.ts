@@ -10,10 +10,10 @@
  * must sit at a line start; a block that never closes is not frontmatter.
  *
  * The YAML is parsed with the `yaml` package (the grammar Astro reads).
- * Splitting never throws: a present block whose YAML does not parse — or
- * parses to something other than a mapping — yields `data: {}` plus a
- * positioned `error`, so tolerant consumers read `data` and strict ones
- * report `error`.
+ * Splitting never throws: a present block whose YAML does not parse, cannot
+ * be converted to a value, or parses to something other than a mapping
+ * yields `data: {}` plus a positioned `error`, so tolerant consumers read
+ * `data` and strict ones report `error`.
  */
 import { parseDocument } from 'yaml';
 
@@ -96,8 +96,17 @@ export function splitFrontmatter(source: string): SplitFrontmatter {
       column: pos?.col,
     };
   } else {
-    const value: unknown = doc.toJS();
-    if (value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value)) {
+    let value: unknown;
+    try {
+      value = doc.toJS();
+    } catch (err) {
+      // the document parsed but cannot be read as a value (an alias flood
+      // beyond the package's limit): an error, like a parse failure
+      error = { message: err instanceof Error ? err.message.split('\n')[0]! : String(err), line: contentLine };
+    }
+    if (error) {
+      /* reported above */
+    } else if (value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value)) {
       data = value as Record<string, unknown>;
     } else if (value !== null && value !== undefined) {
       error = { message: 'frontmatter is not a YAML mapping', line: contentLine };

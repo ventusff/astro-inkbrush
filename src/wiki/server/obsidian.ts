@@ -21,7 +21,7 @@
  *    three-line form.
  *  - Obsidian frontmatter (author/source/url/saved) becomes a "Source" quote
  *    block at the top of the article. Vault-derived strings are escaped per
- *    interpolation context (./markdown-escape.ts): frontmatter values via
+ *    interpolation context (lib/markdown-escape.ts): frontmatter values via
  *    the yaml serializer, labels and prose backslash-escaped, link URLs
  *    percent-encoded.
  *  - `inbox.ignore` (config) skips files by vault-relative path or basename
@@ -69,7 +69,7 @@ import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, HttpError, json, readBody } from './index.ts';
-import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from './markdown-escape.ts';
+import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from '../../lib/markdown-escape.ts';
 import { assetsBasenameCandidates, containedPath, isWithin, vaultPathCandidates } from './paths.ts';
 import { noteUrl } from './site.ts';
 import { autocommit, contentRoot, journalRevision, validateSource } from './source.ts';

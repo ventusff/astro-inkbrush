@@ -59,7 +59,9 @@ npm test
   the editor's [[ completion (the resolver read backwards: the note's own
   language, another only by its spelled prefix; every spelling offered must
   resolve to its note from the source note — a unit test holds that
-  round trip) — importing nothing — and `astro-inkbrush/wiki-blocks`
+  round trip) — importing nothing beyond the browser-safe HTML entity
+  table its recognizer reads character references with — and
+  `astro-inkbrush/wiki-blocks`
   exports the block stamper alone: browser bundles (the playground, a
   site's browser-side preview) import these two, never the root or the
   full module.
@@ -83,9 +85,28 @@ npm test
   `[data-inkbrush-slot="frontmatter"]` on the element that renders the
   frontmatter (page head, meta strip) — the ✎ handle for the YAML block
   binds there (required: no slot, no frontmatter block).
+- Syndication: a note reaches another inkbrush wiki only through that
+  wiki's git repository — the origin pushes the unit (the note's
+  directory under every locale prefix) as a commit on a staging branch
+  `syndicate/<name>/<unit>`, the peer's CI runs
+  `scripts/syndication-gate.mjs` (`prepare` → its own checks → `finish
+  --ok|--fail`, bound to the pushed commit, with an origin allowlist),
+  and a verdict is `<name>/<unit>.json` on the peer's protected
+  `syndication-verdicts` branch. A receiving
+  repository must carry the rulesets the manual names (the sender's
+  credential may touch only `syndicate/**`, never `.github/**` or
+  `_meta/**`).
+  Two frontmatter fields are engine-defined and sites declare them in
+  their schema: `syndication` (false, or per-peer field overrides) on an
+  original, and `origin` (`wiki`, `revision`, `synced` — always the last
+  key, stamped by the origin) on a copy. A unit whose root carries
+  `origin` is read-only in the receiving wiki (423 on every edit route
+  and in the write primitives). The `share` slot hosts a note's outward
+  controls: the share button and the syndication chips.
 - `inkbrush.config.ts` (site root, per-machine, gitignored) +
   `defineInkbrushConfig`: auth / identity / inbox / autocommit / autopush /
-  claude / content / share. CMS concerns only — no site business.
+  claude / content / share / syndication. CMS concerns only — no site
+  business.
 - `astro-inkbrush/session` → `currentUser(req)`: a **read-only** identity
   contract for sibling data planes in the same process. Read is exported;
   issuing, logout and provider flows never leave the package.
@@ -112,6 +133,9 @@ npm test
 - The content directory (`config content.dir`) is the content repo's
   working tree: outside the CMS's own autocommit/autopush, perform zero
   git operations there; never read, modify or commit `inbox/**`.
+  Syndication's git work happens in its private bare mirrors under
+  `.wiki/data/syndication/`, never in the content directory, and the
+  peer's content is read there, never imported or executed.
 - Zero static pollution is the bottom line: non-WIKI builds must not
   contain a single injected byte.
 - The browser-local playground (`astro-inkbrush/playground`) is the one
@@ -135,7 +159,8 @@ npm test
 `README.md` / `README.zh-CN.md` (positioning + integration contract) ·
 `docs/manual.md` / `docs/manual.zh-CN.md` (deployment-facing feature
 manual) · `inkbrush.config.example.ts` (annotated config template) ·
-`deploy/README.md` (the two-service deployment skeleton)
+`deploy/README.md` (the two-service deployment skeleton) ·
+`scripts/syndication-gate.mjs` (its header documents the peer-side CLI)
 
 ## How to verify
 

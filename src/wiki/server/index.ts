@@ -48,6 +48,7 @@ import {
 } from './identity.ts';
 import { buildSaml, displayNameFromProfile, googleSamlState, samlEmailAllowed } from './saml.ts';
 import { shareState } from './share.ts';
+import { syndicationPeers } from './syndication.ts';
 import { setSiteHooks, type SiteMarkdownHooks } from './site.ts';
 import { setProjectRoot } from './store.ts';
 
@@ -139,12 +140,14 @@ export function fail(res: ServerResponse, status: number, message: string): void
 /** an error carrying the HTTP status the router should answer with (4xx
  *  semantics — logged as a warning, no console.error stack) */
 export class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  readonly status: number;
+  /** further fields of the error body beside `error` (a refusal code) */
+  readonly extra: Record<string, unknown>;
+  constructor(status: number, message: string, extra: Record<string, unknown> = {}) {
     super(message);
     this.name = 'HttpError';
+    this.status = status;
+    this.extra = extra;
   }
 }
 
@@ -240,10 +243,12 @@ export function ndjsonStream(res: ServerResponse): {
 on('GET', '/me', ({ req, user, res }) => {
   const identity = identityConfig();
   const record = identity && user ? findIdentityUser(user.email) : null;
+  const peers = syndicationPeers();
   const body: MeResponse = {
     user,
     providers: { dev: devLoginEnabled(req), google: googleState(), googleSaml: googleSamlState() },
     share: shareState(),
+    ...(peers.length > 0 ? { syndication: { peers } } : {}),
     ...(identity && user
       ? {
           role: record?.role ?? null,
@@ -416,6 +421,7 @@ import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
 import { registerShareRoutes, startShareFollowing } from './share.ts';
 import { startSnapshotWarmer } from './snapshot.ts';
 import { registerSourceRoutes } from './source.ts';
+import { registerSyndicationRoutes } from './syndication.ts';
 
 registerSourceRoutes(on);
 registerClaudeRoutes(on);
@@ -423,6 +429,7 @@ registerInboxRoutes(on);
 registerCommentRoutes(on);
 registerIdentityRoutes(on);
 registerShareRoutes(on);
+registerSyndicationRoutes(on);
 
 export type RouteRegistrar = typeof on;
 
@@ -534,7 +541,7 @@ export async function handleApi(
   } catch (err) {
     if (err instanceof HttpError) {
       console.warn(`[wiki api] ${req.method} ${path} → ${err.status}: ${err.message}`);
-      if (!res.headersSent) fail(res, err.status, err.message);
+      if (!res.headersSent) json(res, err.status, { error: err.message, ...err.extra });
       else res.end();
       return;
     }

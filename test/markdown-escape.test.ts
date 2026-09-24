@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { splitFrontmatter } from '../src/lib/frontmatter.ts';
-import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from '../src/wiki/server/markdown-escape.ts';
+import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from '../src/lib/markdown-escape.ts';
 import { validateSource } from '../src/wiki/server/validate.ts';
 
 test('markdown-significant characters in metadata text are backslash-escaped', () => {

@@ -24,6 +24,9 @@
  * once, ↑/↓ move between blocks, Enter moves focus into the toolbar (whose
  * buttons rove the same way with ←/→/↑/↓), Escape returns it. Host-set
  * tabindex / aria-describedby values are preserved and restored on unmount.
+ *
+ * A copy synced from another wiki (`meta.origin`) is edited at its origin:
+ * no block of it binds, so neither ✎ nor ✦ nor revert is offered.
  */
 import { aiAvailability, currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
@@ -73,6 +76,7 @@ function collectBlocks(): BlockRef[] {
 }
 
 export function mountBlocks(ctx: PageContext): void {
+  if (ctx.meta.origin) return;
   const blocks = collectBlocks();
   if (blocks.length === 0) return;
 

@@ -46,6 +46,13 @@ export function whenIdle(fn: () => void): void {
   else setTimeout(fn, 300);
 }
 
+/** a note's page on this site: the site's `<meta name="inkbrush-note-url"
+ *  content="/{id}/">` template, `/{id}/` when it declares none */
+export function noteHref(id: string): string {
+  const pattern = document.querySelector('meta[name="inkbrush-note-url"]')?.getAttribute('content') ?? '/{id}/';
+  return pattern.replace('{id}', id);
+}
+
 /** `<time datetime>` rendered through the shared locale-aware formatter */
 export function time(value: number | string | Date, style: DateStyle = 'datetime'): HTMLTimeElement {
   const date = new Date(value);
@@ -54,7 +61,7 @@ export function time(value: number | string | Date, style: DateStyle = 'datetime
 
 /** svg icon factory (inline paths, 16px grid) */
 export function icon(
-  name: 'pencil' | 'sparkle' | 'chat' | 'close' | 'send' | 'globe' | 'history' | 'share',
+  name: 'pencil' | 'sparkle' | 'chat' | 'close' | 'send' | 'globe' | 'history' | 'share' | 'sync',
 ): SVGElement {
   const paths: Record<string, string> = {
     pencil: 'M11.3 2.3a1 1 0 0 1 1.4 0l1 1a1 1 0 0 1 0 1.4L6 12.4l-2.8.4.4-2.8 7.7-7.7z',
@@ -65,6 +72,7 @@ export function icon(
     globe: 'M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM2 8h12M8 1.5c-4.5 4-4.5 9 0 13 4.5-4 4.5-9 0-13z',
     history: 'M2.6 3.2v3h3M2.8 6.2a5.4 5.4 0 1 1-.3 2.6M8 5v3.2l2.3 1.4',
     share: 'M8 9.6V1.9M5.4 4.3 8 1.7l2.6 2.6M3.4 7.6v5a1.2 1.2 0 0 0 1.2 1.2h6.8a1.2 1.2 0 0 0 1.2-1.2v-5',
+    sync: 'M2.5 5.2h10.6M10.6 2.7l2.5 2.5-2.5 2.5M13.5 10.8H2.9M5.4 8.3l-2.5 2.5 2.5 2.5',
   };
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
@@ -73,7 +81,7 @@ export function icon(
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', paths[name]!);
-  if (name === 'close' || name === 'globe' || name === 'history' || name === 'share') {
+  if (name === 'close' || name === 'globe' || name === 'history' || name === 'share' || name === 'sync') {
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', 'currentColor');
     path.setAttribute('stroke-width', '1.6');

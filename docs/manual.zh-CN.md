@@ -161,6 +161,12 @@ CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本
 把单篇笔记发布成**密码门控的静态快照**,托管在你自己架的网关上——见
 [分享与网关契约](#分享与网关契约)。
 
+### 同步到别的 wiki
+
+把一篇笔记发布到另一个 inkbrush wiki,在那边作为一份指回原文的只读副本
+存在——走对方的 git 仓库和对方自己的 CI,两台服务器之间永不通话。见
+[同步:发布到别的 wiki](#同步发布到别的-wiki)。
+
 ### 账号 chip
 
 显示登录者(身份注册表开启时含角色)、列出可用的登录方式、给管理员提供
@@ -198,6 +204,7 @@ export default defineInkbrushConfig({
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
+  // syndication: { name: 'vortex-wiki', peers: [{ id: 'chaser', title: 'Chaser Wiki', repo: 'git@github.com:acme/wiki.git', url: 'https://wiki.acme.com/wiki/{id}/' }] },
 });
 ```
 
@@ -221,10 +228,13 @@ export default defineInkbrushConfig({
 | `share.prewarm` | `false` | 后台保温快照构建——[分享](#分享与网关契约)一节 |
 | `share.followIdleMinutes` | `20` | 笔记安静这么多分钟后分享自动重发;`0` = 只手动发布——[分享](#分享与网关契约)一节 |
 | `server.trustProxy` | `false` | 推导本服务自身 origin 时是否采信 `x-forwarded-host`/`-proto`——有反代在前面就开,否则别开 |
+| `syndication.name` | — | 本站在对方那边的名字(副本的 `origin.wiki`、暂存分支的 `syndicate/<name>/` 命名空间);配了 peers 就必填——[同步](#同步发布到别的-wiki) |
+| `syndication.peers` | `[]` | 本站往哪些 wiki 发布:`{ id, title, repo, branch?, contentDir?, url, locales?, map? }`——[同步](#同步发布到别的-wiki) |
 
 配置在启动时校验:cookie 名/域不合法、`trustedOrigins` 不是纯 origin、
 登录或网关地址不是 http(s)、`content.dir` 是绝对路径、只开 `autopush` 不开
-`autocommit`,都会拒绝启动并点名字段。
+`autocommit`、同步的 peer 缺 `{id}` 页面地址、id 不合规或重复、没给本站
+起名,都会拒绝启动并点名字段。
 
 改动配置文件后,下一次请求即生效(服务端热更)——唯独收件箱监听目录是
 dev server 启动时创建的,改它要重启。
@@ -282,8 +292,8 @@ locales: [
 | `WIKI_SHARE_PREWARM` | `share.prewarm`(`0`/`1`) |
 | `WIKI_SHARE_FOLLOW_IDLE_MINUTES` | `share.followIdleMinutes` |
 
-`content.dir` 与 `content.locales` 没有环境变量覆盖——它们是配置文件级的
-决定。功能的**启用**也永远由配置文件决定,环境变量只能覆盖已启用功能的字段。
+`content.dir`、`content.locales` 与 `syndication` 没有环境变量覆盖——它们是
+配置文件级的决定(同步压根没有密钥:git 用服务器自己的环境跑)。功能的**启用**也永远由配置文件决定,环境变量只能覆盖已启用功能的字段。
 
 **密钥只走环境变量,绝不进配置文件**:`GOOGLE_CLIENT_ID` /
 `GOOGLE_CLIENT_SECRET`(OAuth)、`AUTH_SECRET`(jwt 会话——缺失启动即报错)、
@@ -451,6 +461,292 @@ PUT 的请求头:
 robots 头、带 canonical、进 `/sitemap.xml`(`/robots.txt` 指向它)。网关永远
 见不到明文密码,也不需要账号体系。
 
+## 同步:发布到别的 wiki
+
+在一个 inkbrush wiki 里写的笔记可以**发布到另一个 wiki**(对方,peer),在
+那边作为一份**副本**存在,由对方当作自己的页面来渲染。笔记始终归原站(origin)
+所有:副本在对方那边只读、记着自己从哪来;在原站的笔记页上,你能看到副本
+在不在、是不是最新、对方有没有动过它、对方还在检查还是已经退回——并且一键
+把当前版本发过去,或者把副本撤回。IndieWeb 管这叫 syndication:原文是正本,
+副本指回原文。
+
+### 发过去的是什么:单元
+
+一篇笔记连同属于它的全部东西一起发布——这就是**单元**(unit):顶层笔记的
+目录(hub 子页、演示模块、附件)加上每个语言前缀下的同名目录(`chasing/`、
+`en/chasing/`、`de/chasing/`)。单元以顶层 id 命名,`<unit>/index.{md,mdx}`
+存在即存在。副本落在与原文完全相同的 id 上——不改名,所以副本之间的链接、
+附件地址、`demo="<id>/…"` 一类的属性原样有效。对方在同一 id 上已有自己的
+笔记时,发布只有在你明确说要**接管**(adopt,即替换它)时才会进行。
+
+### 两个 frontmatter 字段(请在你的 schema 里声明)
+
+```yaml
+# 原文上——可选
+syndication: false            # 这篇永不发布到任何地方
+# 或
+syndication:
+  chaser:                     # syndication.peers 里的 peer id
+    domains: [infra, llm]     # 在那边的副本里,这些字段取这些值
+    kind: essay               # (null = 从副本里去掉该字段)
+
+# 副本上——原站提交副本前盖的戳,永远是最后一个键
+origin:
+  wiki: vortex-wiki           # 原站的 syndication.name
+  revision: 3f9c2a1b7d4e5f60  # 副本内容的摘要
+  synced: 2026-09-23T10:21:07Z
+```
+
+单元里任何一篇写了 `syndication: false`,整个单元就不发;这个字段永远不会
+进副本。带 `origin` 的笔记就是副本:引擎拒绝对它所在单元的一切本地改动
+(块保存、回滚、AI 改写、翻译——一律 423,`code: 'copy'`),原站也绝不把
+副本再往外发。两个字段都是引擎定义的;加进内容仓的 schema(`_meta/schema.ts`,
+zod 工厂写法):
+
+```ts
+syndication: z.union([z.literal(false), z.record(z.string(), z.record(z.string(), z.unknown()))]).optional(),
+origin: z.object({ wiki: z.string().min(1), revision: z.string().regex(/^[0-9a-f]{16}$/), synced: z.coerce.date() }).optional(),
+```
+
+### 副本长什么样:变换
+
+副本与原文恰好只在三处不同,全部由原站根据它对两边的了解决定:
+
+- **frontmatter。**对方的 `map` 把分类值改成对方的口径
+  (`map: { domains: { ai: 'llm', internal: null } }` 会把 `[ai, internal, x]`
+  变成 `[llm, x]`;列表去重);然后笔记自己的 `syndication.<peer>` 整字段覆盖;
+  最后去掉 `syndication`。每一处改动都只动那一个键所在的行——frontmatter 的
+  其他每个字节原样保留。
+- **双链。**对方会解析到同一篇的链接原样保留;对方会解析到别处的(对方也有
+  同名标题、对方没有那个语言镜像)改写成显式 id;指向对方将不会有的笔记的
+  (在本单元之外、又不是本站在那边的副本)变成它的可见文字(已转义),并
+  列进发布计划。
+- **根相对链接。**指向这类笔记的 Markdown 链接变成链接文字;图片和 JSX 的
+  `href`/`src` 不动,列为警告。
+
+其他一切——正文、模块、附件——逐字节原样。变换是确定的,所以**修订号**
+(revision:对单元文件算的摘要取十六个十六进制字符——笔记按「frontmatter
+排序后的 JSON(不含 `origin`)+ 正文」算,其他文件按 git blob id 算)不论
+谁来算都一样:改 frontmatter 的排版、盖 `origin` 的戳不改变它,改正文或附件
+一定改变它。
+
+### 传输:对方的 git 仓库
+
+两个 wiki 的服务器永不通话。副本只经对方的内容仓库到达对方,而且只经对方
+自己的 CI 才能进入对方的已发布分支:
+
+```
+原站                                        对方的仓库(GitHub)                       对方的 CI
+────                                        ──────────────────                       ─────────
+.wiki/data/syndication/<peer>.git ◀─fetch─  refs/heads/main            (已发布的最新提交)
+  (bare、部分克隆:超过 1 MiB 的            refs/heads/syndicate/<name>/<unit>  ◀─── syndication-gate prepare
+   blob 留在远端)                            refs/heads/syndication-verdicts     ◀─── syndication-gate finish
+发布 ──在最新提交上做一个提交──push──▶       refs/heads/syndicate/<name>/<unit>  ───▶ 在合入后的提交上跑对方自己的检查
+                                                                                     ├─ 通过:推进 main,删掉暂存分支,去掉 <name>/<unit>.json
+                                                                                     └─ 不过:<name>/<unit>.json 写到 syndication-verdicts 分支,删掉暂存分支
+```
+
+1. **发布**(`POST /syndication/<peer>/publish`):拉取镜像;从对方的最新
+   提交判断那边应该是什么(空着;本站的副本、且在记录的修订号上;对方自己
+   的笔记——只有 `adopt` 才行;对方改过的副本——只有 `force` 才行);变换
+   单元;用**本站**的正文关卡检查每一篇(整页管线、内容守门、MDX 编译——
+   绝不用对方的 schema,那是对方的事);盖 `origin` 戳;在对方最新提交上做
+   一个提交,树 = 最新提交的树、把单元的目录整个换掉(在 bare 镜像里用一个
+   临时 index 做,任何地方都不检出);`--force` 推到
+   `syndicate/<name>/<unit>`;然后等把关结果——最多八分钟、每十秒看一次——
+   最后回复副本的状态。提交的作者是登录用户(`姓名 <邮箱>`——对方历史里
+   记的署名,有意为之),提交者是服务器的 git 身份,提交信息用 trailer 说明
+   这次提交的意图,把关脚本逐条核对:
+
+   ```
+   wiki: chasing synced from vortex-wiki (3f9c2a1b7d4e5f60)
+
+   Syndication-Origin: vortex-wiki
+   Syndication-Unit: chasing
+   Syndication-Action: publish            | withdraw
+   Syndication-Expect: none | adopt | <原站看到的修订号>
+   Syndication-Revision: 3f9c2a1b7d4e5f60  (只有 publish 有)
+   Syndication-Force: yes                  (只有强制时有)
+   ```
+
+2. **撤回**(`POST /syndication/<peer>/withdraw`):最新提交去掉单元目录,
+   同样推上去;立即回复,带上待检查的提交(客户端轮询)。
+
+3. **把关**在对方的 CI 里跑,每次有推送到 `syndicate/**` 就跑(工作流见
+   下),整轮只认这次推送送到的那一个提交(`--staged`)。`prepare` 完全从
+   git 重新推导:分支名里的来源在本仓接受的名单里(`--origins`);分支名与
+   trailer 一致;单元是对方的一个笔记单元(单段 id;不是 `_meta`、`docs`、
+   `inbox`、`node_modules`、语言段或点开头的名字——对方的扫描与检查会跳过
+   的名字——也不是 `main` 上已经是文件的路径);提交只改了单元的目录,且
+   只有普通文件(没有符号链接、子模块、点开头的路径,没有同时含 index.md
+   与 index.mdx 的笔记目录);每篇笔记都带着本次修订号的 `origin`,文件
+   摘要等于修订号;单元在 `main` **当前**最新提交上的状态仍然允许这次提交
+   (与原站同一套规则,所以和对方并发改动撞上时会以 `moved` 或 `changed`
+   退回,绝不盲合);然后拼出**合入后的提交**——当前最新提交、单元目录换成
+   暂存的那份、作者与提交信息不变——核对它与最新提交只在这些目录下有差别,
+   再 detached 检出,让对方平时那套检查跑在将要合入的那个提交上。这次提交
+   里把关脚本读不了的东西同样算退回,绝不留下悬着的分支。`finish --ok` 把检查过的那个提交原样推进
+   `main`;期间 main 前进了就以退出码 3 拒绝,工作流重新 `prepare`、重新检查
+   (最多三轮)——没检查过的东西永远推不上去。然后只有暂存分支仍指向被检查
+   的那个提交时才删它(更新的提交留着),并去掉这个单元的退回记录文件。
+   `finish --fail` 把检查输出(最多 200 行)作为关于那个提交的
+   `<name>/<unit>.json` 写到对方的 **`syndication-verdicts`** 分支——在该分支
+   最新提交上做一个提交(期间分支前进了就在新提交上重做这一个文件的改动),
+   这条分支由对方的规则集把发送方挡在外面——同样带租约地删掉暂存分支。
+
+4. **状态**全部从镜像的 ref 推出——原站不存任何 git 本身没说的东西:
+   `absent`(id 空着)、`occupied`(对方自己的笔记;发布即接管)、`foreign`
+   (别的 wiki 的副本;绝不动)、`current`(副本的摘要 = 记录的修订号 = 现在
+   发过去会是的样子)、`behind`(副本完好,但本站这边改了)、`changed`(收到
+   后在对方那边被改过——摘要与记录的修订号不同;发布要 `force`)。此外还有
+   **提交状态**,以暂存提交的 sha 为身份:暂存分支还在就是 `pending`(不管
+   它的提交写了什么),退回记录仍然是答案时就是 `rejected`——被退回的发布,
+   在现在发过去会是的修订号仍等于被退回的那个时算数(笔记或覆盖一改就作废);
+   被退回的撤回,在副本还在时算数——附对方检查的原话。
+
+### 对方那边:`scripts/syndication-gate.mjs`
+
+由对方的 CI 在其内容仓库**自己的已发布分支**的检出里运行——绝不检出推上来
+的分支:提交上来的那个提交只当 git 对象读(检出里没有就按 sha 从远端取),
+进工作区的只有把关脚本拼出来的合入后提交。两个子命令都有 `--help`:
+
+```
+node <engine>/scripts/syndication-gate.mjs prepare --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --origins <a,b> \
+    [--base main] [--remote origin] [--content-dir ''] [--locales en/,de/]
+    → 标准输出:合入后提交的 sha;工作区已检出到它;退出码 0
+    → 退出码 2:这次提交不合约定——退回记录已写好并推送
+      (来源不在 --origins 里的,退出码 2 且什么都不记录)
+    → 其他非零:把关脚本本身出错
+node <engine>/scripts/syndication-gate.mjs finish --branch … --staged … --promoted <sha> --origins <a,b> --ok
+    → 退出码 3:prepare 之后 main 前进了——重新 prepare、重新检查
+node <engine>/scripts/syndication-gate.mjs finish --branch … --staged … --promoted <sha> --origins <a,b> --fail --problems <file>
+```
+
+`--staged` 是这次推送送到的提交(`$GITHUB_SHA`):整轮只裁定这一个提交,
+之后分支指到哪里都不管。`--origins` 列出本仓接受哪些 wiki 的副本;没有默认
+值,不给就不跑。它本身不做任何身份认证:部署密钥没法限定到某一个来源的
+分支,所以本仓接受的每一把凭据都能推任何一个被接受来源的暂存分支——接受
+两个来源,就等于这两个 wiki 在本仓的副本上互相信任。`--content-dir` 是仓库里的笔记根目录(默认仓库根),
+`--locales` 是对方除默认语言外服务的语言前缀(默认引擎的表 `en/,de/`)——
+动到对方不服务的语言目录的提交会被退回。参考工作流:
+
+```yaml
+name: Syndication gate
+on:
+  push:
+    branches: ['syndicate/**']
+concurrency:
+  group: syndication-gate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  gate:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      # 检出的是本仓自己的 main——推上来的提交是发送方的,永远不进工作区;
+      # 把关脚本只把它当 git 对象读,检出的只有它拼出来的合入后提交
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - name: gate
+        env:
+          GATE: engine/scripts/syndication-gate.mjs   # 引擎在你这里检出的位置
+          ORIGINS: vortex-wiki                         # 本仓接受哪些 wiki 的副本
+          BOT_SSH_KEY_B64: ${{ secrets.BOT_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          # 合入用的钥匙只在把关脚本自己运行时存在:prepare 与 finish 之前写出,
+          # 检查之前删掉,检查在没有这个密钥变量的环境里跑
+          key="$RUNNER_TEMP/bot-key"
+          hide_key() { rm -f "$key"; }
+          restore_key() { (umask 077; printf '%s' "$BOT_SSH_KEY_B64" | base64 -d > "$key"); }
+          gate() { GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes" node "$GATE" "$@"; }
+          for round in 1 2 3; do
+            restore_key
+            set +e
+            promoted=$(gate prepare --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --origins "$ORIGINS")
+            code=$?
+            set -e
+            if [ "$code" = 2 ]; then echo "退回——退回记录已写好"; exit 0; fi
+            test "$code" = 0
+            hide_key
+            # 检查的报告是它们的标准输出(即问题文件);标准错误留在这份日志里
+            set +e
+            env -u BOT_SSH_KEY_B64 ./your-content-checks.sh > "$RUNNER_TEMP/checks.log"
+            checks=$?
+            set -e
+            cat "$RUNNER_TEMP/checks.log"
+            restore_key
+            if [ "$checks" != 0 ]; then
+              gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --fail --problems "$RUNNER_TEMP/checks.log"
+              exit 1
+            fi
+            set +e
+            gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --ok
+            code=$?
+            set -e
+            if [ "$code" = 3 ]; then continue; fi   # main 前进了:重新 prepare、重新检查
+            exit "$code"
+          done
+          # 三轮用完:退回这次提交,暂存分支不会悬着(原站可以重新提交)
+          echo "main 连续三轮都在前进——请重新提交" > "$RUNNER_TEMP/checks.log"
+          restore_key
+          gate finish --branch "$GITHUB_REF_NAME" --staged "$GITHUB_SHA" --promoted "$promoted" --origins "$ORIGINS" --fail --problems "$RUNNER_TEMP/checks.log"
+          exit 1
+```
+
+对方为此不需要任何 inkbrush 配置:它的仓库、它的 CI、它的 schema(必须
+声明 `origin`)就是对方那边的全部。检查跑在合入后的提交上,里面有发送方的
+文件:检查绝不能执行提交上来的内容(只编译、只校验,不 import 提交上来的
+模块、不运行提交上来的脚本),否则就放到一个不持有任何密钥的独立作业里跑。
+合入用的凭据只在把关脚本自己运行时存在——检查的文件和环境里都没有,如上。对方的检查必须覆盖每一篇提交上来的
+笔记——把关脚本接受的单元名都是对方扫描与检查看得见的名字;它们跳过的名字
+(`_meta`、`docs`、`inbox`、`node_modules`、语言段、点开头的名字)一律保留,
+免得东西落在没人检查的地方。`check-content` 的报告写到标准输出,工作流抓的
+就是它作问题文件;插件自己在标准错误上的杂音留在 CI 日志里。
+
+### 硬性要求:接收仓库上的规则集
+
+push 触发的工作流跑的是推上来那个提交里的工作流定义,而对方的检查会
+import 对方自己的 schema 和模块。所以发送方的凭据——原站用来推送的部署
+密钥或 app——必须碰不到暂存分支以外的任何东西,否则接受同步就等于接受
+以对方合入身份执行代码。**没有这两条规则集就不要接受同步**(仓库设置 →
+Rules → Rulesets):
+
+- **推送规则集**(target:所有推送),开 **Restrict file paths**:
+  `.github/**` 与 `_meta/**`(对方的检查还会执行什么就再加什么——
+  `package.json`、脚本)。豁免名单:对方自己的维护者和它的合入身份;
+  发送方绝不豁免。
+- **分支规则集**,作用于 **`syndicate/**` 之外的所有分支**(包含 *All
+  branches*,排除 `refs/heads/syndicate/**`),开 **Restrict creations**、
+  **Restrict updates**、**Restrict deletions**。豁免名单:对方的维护者和它的
+  合入身份;发送方绝不豁免。这样发送方只能建、改、删 `syndicate/**`,
+  `main` 只经把关前进。
+
+有了这两条,发送方的凭据至多能暂存一次提交,而暂存的东西在执行或合入
+之前都要经把关裁定;`syndication-verdicts` 分支在 `syndicate/**` 之外,退回
+记录只有把关脚本能写。规则集分得清发送方和本仓自己的人,分不清发送方彼此:
+接受多个来源时,每个来源都能以任何被接受的名字暂存(见上文 `--origins`)。
+
+### 安全模型
+
+- **不共享凭据。**原站用自己的 git 环境推送(与 autopush 同一套 ssh 配置或
+  凭据助手)——它只需要对方 `syndicate/**` 分支的写权限,上面的规则集也只
+  给它这么多。对方的 CI 用对方自己的身份推进。任何一方的 token 都不会到
+  另一方的服务器上,引擎也不读任何 token:`syndication` 没有环境变量。
+- **不跑对方的代码。**原站从镜像里读对方的笔记(frontmatter 按 YAML 解析),
+  绝不 import 对方的 schema 或模块;对方在合入前用引擎的把关脚本和自己的
+  检查跑在合入后的提交上。
+- **署名。**暂存提交与合入后的提交以登录用户为作者(姓名与邮箱),提交信息里
+  写着发送方的 `syndication.name`,副本的每一篇笔记都带 `origin`。
+  `syndication` 字段(逐站覆盖)永不离开原站。
+- **不盲合。**把关脚本用与原站相同的规则在当前最新提交上重新裁定,所以在
+  原站查看与把关运行之间对方改过或换过修订号的副本会被退回而不是被覆盖,
+  原站也能看到原因;推进 `main` 的正是检查跑过的那个提交,运行中途被替换
+  的提交既不会被拿这次的结果裁定,也不会被删掉。
+
 ## 双链
 
 `[[目标]]`、`[[目标|显示文字]]`、`[[目标#锚点]]`——笔记与编辑器预览里可用,
@@ -505,6 +801,11 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `POST /share/<id>/publish` | 需登录 | 按笔记现状重发分享——NDJSON 流:`progress…` → `result`;创建者或管理员(否则 403);发布进行中 409 |
 | `POST /share/<id>/pin` | 需登录 | `{pinned}`——钉住的分享不再跟随笔记;创建者或管理员 |
 | `DELETE /share/<id>` | 需登录 | 撤销——只有创建者本人,或注册表开启时的管理员(否则 403) |
+| `GET /syndication?note=<id>` | 需登录 | `{unit, isCopy, peers[]}`——笔记所属单元、笔记本身是本站副本时的 `origin`(此时 `peers` 为空),以及在每个 peer 上的状态:`copy` 状态、`behind`、`revision`/`synced`/`copyUrl`、发布计划 `plan`(会发什么:数量、分类预览、降级的链接、警告)或 `refusals`,以及待检查/被退回的 `submission`;仓库拉不到的 peer 回 `state: 'unreachable'` |
+| `GET /syndication/overview` | 需登录 | 按 peer 列出对方持有或正在裁定的本站每个单元,单元在本站已不存在时 `missing` |
+| `POST /syndication/<peer>/publish` | 需登录 | `{note, adopt?, force?}` → NDJSON:`progress`(`stage`:fetching · preparing · checking · submitting · waiting,等待时带 `seconds`)→ 推送到暂存分支成功即 `submitted` `{commit, revision}` → `result` `{status}` 或 `error` `{code, problems?}`;状态里的 `submission` 带它的暂存提交 `commit`;code 有冲突类(`foreign`/`native`/`gone`/`moved`/`changed`/`digest-mismatch`)、`invalid`(本站关卡)、`refused`、`busy`、`pending`、`rejected`(对方检查结果在 `problems`)、`unreachable` |
+| `POST /syndication/<peer>/withdraw` | 需登录 | `{note, force?}` → 立即 `{ok, status}`,撤回在对方那边待检查;错误 `{error, code, problems?}`(冲突 409,拉不到 502) |
+| `POST /syndication/<peer>/overrides` | 需登录 | `{note, fields \| null}` → 设置或清除单元根笔记上的 `syndication.<peer>`(校验、入账、自动提交)→ `{ok, status}` |
 
 AI 任务每用户最多同时 2 个、全机最多 4 个(超出 429);排队中的任务不占
 名额。每类任务还有形状约束:块编辑不得改动笔记里选中块之外的任何内容
@@ -531,9 +832,12 @@ astro.config.ts ──WIKI=1──▶ inkbrush() 集成   (src/wiki/integration.
 
 src/lib/        与管线无关的库:markdown-syntax(方言)、markdown(处理器
                 一行接入)、content-guard、rehype-wiki-blocks(块↔源码行号)、
-                wikilinks
+                wikilinks、frontmatter-edit(只动顶层键的精确编辑)、
+                syndication-bundle / -transform / -state / -git(单元、摘要、
+                副本、提交规则,以及同步两边共用的 git 底层操作)
 src/wiki/shared/  跨界类型 + locales.ts(语言注册表 + resolveLocales)
-scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——独立检查 CLI
+scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——独立检查 CLI;
+                syndication-gate.mjs——接收方的把关脚本,由其 CI 运行
 ```
 
 编辑 = 改写 `<content.dir>` 下的源文件;Astro 内容热更新刷新页面。**文件即
@@ -549,7 +853,9 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
   data/revisions.ndjson     修订账本
   data/inbox-sync.json      收件箱监听状态(内容哈希)
   data/shares.json          分享记录(含已撤销的,作审计)
+  data/syndication/<peer>.git  对方内容仓库的 bare 部分克隆镜像
   share-dist/               快照用的 WIKI-free 构建缓存
+  tmp/                      临时目录(打包中的副本),用完即删
 ```
 
 信任模型,直说:**入册即托付代码。**笔记是 Markdown/MDX——成员写的组件、
@@ -564,7 +870,8 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
 原子且进程内串行;OAuth 用 PKCE 加绑定浏览器的一次性 state,SAML 只接受
 对本服务所发请求的响应;域名白名单默认拒绝;回跳地址有开放重定向防护;jwt
 模式缺密钥拒绝启动;成员资格与角色每请求现查;来自外站 `Origin` 的
-改动请求一律拒绝;请求体有上限。
+改动请求一律拒绝;请求体有上限;同步只经对方的 git 仓库和 CI 搬运内容,
+两边各用各的凭据,不执行任何对方的代码。
 
 ## 生产部署
 

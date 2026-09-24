@@ -16,7 +16,8 @@
  *    smuggle host files into the copy;
  *  - apply() re-verifies every target: its real path (symlinks resolved)
  *    must lie inside a scoped root, so a write can never land outside the
- *    scope or pass through a link.
+ *    scope or pass through a link; under the locks it must not lie inside
+ *    a copy synced from another wiki (source.ts's copy rule).
  *
  * Conflict contract: apply() holds the in-process write locks of all target
  * files (sorted path order) and verifies each still matches the creation
@@ -30,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { containedPath, realpathDeep } from './paths.ts';
+import { copyOriginOfFile } from './source.ts';
 import { projectRoot, withLock, writeFileAtomic } from './store.ts';
 
 export interface WorkspaceChange {
@@ -202,14 +204,20 @@ export function createWorkspace(scope: string[]): Workspace {
       }
       const keys = [...targets.keys()].sort();
       const run = async (): Promise<void> => {
-        // all baselines verified before any write
-        for (const change of targets.values()) {
+        // all baselines verified before any write; the copy rule decided
+        // here too, under the locks, so a unit that became a copy while
+        // the job ran is not written
+        for (const [abs, change] of targets) {
           const live = fileContent(root, change.rel);
           const base = baseline.get(change.rel) ?? null;
           if (live !== base) {
             throw new Error(
               `Conflict: '${change.rel}' was modified while the job ran — nothing was written`,
             );
+          }
+          const copy = copyOriginOfFile(abs);
+          if (copy) {
+            throw new Error(`Refused: '${change.rel}' is a copy synced from ${copy.wiki} — nothing was written`);
           }
         }
         const written: string[] = [];

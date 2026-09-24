@@ -16,23 +16,31 @@
  * at dev-server startup, so a changed watch dir needs a restart.
  */
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
 
 import type { WikiConfig, WikiConfigInput } from '../config.ts';
-import { resolveLocales } from '../shared/locales.ts';
+import { resolveLocales, type LocaleDef } from '../shared/locales.ts';
 import {
   checkAutopush,
   checkContentDir,
   checkCookieDomain,
   checkCookieName,
   checkHttpUrl,
+  checkSyndication,
   checkTrustedOrigins,
 } from './config-checks.ts';
 import { projectRoot } from './store.ts';
 
-const configModules = import.meta.glob<{ default: WikiConfigInput }>('/inkbrush.config.ts', {
-  eager: true,
-});
+/** the root config file's module, when Vite serves this code and the file
+ *  exists; under plain Node (the test suite) there is no glob and no file */
+function configFile(): WikiConfigInput | undefined {
+  try {
+    const modules = import.meta.glob<{ default: WikiConfigInput }>('/inkbrush.config.ts', { eager: true });
+    return Object.values(modules)[0]?.default;
+  } catch {
+    return undefined;
+  }
+}
 
 /** `~/…` → home; relative paths resolve against the project root */
 function expandDir(dir: string): string {
@@ -69,11 +77,33 @@ function envList(name: string): string[] | undefined {
     .filter(Boolean);
 }
 
+/** a peer's content directory as a canonical repo-relative prefix: '' for
+ *  the repository root ('', '.', './'), else `a/b/` — normalized so a tree
+ *  listing's paths compare against it byte for byte. The spelling itself
+ *  must be relative and free of `..`: what it names is checked before it
+ *  is normalized, so a mistake fails at startup instead of selecting
+ *  another directory */
+function contentPrefix(field: string, dir: string): string {
+  if (dir.startsWith('/') || dir.startsWith('\\')) throw new Error(`${field} '${dir}' must be relative to the repository root, not absolute`);
+  if (dir.split(/[\\/]/).some((seg) => seg === '..')) throw new Error(`${field} '${dir}' must not contain '..'`);
+  const normalized = posix.normalize(`${dir}/`).replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  return normalized === '' || normalized === '.' ? '' : `${normalized}/`;
+}
+
 let cached: WikiConfig | null = null;
+let supplied: WikiConfigInput | null = null;
+
+/** the config input to resolve instead of the root file's — for a process
+ *  that embeds the server without one (the test suite); null returns to
+ *  the file. Resolution starts over. */
+export function setConfigInput(input: WikiConfigInput | null): void {
+  supplied = input;
+  cached = null;
+}
 
 export function wikiConfig(): WikiConfig {
   if (cached) return cached;
-  const input = Object.values(configModules)[0]?.default ?? {};
+  const input = supplied ?? configFile() ?? {};
 
   // proxy trust is opt-in: without it, forwarded headers are attacker input
   const server: WikiConfig['server'] = {
@@ -180,6 +210,28 @@ export function wikiConfig(): WikiConfig {
           ),
         };
 
+  // syndication — a config-file decision entirely: git credentials are the
+  // server environment's own, so no secret is read here
+  const syndicationInput = input.syndication;
+  const peerLocales = (locales: readonly LocaleDef[], own?: string[]): string[] => [
+    '',
+    ...(own ?? locales.map((l) => l.prefix)).filter((p) => p !== ''),
+  ];
+  const locales = resolveLocales(input.content?.locales);
+  const syndication: WikiConfig['syndication'] = {
+    name: syndicationInput?.name ?? null,
+    peers: (syndicationInput?.peers ?? []).map((p) => ({
+      id: p.id,
+      title: p.title,
+      repo: p.repo,
+      branch: p.branch ?? 'main',
+      contentDir: contentPrefix(`syndication.peers[${p.id}].contentDir`, p.contentDir ?? ''),
+      url: p.url,
+      locales: peerLocales(locales, p.locales),
+      map: p.map ?? {},
+    })),
+  };
+
   // WIKI_INBOX_DIR='' explicitly disables the watcher even when the config
   // file sets a dir (empty dir = off, per the config contract)
   const inboxRaw = process.env['WIKI_INBOX_DIR'] ?? input.inbox?.dir ?? '';
@@ -212,9 +264,10 @@ export function wikiConfig(): WikiConfig {
     },
     content: {
       dir: input.content?.dir ?? 'src/content/notes',
-      locales: resolveLocales(input.content?.locales),
+      locales,
     },
     share,
+    syndication,
   };
 
   // value validation (./config-checks.ts): a malformed field fails here, at
@@ -232,6 +285,7 @@ export function wikiConfig(): WikiConfig {
   }
   checkContentDir(resolved.content.dir);
   checkAutopush(resolved.autocommit, resolved.autopush);
+  checkSyndication(resolved.syndication);
 
   cached = resolved;
   return cached;

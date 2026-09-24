@@ -7,6 +7,7 @@ import {
   checkCookieDomain,
   checkCookieName,
   checkHttpUrl,
+  checkSyndication,
   checkTrustedOrigins,
 } from '../src/wiki/server/config-checks.ts';
 
@@ -57,4 +58,31 @@ test('autopush without autocommit is a config error', () => {
   assert.doesNotThrow(() => checkAutopush(false, false));
   assert.doesNotThrow(() => checkAutopush(true, false));
   assert.throws(() => checkAutopush(false, true), /autopush requires autocommit/);
+});
+
+test('syndication: a name once peers exist, well-formed unique peer ids, a {id} page URL, shaped maps', () => {
+  const peer = {
+    id: 'chaser',
+    title: 'Chaser Wiki',
+    repo: 'git@github.com:org/wiki.git',
+    branch: 'main',
+    contentDir: '',
+    url: 'https://wiki.example.com/wiki/{id}/',
+    locales: ['', 'en/'],
+    map: { domains: { ai: 'llm', infra: null } },
+  };
+  assert.doesNotThrow(() => checkSyndication({ name: null, peers: [] }));
+  assert.doesNotThrow(() => checkSyndication({ name: 'vortex-wiki', peers: [peer] }));
+  assert.throws(() => checkSyndication({ name: null, peers: [peer] }), /syndication\.name/);
+  assert.throws(() => checkSyndication({ name: 'Vortex', peers: [peer] }), /syndication\.name/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, id: 'Chaser' }] }), /id 'Chaser'/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [peer, peer] }), /duplicate id/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, title: ' ' }] }), /title/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, repo: 'not a url' }] }), /repo/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, branch: 'a..b' }] }), /branch/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, contentDir: '../x/' }] }), /contentDir/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, url: 'https://wiki.example.com/' }] }), /\{id\}/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, url: 'ftp://x/{id}' }] }), /http/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, locales: ['', 'en'] }] }), /locales/);
+  assert.throws(() => checkSyndication({ name: 'v', peers: [{ ...peer, map: { kind: { a: 1 } } as never }] }), /map\.kind\.a/);
 });

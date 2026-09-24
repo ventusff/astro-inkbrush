@@ -3,13 +3,14 @@
  * (WIKI=1 dev mode only; the static build never includes this).
  *
  * Responsibilities: mount the session chip everywhere; on note pages,
- * activate block editing, the Claude affordances and the comment section.
+ * activate block editing, the Claude affordances, the comment section and
+ * the note's outward controls (share, syndication).
  */
 import './wiki.css';
 
 import type { NoteMeta } from '../shared/types';
 import { api } from './api';
-import { mountAuthChip, shareAvailability } from './auth';
+import { mountAuthChip, shareAvailability, syndicationPeers } from './auth';
 import { restoreScroll } from './scroll';
 
 export interface PageContext {
@@ -62,6 +63,11 @@ async function init(): Promise<void> {
   // share module (config-driven): off ⇒ the module isn't even loaded
   if (shareAvailability() !== 'off') {
     await mountSafely('share', async () => (await import('./share')).mountShare(ctx));
+  }
+  // syndication: the peer chips where peers are configured, the copy chip on
+  // a copy; neither ⇒ the module isn't loaded
+  if (meta.origin || syndicationPeers().length > 0) {
+    await mountSafely('syndication', async () => (await import('./syndication')).mountSyndication(ctx));
   }
 }
 

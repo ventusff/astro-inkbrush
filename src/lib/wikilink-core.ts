@@ -5,7 +5,9 @@
  * Browser-safe by construction: no Node builtins, no parser construction,
  * no frontmatter dependency — the module is loaded by the playground's
  * activation chunk and by any browser-side render pipeline, so everything
- * it imports ships to visitors. The filesystem scanner and the source-level
+ * it imports ships to visitors. Its one dependency is the HTML entity
+ * table (decode-named-character-reference, browser-safe), which the
+ * recognizer needs to read the source as the parser does. The filesystem scanner and the source-level
  * extractor (which parse whole documents with the MDX grammar) live in
  * ./wikilinks.ts, which re-exports this module for server and CLI callers.
  *
@@ -22,15 +24,19 @@
  *
  * A backslash-escaped opener (`\[[x]]`, `[\[x]]`) is literal text, never a
  * wikilink. The transform sees the parsed tree, where the parser has already
- * consumed the escape, so it maps each match back to the vfile source
- * (walking from the text node's start offset, two source characters per
- * escaped one) and skips matches spelled with an escape. The mapping is
- * conservative: without a source string on the file, without a start offset
- * on the node, or past the first point where the node's text diverges from
- * the source (a character reference, entity or other non-literal), matches
- * are treated as unescaped — the spelling can then no longer be read from
- * the source.
+ * consumed the escape, so the recognizer (wikilinkMatches — the one
+ * recognition the renderer, the editor and syndication share) maps each
+ * match back to the vfile source, walking from the text node's start
+ * offset in lockstep with its value: two source characters per escaped
+ * one, a character reference's whole spelling per decoded character —
+ * the same reading in every entry point, the browser's included. The
+ * mapping is conservative: without a source string on the file, without a
+ * start offset on the node, or past the first point where the node's text
+ * diverges from the source, matches are treated as unescaped — the
+ * spelling can then no longer be read from the source.
  */
+import { decodeNamedCharacterReference } from 'decode-named-character-reference';
+
 /** shared regex; capture groups: 1=target 2=anchor? 3=label?
  *  (?<!!) excludes ![[embed]]; (?!\() excludes [[1]](#ref)-style markdown
  *  link text (the citation-footnote idiom — [[x]](y) is always a markdown
@@ -242,38 +248,173 @@ function startOffsetOf(node: MdNode): number | undefined {
   return (node as { position?: { start?: { offset?: number } } }).position?.start?.offset;
 }
 
-/**
- * Whether the `[[` of a match at `matchIndex` in a text node's value is
- * spelled with a backslash escape (`\[[` or `[\[`) in the source. Walks the
- * source from the node's start offset in lockstep with the value, consuming
- * two source characters wherever a backslash escapes the next one. Returns
- * false as soon as source and value diverge (a character reference or other
- * non-literal): from there the spelling cannot be read, and an unverifiable
- * match must stay a wikilink.
- */
-function escapedInSource(source: string, sourceStart: number, value: string, matchIndex: number): boolean {
-  let si = sourceStart;
-  for (let vi = 0; vi <= matchIndex + 1 && vi < value.length; vi += 1) {
-    const c = value[vi]!;
-    if (source[si] === '\\' && source[si + 1] === c) {
-      if (vi === matchIndex || vi === matchIndex + 1) return true;
-      si += 2;
-    } else if (source[si] === c) {
-      si += 1;
-    } else if (c === '\n') {
-      // line-suffix whitespace and the CR of a CRLF are not part of the value
-      while (source[si] === ' ' || source[si] === '\t') si += 1;
-      if (source[si] === '\r') si += 1;
-      if (source[si] !== '\n') return false;
-      si += 1;
-    } else {
-      return false;
-    }
+/* ---------------- the recognizer ---------------- */
+
+/** a character reference at the head of a string */
+const REFERENCE_RE = /^&(?:#[xX][0-9a-fA-F]{1,6}|#\d{1,7}|[a-zA-Z][a-zA-Z0-9]{0,31});/;
+
+/** the character a reference's spelling (`&amp;`, `&#x26;`) stands for, or
+ *  null when it is no reference — numeric ones by their code point, named
+ *  ones through the HTML entity table, as the parser decodes them */
+function decodeReference(reference: string): string | null {
+  const numeric = /^&#([xX])?([0-9a-fA-F]+);$/.exec(reference);
+  if (numeric) {
+    const code = parseInt(numeric[2]!, numeric[1] ? 16 : 10);
+    if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return String.fromCharCode(0xfffd);
+    return String.fromCodePoint(code);
   }
-  return false;
+  const decoded = decodeNamedCharacterReference(reference.slice(1, -1));
+  return decoded === false ? null : decoded;
 }
 
-const NO_DESCEND = new Set(['link', 'linkReference', 'code', 'inlineCode', 'math', 'inlineMath']);
+/**
+ * Where each character of a text node's value sits in the source: `at[i]`
+ * is the offset value character `i` begins at (undefined past the first
+ * point where source and value diverge — a construct the reading does not
+ * know), `at[value.length]` the offset the value ends at, and `escaped[i]`
+ * whether the character was spelled with a backslash. The walk keeps the
+ * two in lockstep: an escape spends two source characters, a character
+ * reference its whole spelling, a line break its trailing blanks and CR
+ * and the next line's container prefix (indentation, block quote markers).
+ */
+export function mapValueToSource(
+  source: string,
+  start: number,
+  value: string,
+): { at: Array<number | undefined>; escaped: boolean[] } {
+  const at: Array<number | undefined> = new Array<number | undefined>(value.length + 1).fill(undefined);
+  const escaped: boolean[] = new Array<boolean>(value.length).fill(false);
+  let si = start;
+  let vi = 0;
+  while (vi < value.length) {
+    const c = value[vi]!;
+    if (c === '\n') {
+      let sj = si;
+      while (source[sj] === ' ' || source[sj] === '\t') sj += 1;
+      if (source[sj] === '\r') sj += 1;
+      if (source[sj] === '\n') {
+        at[vi] = si;
+        sj += 1;
+        // the next line's container prefix — a list item's or JSX child's
+        // indentation, block quote markers — which the value does not carry
+        const next = value[vi + 1];
+        for (;;) {
+          while ((source[sj] === ' ' || source[sj] === '\t') && next !== ' ' && next !== '\t') sj += 1;
+          if (source[sj] === '>' && next !== '>') {
+            sj += 1;
+            continue;
+          }
+          break;
+        }
+        si = sj;
+        vi += 1;
+        continue;
+      }
+    }
+    if (source[si] === '\\' && source[si + 1] === c && /[!-/:-@[-`{-~]/.test(c)) {
+      at[vi] = si;
+      escaped[vi] = true;
+      si += 2;
+      vi += 1;
+      continue;
+    }
+    if (source[si] === '&') {
+      const m = REFERENCE_RE.exec(source.slice(si, si + 40));
+      const decoded = m ? decodeReference(m[0]) : null;
+      if (m && decoded !== null && value.startsWith(decoded, vi)) {
+        for (let k = 0; k < decoded.length; k += 1) at[vi + k] = si;
+        si += m[0].length;
+        vi += decoded.length;
+        continue;
+      }
+    }
+    if (source[si] === c) {
+      at[vi] = si;
+      si += 1;
+      vi += 1;
+      continue;
+    }
+    return { at, escaped };
+  }
+  at[value.length] = si;
+  return { at, escaped };
+}
+
+/** one wikilink the renderer makes of a text node's value */
+export interface WikilinkMatch {
+  /** decoded and trimmed, as the renderer resolves and shows them */
+  target: string;
+  anchor?: string | undefined;
+  label?: string | undefined;
+  /** the visible text */
+  shown: string;
+  /** the match inside the node's value */
+  valueStart: number;
+  valueEnd: number;
+  /** the match's source span, when the value maps back to the source
+   *  exactly up to its end; null when the source is unknown or diverges */
+  span: { start: number; end: number } | null;
+}
+
+/**
+ * The wikilinks in one text node's value — THE recognition every consumer
+ * shares: the grammar's regex over the decoded value, an opener spelled
+ * with a backslash escape left literal. `source` and `start` locate the
+ * node; without them (no source on the file, no position on the node)
+ * escapes cannot be read and every match counts, and past a point where
+ * the source cannot be read, matches count as unescaped.
+ */
+export function wikilinkMatches(value: string, source: string | null, start: number | undefined): WikilinkMatch[] {
+  const out: WikilinkMatch[] = [];
+  WIKILINK_RE.lastIndex = 0;
+  if (!WIKILINK_RE.test(value)) return out;
+  const mapping = source !== null && start !== undefined ? mapValueToSource(source, start, value) : null;
+  WIKILINK_RE.lastIndex = 0;
+  for (const m of value.matchAll(WIKILINK_RE)) {
+    const [raw, target, anchor, label] = m as unknown as [string, string, string | undefined, string | undefined];
+    const idx = m.index ?? 0;
+    if (mapping && (mapping.escaped[idx] || mapping.escaped[idx + 1])) continue;
+    const from = mapping?.at[idx];
+    const to = mapping?.at[idx + raw.length];
+    out.push({
+      target: target.trim(),
+      anchor: anchor?.trim(),
+      label: label?.trim(),
+      shown: (label ?? (anchor ? `${target}#${anchor}` : target)).trim(),
+      valueStart: idx,
+      valueEnd: idx + raw.length,
+      span: from !== undefined && to !== undefined ? { start: from, end: to } : null,
+    });
+  }
+  return out;
+}
+
+/** node types the wikilink transform never enters */
+export const WIKILINK_NO_DESCEND: ReadonlySet<string> = new Set(['link', 'linkReference', 'code', 'inlineCode', 'math', 'inlineMath']);
+
+/** a match placed in a tree: the text node's path of child indexes */
+export interface WikilinkInTree extends WikilinkMatch {
+  path: readonly number[];
+}
+
+/** every wikilink the renderer makes of `tree` (parsed from `source`), in document order */
+export function findWikilinks(tree: MdNode, source: string | null): WikilinkInTree[] {
+  const out: WikilinkInTree[] = [];
+  const walk = (node: MdNode, path: readonly number[]): void => {
+    (node.children ?? []).forEach((child, i) => {
+      if (WIKILINK_NO_DESCEND.has(child.type)) return;
+      if (child.type !== 'text') {
+        walk(child, [...path, i]);
+        return;
+      }
+      for (const match of wikilinkMatches(child.value ?? '', source, startOffsetOf(child))) {
+        out.push({ ...match, path: [...path, i] });
+      }
+    });
+  };
+  walk(tree, []);
+  return out;
+}
 
 export interface BrokenWikilink {
   file?: string | undefined;
@@ -296,32 +437,14 @@ export function remarkWikilinks(opts: {
 
     const transformText = (node: MdNode): MdNode[] | null => {
       const value = node.value ?? '';
-      WIKILINK_RE.lastIndex = 0;
-      if (!WIKILINK_RE.test(value)) return null;
-      WIKILINK_RE.lastIndex = 0;
+      const matches = wikilinkMatches(value, source, startOffsetOf(node));
+      if (matches.length === 0) return null;
 
-      const nodeStart = startOffsetOf(node);
       const out: MdNode[] = [];
       let last = 0;
-      let replaced = false;
-      for (const m of value.matchAll(WIKILINK_RE)) {
-        const [raw, target, anchor, label] = m as unknown as [
-          string,
-          string,
-          string | undefined,
-          string | undefined,
-        ];
-        const idx = m.index ?? 0;
-        // an escaped opener is literal text: leave its span for the
-        // surrounding text slices
-        if (source !== null && nodeStart !== undefined && escapedInSource(source, nodeStart, value, idx)) {
-          continue;
-        }
-        replaced = true;
+      for (const { target, anchor, shown, valueStart: idx, valueEnd } of matches) {
         if (idx > last) out.push({ type: 'text', value: value.slice(last, idx) });
-        last = idx + raw.length;
-
-        const shown = (label ?? (anchor ? `${target}#${anchor}` : target)).trim();
+        last = valueEnd;
         const res = opts.resolve(target, fromId);
         if (res.kind === 'ok') {
           out.push({
@@ -335,7 +458,7 @@ export function remarkWikilinks(opts: {
           const tip =
             res.kind === 'ambiguous'
               ? `ambiguous target: ${res.candidates.join(' / ')}`
-              : `no such note: ${target.trim()}`;
+              : `no such note: ${target}`;
           out.push({
             type: 'wikilinkDead',
             data: {
@@ -344,10 +467,9 @@ export function remarkWikilinks(opts: {
             },
             children: [{ type: 'text', value: shown }],
           });
-          opts.onBroken?.({ file: file?.path, target: target.trim(), kind: res.kind });
+          opts.onBroken?.({ file: file?.path, target, kind: res.kind });
         }
       }
-      if (!replaced) return null;
       if (last < value.length) out.push({ type: 'text', value: value.slice(last) });
       return out;
     };
@@ -357,7 +479,7 @@ export function remarkWikilinks(opts: {
       if (!children) return;
       for (let i = 0; i < children.length; i += 1) {
         const child = children[i]!;
-        if (NO_DESCEND.has(child.type)) continue;
+        if (WIKILINK_NO_DESCEND.has(child.type)) continue;
         if (child.type === 'text') {
           const replaced = transformText(child);
           if (replaced) {

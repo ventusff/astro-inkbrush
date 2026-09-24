@@ -70,6 +70,7 @@
     "@mdx-js/mdx": "^3.1.1",
     "@node-saml/node-saml": "^5.1.0",
     "chokidar": "^5.0.0",
+    "decode-named-character-reference": "^1.3.0",
     "jose": "^6.2.3",
     "katex": "^0.17.0",
     "micromark-extension-cjk-friendly-util": "^3.0.1",
