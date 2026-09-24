@@ -866,16 +866,21 @@ identity. **Do not accept syndication without both rulesets**
 (Repository settings → Rules → Rulesets):
 
 - **Push ruleset** (target: all pushes) with **Restrict file paths**:
-  `.github/**` and `_meta/**` (add whatever else the peer's checks
+  `.github/**/*` and `_meta/**/*` (add whatever else the peer's checks
   execute — `package.json`, scripts). Bypass list: the team the peer's
   own people and its promotion identity belong to; never the sender.
 - **Branch ruleset** targeting **all branches except `syndicate/**`**
-  (include *All branches*, exclude `refs/heads/syndicate/**`) with
+  (include *All branches*, exclude `refs/heads/syndicate/**/*`) with
   **Restrict creations**, **Restrict updates** and **Restrict deletions**.
   Same bypass list. The sender can then create, update and delete only
   `syndicate/**`, and `main` moves only through the gate.
 - **Tag ruleset** (all tags) with the same three restrictions and the same
   bypass list.
+
+Write every pattern with a trailing `/**/*`: GitHub matches these patterns
+with path semantics, where a bare `**` at the end matches one level only —
+`refs/heads/syndicate/**` misses `syndicate/<origin>/<unit>`, and
+`.github/**` misses `.github/workflows/gate.yml`.
 
 **Grant the bypass to a team (or to named users), never to a repository
 role or to organization admins.** GitHub evaluates a deploy key with write

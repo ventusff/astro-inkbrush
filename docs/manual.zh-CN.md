@@ -716,14 +716,18 @@ import 对方自己的 schema 和模块。所以发送方的凭据——原站�
 Rules → Rulesets):
 
 - **推送规则集**(target:所有推送),开 **Restrict file paths**:
-  `.github/**` 与 `_meta/**`(对方的检查还会执行什么就再加什么——
+  `.github/**/*` 与 `_meta/**/*`(对方的检查还会执行什么就再加什么——
   `package.json`、脚本)。豁免名单:对方自己的人和合入身份所在的团队;
   发送方绝不豁免。
 - **分支规则集**,作用于 **`syndicate/**` 之外的所有分支**(包含 *All
-  branches*,排除 `refs/heads/syndicate/**`),开 **Restrict creations**、
+  branches*,排除 `refs/heads/syndicate/**/*`),开 **Restrict creations**、
   **Restrict updates**、**Restrict deletions**,豁免名单同上。这样发送方只能
   建、改、删 `syndicate/**`,`main` 只经把关前进。
 - **标签规则集**(所有标签),同样三项限制、同样的豁免名单。
+
+每个模式都要以 `/**/*` 结尾:GitHub 按路径语义匹配这些模式,结尾单独一个
+`**` 只匹配一层——`refs/heads/syndicate/**` 匹配不到 `syndicate/<来源>/<单元>`,
+`.github/**` 匹配不到 `.github/workflows/gate.yml`。
 
 **豁免只能按团队(或具体的人)给,绝不能按仓库角色或组织管理员给。**GitHub
 把有写权限的部署密钥当作持有仓库角色来判定:给 *Maintain*、*Admin* 或
