@@ -580,8 +580,10 @@ for this is syndication: the original is canonical, copies point back.
 A note is published together with everything that belongs to it — the
 **unit**: the top-level note's directory (hub sub-pages, demo modules,
 attachments) plus the same directory under every locale prefix
-(`chasing/`, `en/chasing/`, `de/chasing/`). A unit is named by its
-top-level id and exists iff `<unit>/index.{md,mdx}` exists. A copy lives at
+(`chasing/`, `en/chasing/`, `de/chasing/`). Every regular file travels
+with its bytes and its git mode: an executable script arrives executable.
+A unit is named by its top-level id and exists iff `<unit>/index.{md,mdx}`
+exists. A copy lives at
 exactly the id its original has — no renaming, so links between copies,
 attachment URLs and `demo="<id>/…"` props stay valid unchanged. If the peer
 already holds a note of its own at that id, publishing there **adopts** it
@@ -637,12 +639,15 @@ the origin from what it knows of both wikis:
 - **Root-relative links.** A Markdown link to such a note becomes its text;
   an image or a JSX `href`/`src` is left alone and listed as a warning.
 
-Everything else — bodies, modules, attachments — passes byte-identical.
-The transform is deterministic, so the **revision** — sixteen hex characters
-of a digest over the unit's files (notes by their frontmatter as sorted
-JSON without `origin` plus their body; other files by git blob id) — is
-the same whoever computes it: a reformatted frontmatter or a stamped
-`origin` never changes it, a changed body or attachment always does.
+Everything else — bodies, modules, attachments — passes byte-identical,
+every file in its original mode. The transform is deterministic, so the
+**revision** — sixteen hex characters of a digest over the unit's files
+(notes by their frontmatter as sorted JSON without `origin` plus their
+body; other files by git blob id; an executable file's part prefixed by
+its mode, `100755:`, so a plain file's part is the bare one) — is the same
+whoever computes it: a reformatted frontmatter or a stamped `origin` never
+changes it, a changed body or attachment or a flipped executable bit
+always does.
 
 ### The transport: the peer's git repository
 
@@ -700,10 +705,11 @@ publish ──commit on the tip──push──▶          refs/heads/syndicate
    segment; not `_meta`, `docs`, `inbox`, `node_modules`, a locale
    segment or a dot name — the names the peer's discovery and checks
    skip — and not a path that is a file on `main`); the commit changes
-   only the unit's directories, with regular files only (no symlink, no
-   submodule, no dot-prefixed path, no note directory holding both
-   index.md and index.mdx); every note carries `origin` with the
-   submitted revision and the files digest to it; the unit's state on the
+   only the unit's directories, with regular files only (plain or
+   executable; no symlink, no submodule, no dot-prefixed path, no note
+   directory holding both index.md and index.mdx); every note carries
+   `origin` with the submitted revision and the files — bytes and modes —
+   digest to it; the unit's state on the
    *current* tip of `main` still allows the submission (the same rules
    the origin applied, so a race with a concurrent change on the peer is
    refused as `moved` or `changed`, never merged blind); then it builds

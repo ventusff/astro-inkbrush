@@ -6,17 +6,21 @@
  * every locale prefix: `chasing/`, `en/chasing/`, `de/chasing/`. It is
  * identified by its top-level id and exists iff its default-locale root
  * note `<unit>/index.{md,mdx}` exists. A bundle is the unit's files keyed
- * by content-root-relative POSIX path; the same paths hold on the peer
- * (a copy lives at exactly the id its original has).
+ * by content-root-relative POSIX path, each with its bytes and its git
+ * tree mode — a file is its content and whether it is executable; the
+ * same paths hold on the peer (a copy lives at exactly the id its
+ * original has).
  *
  * The digest is the revision two wikis compare: sixteen hex characters of
- * a SHA-256 over the sorted (path, part) pairs, where a note file's part
- * is the SHA-256 of its canonical text — the frontmatter as sorted JSON
- * without the `origin` block, then the body byte-exact — and any other
- * file's part is its git blob id. Consequences: a reformatted frontmatter
- * or a stamped `origin` block never changes the digest; a changed body,
- * attachment or module always does; and a peer computes the same digest
- * from a git tree listing without fetching the large blobs.
+ * a SHA-256 over the sorted (path, part) pairs. A file's part is its
+ * content part — for a note file the SHA-256 of its canonical text, the
+ * frontmatter as sorted JSON without the `origin` block then the body
+ * byte-exact; for any other file its git blob id — prefixed by its mode
+ * when the mode is not the plain file's: `100755:<content part>` for an
+ * executable file. Consequences: a reformatted frontmatter or a stamped
+ * `origin` block never changes the digest; a changed body, attachment,
+ * module or executable bit always does; and a peer computes the same
+ * digest from a git tree listing without fetching the large blobs.
  */
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -28,8 +32,31 @@ import { checkBranchName } from './git-ref-name.ts';
 import { NOTE_ID } from './note-id.ts';
 import { localePrefixOf } from './wikilink-core.ts';
 
-/** content-root-relative POSIX path → bytes */
-export type Bundle = Map<string, Uint8Array>;
+/** the git tree mode of a regular file: plain, or executable */
+export type FileMode = '100644' | '100755';
+
+/** the mode of a plain file: the one mode that leaves a digest part unprefixed */
+export const PLAIN_FILE: FileMode = '100644';
+
+/** a unit file: its bytes and its git tree mode */
+export interface UnitFile {
+  bytes: Uint8Array;
+  mode: FileMode;
+}
+
+/** content-root-relative POSIX path → the file */
+export type Bundle = Map<string, UnitFile>;
+
+/** `mode` is a regular file's (a symlink's or a submodule's is not) */
+export function isFileMode(mode: string): mode is FileMode {
+  return mode === '100644' || mode === '100755';
+}
+
+/** the tree mode git gives a regular file with the permission bits `mode`
+ *  (`stat.mode`): executable iff the owner-execute bit is set */
+export function fileModeOf(mode: number): FileMode {
+  return mode & 0o100 ? '100755' : PLAIN_FILE;
+}
 
 /** a note file: `index.md` or `index.mdx` */
 export function isNoteFile(path: string): boolean {
@@ -110,15 +137,15 @@ function unitRootDir(contentRoot: string, root: string): string | null {
 }
 
 /**
- * Collect the unit's files from a content root: regular files only, walked
- * with lstat — symlinks are never followed, and a unit directory reached
- * through a symlink in any component (a linked locale directory included)
- * is not the unit's; dot-prefixed entries are skipped, and `_meta` /
- * `docs` are ordinary names inside a unit (they are reserved at the
- * content root alone). A directory that cannot be read fails the
- * collection — a partial unit would publish as a deletion of the rest.
- * Throws when the default-locale root note is missing: there is no unit
- * then.
+ * Collect the unit's files from a content root: regular files only, each
+ * with the tree mode git would give it, walked with lstat — symlinks are
+ * never followed, and a unit directory reached through a symlink in any
+ * component (a linked locale directory included) is not the unit's;
+ * dot-prefixed entries are skipped, and `_meta` / `docs` are ordinary
+ * names inside a unit (they are reserved at the content root alone). A
+ * directory that cannot be read fails the collection — a partial unit
+ * would publish as a deletion of the rest. Throws when the default-locale
+ * root note is missing: there is no unit then.
  */
 export function collectUnit(contentRoot: string, unit: string, prefixes: readonly string[]): Bundle {
   const bundle: Bundle = new Map();
@@ -130,7 +157,7 @@ export function collectUnit(contentRoot: string, unit: string, prefixes: readonl
       const path = `${rel}/${entry.name}`;
       const stat = lstatSync(abs);
       if (stat.isDirectory()) walk(abs, path);
-      else if (stat.isFile()) bundle.set(path, readFileSync(abs));
+      else if (stat.isFile()) bundle.set(path, { bytes: readFileSync(abs), mode: fileModeOf(stat.mode) });
     }
   };
   for (const root of unitRoots(unit, prefixes)) {
@@ -211,9 +238,19 @@ export function notePart(text: string): string {
   return createHash('sha256').update(canonical).digest('hex');
 }
 
-/** a file's digest part from its bytes */
-export function filePart(path: string, bytes: Uint8Array): string {
-  return isNoteFile(path) ? notePart(Buffer.from(bytes).toString('utf8')) : blobId(bytes);
+/**
+ * The digest part of the tree entry at `path` with git mode `mode` and
+ * blob id `sha`: a regular note file's content part is the note part of
+ * its text (`text` is read for such an entry alone), any other entry's
+ * is its blob id; a mode other than the plain file's prefixes the content
+ * part — `100755:` for an executable file, a symlink's or a submodule's
+ * mode for an entry that is no file at all, so such an entry never
+ * digests like a file's bytes. The one rule both wikis compute the
+ * revision with, from bytes here and from a tree listing there.
+ */
+export function entryPart(path: string, mode: string, sha: string, text: () => string): string {
+  const content = isFileMode(mode) && isNoteFile(path) ? notePart(text()) : sha;
+  return mode === PLAIN_FILE ? content : `${mode}:${content}`;
 }
 
 /** the digest of (path, part) pairs, in any order */
@@ -227,5 +264,7 @@ export function digestOfParts(parts: Iterable<[path: string, part: string]>): st
 
 /** the digest of a bundle */
 export function digest(bundle: Bundle): string {
-  return digestOfParts([...bundle].map(([path, bytes]) => [path, filePart(path, bytes)]));
+  return digestOfParts(
+    [...bundle].map(([path, { bytes, mode }]) => [path, entryPart(path, mode, blobId(bytes), () => Buffer.from(bytes).toString('utf8'))]),
+  );
 }

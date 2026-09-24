@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { splitFrontmatter } from '../src/lib/frontmatter.ts';
-import type { Bundle } from '../src/lib/syndication-bundle.ts';
+import type { Bundle, UnitFile } from '../src/lib/syndication-bundle.ts';
 import { transformUnit, type PeerNoteInfo, type TransformInput } from '../src/lib/syndication-transform.ts';
 import { findWikilinks, type WikiNoteInfo } from '../src/lib/wikilink-core.ts';
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
-const dec = (b: Uint8Array): string => new TextDecoder().decode(b);
-const files = (entries: Record<string, string>): Bundle => new Map(Object.entries(entries).map(([p, t]) => [p, enc(t)]));
+const dec = (f: UnitFile): string => new TextDecoder().decode(f.bytes);
+const files = (entries: Record<string, string>): Bundle => new Map(Object.entries(entries).map(([p, t]) => [p, { bytes: enc(t), mode: '100644' }]));
 const locales = [{ prefix: '' }, { prefix: 'en/' }, { prefix: 'de/' }];
 
 const note = (id: string, title: string, extra: Partial<WikiNoteInfo> = {}): WikiNoteInfo => ({ id, title, aliases: [], ...extra });
@@ -182,6 +182,30 @@ test('the transform is deterministic: same inputs, same bytes, same digest', () 
   assert.deepEqual([...a.bundle.keys()], [...b.bundle.keys()]);
   for (const [path, bytes] of a.bundle) assert.deepEqual(bytes, b.bundle.get(path));
   assert.deepEqual(splitFrontmatter(dec(a.bundle.get('chasing/index.mdx')!)).data, { title: 'C', domains: ['llm'] });
+});
+
+test('every file keeps its mode through the transform, an edited note included', () => {
+  const entries = {
+    'chasing/index.mdx': '---\ntitle: C\ndomains: [ai]\n---\n\n[[Nowhere]]\n',
+    'chasing/run.sh': '#!/bin/sh\necho hi\n',
+    'chasing/demo.ts': 'export default 1;\n',
+  };
+  const plain = okResult({ files: files(entries), peer: { id: 'chaser', map: { domains: { ai: 'llm' } } } });
+  const withModes = files(entries);
+  withModes.get('chasing/index.mdx')!.mode = '100755';
+  withModes.get('chasing/run.sh')!.mode = '100755';
+  const result = okResult({ files: withModes, peer: { id: 'chaser', map: { domains: { ai: 'llm' } } } });
+  assert.deepEqual(
+    [...result.bundle].map(([path, file]) => [path, file.mode]),
+    [
+      ['chasing/demo.ts', '100644'],
+      ['chasing/index.mdx', '100755'],
+      ['chasing/run.sh', '100755'],
+    ],
+  );
+  assert.equal(dec(result.bundle.get('chasing/index.mdx')!), '---\ntitle: C\ndomains: [llm]\n---\n\nNowhere\n');
+  assert.deepEqual(result.bundle.get('chasing/run.sh')!.bytes, plain.bundle.get('chasing/run.sh')!.bytes);
+  assert.notEqual(result.digest, plain.digest);
 });
 
 /* ---------------- what the copy renders as ---------------- */

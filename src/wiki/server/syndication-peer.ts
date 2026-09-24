@@ -3,7 +3,7 @@
  * peer's content repository (`.wiki/data/syndication/<peer>.git`). The
  * mirror is a partial clone — blobs above 1 MiB stay on the remote, and
  * nothing here needs them: notes are small text, and every other file
- * enters the digest by its blob id — fetched with three refspecs:
+ * enters the digest by its blob id and mode — fetched with three refspecs:
  *
  *   refs/heads/<branch>              → refs/peer/base        the published tip
  *   refs/heads/syndicate/<name>/*    → refs/peer/staged/*    submissions awaiting the gate
@@ -19,7 +19,7 @@ import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { splitFrontmatter } from '../../lib/frontmatter.ts';
-import { copyOriginOf, digestOfParts, inUnitRoots, isNoteFile, noteIdOfPath, notePart, unitOf, unitRoots } from '../../lib/syndication-bundle.ts';
+import { copyOriginOf, digestOfParts, entryPart, inUnitRoots, isNoteFile, noteIdOfPath, unitOf, unitRoots } from '../../lib/syndication-bundle.ts';
 import { commitInfo, git, GitError, isRegularFile, listRefs, listTree, readBlobs, type Repo, type TreeEntry } from '../../lib/syndication-git.ts';
 import { parseSubmission, unitStateFrom, VERDICTS_BRANCH, type Submission, type UnitState, type Verdict } from '../../lib/syndication-state.ts';
 import type { PeerNoteInfo } from '../../lib/syndication-transform.ts';
@@ -230,7 +230,7 @@ async function readTip(repo: Repo, peer: SyndicationPeer, name: string, tip: str
   );
   const relative = (e: TreeEntry): string => e.path.slice(peer.contentDir.length);
   // a note is a regular file: a symlink named index.md is an irregular
-  // entry, which digests by its mode and never counts as a note
+  // entry, which digests by its mode and id and never counts as a note
   const noteEntries = entries.filter((e) => isRegularFile(e) && isNoteFile(relative(e)));
   const texts = await noteTextsOf(repo, noteEntries.map((e) => e.sha));
   const locales = peer.locales.map((prefix) => ({ prefix }));
@@ -265,8 +265,7 @@ async function readTip(repo: Repo, peer: SyndicationPeer, name: string, tip: str
     for (const entry of entries) {
       const rel = relative(entry);
       if (!inUnitRoots(rel, id, peer.locales)) continue;
-      if (!isRegularFile(entry)) parts.push([rel, `${entry.mode}:${entry.sha}`]);
-      else parts.push([rel, isNoteFile(rel) ? notePart(texts.get(entry.sha) ?? '') : entry.sha]);
+      parts.push([rel, entryPart(rel, entry.mode, entry.sha, () => texts.get(entry.sha) ?? '')]);
     }
     copies.set(id, { unit: id, revision: origin.revision, synced: origin.synced, digest: digestOfParts(parts) });
   }

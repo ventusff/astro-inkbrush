@@ -33,11 +33,12 @@
  *        locale directory);
  *     2. the commit changes only paths under the unit's directories
  *        (`<content-dir><prefix><unit>/` for the served locale prefixes);
- *     3. every entry under those directories is a regular file without a
- *        dot-prefixed segment, no note directory holds both index.md and
- *        index.mdx; a publish carries `origin` on every note (wiki = the
- *        origin, revision = the submitted one) and its files digest to
- *        that revision; a withdrawal leaves the directories empty;
+ *     3. every entry under those directories is a regular file (plain or
+ *        executable) without a dot-prefixed segment, no note directory
+ *        holds both index.md and index.mdx; a publish carries `origin` on
+ *        every note (wiki = the origin, revision = the submitted one) and
+ *        its files — bytes and modes — digest to that revision; a
+ *        withdrawal leaves the directories empty;
  *     4. the unit's state on the current tip of `<base>` (fetched now)
  *        allows the submission: a foreign copy is never touched, a native
  *        note only with adopt, a copy only at the expected revision and,
@@ -165,7 +166,7 @@ async function writeVerdictFile(dir, opts, path, text) {
     const add = [];
     if (text !== null) {
       const blobs = await writeBlobs(dir, new Map([[path, new TextEncoder().encode(text)]]), mkdtempSync(join(tmpdir(), 'syndication-verdict-')));
-      add.push({ path, sha: blobs.get(path) });
+      add.push({ path, sha: blobs.get(path), mode: '100644' });
     } else if (tip === null || !(await listTree(dir, tip, path)).some((e) => e.path === path)) {
       return;
     }
@@ -212,7 +213,8 @@ async function indexFile(dir) {
 
 /* ---------------- the promotion ---------------- */
 
-/** the promoted commit: `tip` with the unit's directories replaced by the staged commit's */
+/** the promoted commit: `tip` with the unit's directories replaced by the
+ *  staged commit's, every entry in its staged mode */
 async function promote(dir, opts, target, staged, tip) {
   const roots = unitRoots(target.unit, opts.locales).map((root) => `${opts.contentDir}${root}`);
   const { entries } = await readUnitInTree(dir, staged.sha, opts.contentDir, target.unit, opts.locales);

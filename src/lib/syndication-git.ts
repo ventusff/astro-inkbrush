@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { digestOfParts, inUnitRoots, isNoteFile, noteIdOfPath, notePart, unitPathProblem } from './syndication-bundle.ts';
+import { digestOfParts, entryPart, inUnitRoots, isFileMode, isNoteFile, noteIdOfPath, unitPathProblem } from './syndication-bundle.ts';
 
 /** a failed git command: `stderr` in full, `summary` its first non-empty
  *  line without surrounding whitespace (ssh writes CRLF line ends) */
@@ -156,19 +156,19 @@ export async function commitInfo(repo: Repo, sha: string): Promise<CommitInfo> {
   };
 }
 
-/** a tree entry that is a file of the unit: a regular (or executable) blob */
+/** a tree entry that is a file of the unit: a blob in a regular file's mode, plain or executable */
 export function isRegularFile(entry: TreeEntry): boolean {
-  return entry.type === 'blob' && (entry.mode === '100644' || entry.mode === '100755');
+  return entry.type === 'blob' && isFileMode(entry.mode);
 }
 
 /**
  * A unit's files in a tree: its entries under the unit's directories
- * (below `contentDir`), the texts of its regular note files, its digest,
+ * (below `contentDir`), the texts of its regular note files, its digest
+ * (every entry by the bundle's part rule, from its mode and blob id),
  * and every problem that makes it no unit an origin could have sent — an
  * entry that is not a regular file (a symlink, a submodule), a
  * dot-prefixed segment, a note directory holding both index.md and
- * index.mdx. An irregular entry enters the digest by its mode and id,
- * so it never digests like a file's bytes.
+ * index.mdx.
  */
 export async function readUnitInTree(
   repo: Repo,
@@ -195,10 +195,7 @@ export async function readUnitInTree(
   const notes = entries.filter((e) => isRegularFile(e) && isNoteFile(rel(e)));
   const blobs = await readBlobs(repo, notes.map((e) => e.sha));
   const noteTexts = new Map(notes.map((e) => [rel(e), blobs.get(e.sha)!.toString('utf8')]));
-  const parts = entries.map((e): [string, string] => {
-    if (!isRegularFile(e)) return [rel(e), `${e.mode}:${e.sha}`];
-    return [rel(e), isNoteFile(rel(e)) ? notePart(noteTexts.get(rel(e))!) : e.sha];
-  });
+  const parts = entries.map((e): [string, string] => [rel(e), entryPart(rel(e), e.mode, e.sha, () => noteTexts.get(rel(e))!)]);
   return { entries, noteTexts, digest: digestOfParts(parts), problems };
 }
 
@@ -214,7 +211,8 @@ export async function changedPaths(repo: Repo, from: string | null, to: string):
  * Write `files` (path → bytes) as blobs into the repository through a
  * scratch directory (`git hash-object --stdin-paths` reads them in one
  * process, without clean filters — the stored blob is the bytes the
- * digest saw); returns path → blob id. The scratch directory is removed.
+ * digest saw); returns path → blob id. A blob has no mode: the tree entry
+ * that names it carries one (buildTree). The scratch directory is removed.
  */
 export async function writeBlobs(repo: Repo, files: ReadonlyMap<string, Uint8Array>, scratchDir: string): Promise<Map<string, string>> {
   const paths = [...files.keys()].sort();
@@ -241,8 +239,8 @@ export interface TreeChange {
   base: string | null;
   /** directories whose entries are dropped (repo-relative, no trailing slash) */
   remove: readonly string[];
-  /** entries written after the removal */
-  add: ReadonlyArray<{ path: string; sha: string; mode?: string | undefined }>;
+  /** entries written after the removal, each in its git mode */
+  add: ReadonlyArray<{ path: string; sha: string; mode: string }>;
   /** the temporary index file to build in (removed afterwards) */
   indexFile: string;
 }
@@ -261,7 +259,7 @@ export async function buildTree(repo: Repo, change: TreeChange): Promise<string>
         }
       }
     }
-    for (const entry of change.add) lines.push(`${entry.mode ?? '100644'} blob ${entry.sha}\t${entry.path}`);
+    for (const entry of change.add) lines.push(`${entry.mode} blob ${entry.sha}\t${entry.path}`);
     if (lines.length > 0) await git(repo, ['update-index', '-z', '--index-info'], { env, input: `${lines.join('\0')}\0` });
     return (await git(repo, ['write-tree'], { env })).trim();
   } finally {

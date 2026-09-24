@@ -18,8 +18,9 @@
  *  - root-relative links: a Markdown link to such a note becomes its
  *    text; an image or a JSX href/src is left alone and reported.
  *
- * Every other byte of every file passes unchanged, and every edited note
- * is verified (lib/syndication-links.ts): its parsed tree must equal the
+ * Every other byte of every file passes unchanged, every file in its
+ * original mode, and every edited note is verified
+ * (lib/syndication-links.ts): its parsed tree must equal the
  * original's with the degraded links as their text and the rewritten
  * ones as their new spelling — a degrade that would change the structure
  * around it refuses the unit rather than guessing. The transform is a
@@ -175,7 +176,7 @@ export function transformUnit(input: TransformInput): TransformResult {
   const copyInfos: WikiNoteInfo[] = [];
   for (const path of notePaths) {
     const id = noteIdOfPath(path);
-    const text = decoder.decode(input.files.get(path)!);
+    const text = decoder.decode(input.files.get(path)!.bytes);
     const fm = splitFrontmatter(text);
     if (!fm.present) {
       refusals.push({ code: 'no-frontmatter', note: id });
@@ -358,7 +359,7 @@ export function transformUnit(input: TransformInput): TransformResult {
       refusals.push({ code: 'degrade', note: from, target: planned[failing === -1 ? 0 : failing]!.target });
       continue;
     }
-    bundle.set(path, encoder.encode(applyEdits(text, planned)));
+    bundle.set(path, { bytes: encoder.encode(applyEdits(text, planned)), mode: input.files.get(path)!.mode });
   }
   if (refusals.length > 0) return { ok: false, refusals };
   return { ok: true, bundle, digest: digest(bundle), notes: summaries, degraded, warnings };

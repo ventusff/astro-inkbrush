@@ -142,10 +142,13 @@ const TRANSFORM_CACHE = 64;
 const transforms = new Map<string, { inputs: string; result: TransformResult }>();
 const noteListKeys = new WeakMap<WikiNoteInfo[], { urlFor: unknown; key: string }>();
 
-/** a byte-exact fingerprint of the unit's files */
+/** a fingerprint of the unit's files: every path with its mode and its exact bytes */
 function filesKey(files: Bundle): string {
   const hash = createHash('sha256');
-  for (const path of [...files.keys()].sort()) hash.update(`${path}\0${blobId(files.get(path)!)}\n`);
+  for (const path of [...files.keys()].sort()) {
+    const { bytes, mode } = files.get(path)!;
+    hash.update(`${path}\0${mode} ${blobId(bytes)}\n`);
+  }
   return hash.digest('hex');
 }
 
@@ -257,12 +260,12 @@ function statusFrom(peer: SyndicationPeer, unit: string, view: PeerView): Syndic
   };
   if (transform?.ok) {
     const root = transform.notes.find((n) => n.id === unit);
-    const rootData = files ? splitFrontmatter(new TextDecoder().decode(files.get(`${unit}/index.mdx`) ?? files.get(`${unit}/index.md`)!)).data : {};
+    const rootData = files ? splitFrontmatter(new TextDecoder().decode((files.get(`${unit}/index.mdx`) ?? files.get(`${unit}/index.md`)!).bytes)).data : {};
     const overrides = (rootData['syndication'] as Record<string, unknown> | undefined)?.[peer.id];
     status.plan = {
       notes: [...transform.bundle.keys()].filter(isNoteFile).length,
       files: transform.bundle.size,
-      bytes: [...transform.bundle.values()].reduce((sum, bytes) => sum + bytes.byteLength, 0),
+      bytes: [...transform.bundle.values()].reduce((sum, file) => sum + file.bytes.byteLength, 0),
       fields: Object.fromEntries(PLAN_FIELDS.filter((f) => root && f in root.fields).map((f) => [f, root!.fields[f]])),
       overrides: overrides && typeof overrides === 'object' && !Array.isArray(overrides) ? (overrides as Record<string, unknown>) : null,
       degraded: transform.degraded,
@@ -444,12 +447,12 @@ export function submitPublish(
     const decoder = new TextDecoder();
     const stamped: Bundle = new Map();
     const synced = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    for (const [path, bytes] of transform.bundle) {
+    for (const [path, file] of transform.bundle) {
       if (!isNoteFile(path)) {
-        stamped.set(path, bytes);
+        stamped.set(path, file);
         continue;
       }
-      const text = decoder.decode(bytes);
+      const text = decoder.decode(file.bytes);
       const problem = await validateNoteSource(text, {
         site: site.page ?? site,
         guard: site.guard ?? {},
@@ -459,18 +462,18 @@ export function submitPublish(
       if (problem) problems.push(`${path}: ${problem}`);
       else {
         const origin = { wiki: originName(), revision: transform.digest, synced };
-        stamped.set(path, new TextEncoder().encode(setFrontmatterFields(text, { origin }, { last: ['origin'] })));
+        stamped.set(path, { bytes: new TextEncoder().encode(setFrontmatterFields(text, { origin }, { last: ['origin'] })), mode: file.mode });
       }
     }
     if (problems.length > 0) throw new SyndicationError('invalid', 'The copy would not build here', problems);
 
     progress('submitting', `Submitting to ${stagingBranch(originName(), unit)}…`);
-    const repoFiles = new Map([...stamped].map(([path, bytes]) => [`${peer.contentDir}${path}`, bytes]));
-    const blobs = await writeBlobs(dir, repoFiles, wikiTempDir('syndication'));
+    const repoFiles = new Map([...stamped].map(([path, file]) => [`${peer.contentDir}${path}`, file]));
+    const blobs = await writeBlobs(dir, new Map([...repoFiles].map(([path, file]) => [path, file.bytes])), wikiTempDir('syndication'));
     const tree = await buildTree(dir, {
       base: view.tip,
       remove: peerUnitRoots(peer, unit),
-      add: [...blobs].map(([path, sha]) => ({ path, sha })),
+      add: [...repoFiles].map(([path, file]) => ({ path, sha: blobs.get(path)!, mode: file.mode })),
       indexFile: indexFile(peer),
     });
     const message = submissionMessage({

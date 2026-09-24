@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
@@ -189,6 +189,41 @@ test('an edit at the origin: behind → publish → current', async () => {
   revision = staged.revision;
 });
 
+test('an executable file is promoted executable: both sides digest its mode, and the bit alone is a new revision', async () => {
+  write({
+    'tools/index.md': '---\ntitle: Tools\n---\n\nscripts\n',
+    'tools/check-hosts.sh': '#!/bin/sh\necho ok\n',
+    'tools/hosts.txt': 'host-a\n',
+  });
+  chmodSync(join(notes, 'tools', 'check-hosts.sh'), 0o755);
+  const before = await unitStatus(peer, 'tools', 0);
+  assert.equal(before.copy, 'absent');
+  assert.equal(before.plan?.files, 3);
+  assert.equal(before.plan?.bytes, '---\ntitle: Tools\n---\n\nscripts\n#!/bin/sh\necho ok\nhost-a\n'.length);
+
+  const staged = (await submitPublish(peer, 'tools', user, {}))!;
+  // the gate recomputes the digest from the staged tree, modes included
+  await accept('syndicate/vortex/tools');
+  const status = await awaitVerdict(peer, 'tools', { commit: staged.commit, action: 'publish', revision: staged.revision }, never);
+  assert.equal(status.copy, 'current');
+  assert.equal(status.revision, staged.revision);
+
+  await peerGit('checkout', '-q', 'main');
+  await peerGit('pull', '-q', '--ff-only', 'origin', 'main');
+  const modes = (await peerGit('ls-tree', '-r', 'HEAD', '--', 'tools')).split('\n').map((line) => `${line.split(' ')[0]} ${line.split('\t')[1]}`);
+  assert.deepEqual(modes, ['100755 tools/check-hosts.sh', '100644 tools/hosts.txt', '100644 tools/index.md']);
+  assert.ok(statSync(join(peerWork, 'tools', 'check-hosts.sh')).mode & 0o100);
+  assert.equal(readFileSync(join(peerWork, 'tools', 'check-hosts.sh'), 'utf8'), '#!/bin/sh\necho ok\n');
+
+  // the same bytes without the bit are another revision: behind, then current again
+  chmodSync(join(notes, 'tools', 'check-hosts.sh'), 0o644);
+  const stripped = await unitStatus(peer, 'tools', 0);
+  assert.equal(stripped.copy, 'behind');
+  assert.equal(stripped.plan?.bytes, before.plan?.bytes);
+  chmodSync(join(notes, 'tools', 'check-hosts.sh'), 0o755);
+  assert.equal((await unitStatus(peer, 'tools', 0)).copy, 'current');
+});
+
 test('finish --ok pushes nothing unchecked: a moved tip exits 3 and the workflow prepares again', async () => {
   write({ 'chasing/demo.ts': 'export default function mount() { /* v2 */ }\n' });
   const staged = (await submitPublish(peer, 'chasing', user, {}))!;
@@ -235,7 +270,7 @@ test('the gate refuses a staged commit that touches paths outside the unit', asy
     ]),
     join(base, 'scratch'),
   );
-  const tree = await buildTree(dir, { base: tip, remove: ['chasing', 'en/chasing', 'de/chasing'], add: [...blobs].map(([path, sha]) => ({ path, sha })), indexFile: join(dir, 'idx') });
+  const tree = await buildTree(dir, { base: tip, remove: ['chasing', 'en/chasing', 'de/chasing'], add: [...blobs].map(([path, sha]) => ({ path, sha, mode: '100644' })), indexFile: join(dir, 'idx') });
   const commit = await commitTree(dir, {
     tree,
     parents: [tip],
@@ -501,7 +536,7 @@ test('a reserved or locale directory is not a unit, at the origin and at the gat
   const tip = await revParse(dir, 'refs/peer/base');
   const blobs = await writeBlobs(dir, new Map([['_meta/index.md', new TextEncoder().encode('---\ntitle: x\norigin:\n  wiki: vortex\n  revision: abcdefabcdefabcd\n  synced: 2026-01-01T00:00:00Z\n---\n')]]), join(base, 'scratch2'));
   const commit = await commitTree(dir, {
-    tree: await buildTree(dir, { base: tip, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha })), indexFile: join(dir, 'idx') }),
+    tree: await buildTree(dir, { base: tip, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha, mode: '100644' })), indexFile: join(dir, 'idx') }),
     parents: [tip],
     message: submissionMessage({ origin: 'vortex', unit: '_meta', action: 'publish', expect: 'none', revision: 'abcdefabcdefabcd', force: false }),
     author: user,
@@ -553,7 +588,7 @@ test('a submission with a symlink, a submodule or two root note files is refused
   assert.equal(current.copy, 'current');
   const revision = current.revision!;
   const blobs = await writeBlobs(dir, new Map([['links/index.md', stamp(revision)], ['links/leak.ts', new TextEncoder().encode('../../.wiki/secret')]]), join(base, 'scratch3'));
-  const submit = async (add: Array<{ path: string; sha: string; mode?: string }>): Promise<string> => {
+  const submit = async (add: Array<{ path: string; sha: string; mode: string }>): Promise<string> => {
     const commit = await commitTree(dir, {
       tree: await buildTree(dir, { base: tip, remove: ['links', 'en/links', 'de/links'], add, indexFile: join(dir, 'idx') }),
       parents: [tip],
@@ -564,12 +599,13 @@ test('a submission with a symlink, a submodule or two root note files is refused
     await push(dir, 'origin', `${commit}:refs/heads/syndicate/vortex/links`, true);
     return commit;
   };
+  const root = { path: 'links/index.md', sha: blobs.get('links/index.md')!, mode: '100644' };
   for (const [add, problem] of [
-    [[{ path: 'links/index.md', sha: blobs.get('links/index.md')! }, { path: 'links/leak.ts', sha: blobs.get('links/leak.ts')!, mode: '120000' }], /not a regular file \(mode 120000\)/],
-    [[{ path: 'links/index.md', sha: blobs.get('links/index.md')! }, { path: 'links/vendor', sha: 'b'.repeat(40), mode: '160000' }], /not a regular file \(mode 160000\)/],
-    [[{ path: 'links/index.md', sha: blobs.get('links/index.md')! }, { path: 'links/index.mdx', sha: blobs.get('links/index.md')! }], /both index\.md and index\.mdx/],
-    [[{ path: 'links/index.md', sha: blobs.get('links/index.md')! }, { path: 'links/.env', sha: blobs.get('links/leak.ts')! }], /dot-prefixed/],
-  ] as Array<[Array<{ path: string; sha: string; mode?: string }>, RegExp]>) {
+    [[root, { path: 'links/leak.ts', sha: blobs.get('links/leak.ts')!, mode: '120000' }], /not a regular file \(mode 120000\)/],
+    [[root, { path: 'links/vendor', sha: 'b'.repeat(40), mode: '160000' }], /not a regular file \(mode 160000\)/],
+    [[root, { path: 'links/index.mdx', sha: blobs.get('links/index.md')!, mode: '100644' }], /both index\.md and index\.mdx/],
+    [[root, { path: 'links/.env', sha: blobs.get('links/leak.ts')!, mode: '100644' }], /dot-prefixed/],
+  ] as Array<[Array<{ path: string; sha: string; mode: string }>, RegExp]>) {
     const commit = await submit(add);
     await peerGit('fetch', '-q', 'origin');
     const prepared = await runGate('prepare', '--branch', 'syndicate/vortex/links', '--staged', commit, ...ORIGINS);
@@ -740,10 +776,10 @@ test('a unit whose root path is a file on the peer is refused, at the origin and
     committer: user,
   });
   const text = (revision: string): Uint8Array => new TextEncoder().encode(`---\ntitle: x\norigin:\n  wiki: vortex\n  revision: ${revision}\n  synced: 2026-01-01T00:00:00Z\n---\n`);
-  const revision = digest(new Map([['README.md/index.md', text('0000000000000000')]]));
+  const revision = digest(new Map([['README.md/index.md', { bytes: text('0000000000000000'), mode: '100644' }]]));
   const blobs = await writeBlobs(dir, new Map([['README.md/index.md', text(revision)]]), join(base, 'scratch4'));
   const commit = await commitTree(dir, {
-    tree: await buildTree(dir, { base: parent, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha })), indexFile: join(dir, 'idx') }),
+    tree: await buildTree(dir, { base: parent, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha, mode: '100644' })), indexFile: join(dir, 'idx') }),
     parents: [parent],
     message: submissionMessage({ origin: 'vortex', unit: 'README.md', action: 'publish', expect: 'none', revision, force: false }),
     author: user,
@@ -765,7 +801,7 @@ test('a submission the gate cannot read (an alias flood) is refused with a verdi
   const tip = await revParse(dir, 'refs/peer/base');
   const blobs = await writeBlobs(dir, new Map([['flood/index.md', new TextEncoder().encode(flood)]]), join(base, 'scratch5'));
   const commit = await commitTree(dir, {
-    tree: await buildTree(dir, { base: tip, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha })), indexFile: join(dir, 'idx') }),
+    tree: await buildTree(dir, { base: tip, remove: [], add: [...blobs].map(([path, sha]) => ({ path, sha, mode: '100644' })), indexFile: join(dir, 'idx') }),
     parents: [tip],
     message: submissionMessage({ origin: 'vortex', unit: 'flood', action: 'publish', expect: 'none', revision: 'abcdefabcdefabcd', force: false }),
     author: user,

@@ -10,6 +10,8 @@ import {
   blobId,
   collectUnit,
   digest,
+  entryPart,
+  fileModeOf,
   inUnitRoots,
   notePart,
   stableJson,
@@ -37,7 +39,7 @@ function contentRoot(files: Record<string, string>): string {
 }
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
-const bundle = (files: Record<string, string>): Bundle => new Map(Object.entries(files).map(([p, t]) => [p, enc(t)]));
+const bundle = (files: Record<string, string>): Bundle => new Map(Object.entries(files).map(([p, t]) => [p, { bytes: enc(t), mode: '100644' }]));
 
 test('a note id names its unit through its locale prefix', () => {
   assert.equal(unitOf('chasing', locales), 'chasing');
@@ -70,6 +72,65 @@ test('collection takes every locale root, regular files only, no dot entries, no
   // a locale root alone is not a unit either
   const en = contentRoot({ 'en/solo/index.md': 'x' });
   assert.throws(() => collectUnit(en, 'solo', prefixes), /is not a unit/);
+});
+
+test('collection records each file in the mode git gives it: executable iff the owner-execute bit is set', () => {
+  const root = contentRoot({
+    'u/index.md': '---\ntitle: U\n---\nbody\n',
+    'u/run.sh': '#!/bin/sh\necho hi\n',
+    'u/owner-only.sh': '#!/bin/sh\n',
+    'u/others-only.sh': '#!/bin/sh\n',
+    'u/plain.txt': 'text\n',
+    'en/u/index.md': '---\ntitle: U (en)\n---\nbody\n',
+  });
+  chmodSync(join(root, 'u', 'run.sh'), 0o755);
+  chmodSync(join(root, 'u', 'owner-only.sh'), 0o700);
+  chmodSync(join(root, 'u', 'others-only.sh'), 0o655);
+  chmodSync(join(root, 'u', 'plain.txt'), 0o644);
+  chmodSync(join(root, 'en', 'u', 'index.md'), 0o755);
+  const files = collectUnit(root, 'u', prefixes);
+  assert.deepEqual(
+    [...files].map(([path, file]) => [path, file.mode]),
+    [
+      ['u/index.md', '100644'],
+      ['u/others-only.sh', '100644'],
+      ['u/owner-only.sh', '100755'],
+      ['u/plain.txt', '100644'],
+      ['u/run.sh', '100755'],
+      ['en/u/index.md', '100755'],
+    ],
+  );
+  assert.equal(new TextDecoder().decode(files.get('u/run.sh')!.bytes), '#!/bin/sh\necho hi\n');
+  assert.equal(fileModeOf(0o100644), '100644');
+  assert.equal(fileModeOf(0o100744), '100755');
+  assert.equal(fileModeOf(0o100666), '100644');
+});
+
+test('the digest of a unit without executables is what it has always been, and an executable bit alone changes it', () => {
+  // pinned: a change here would show every existing copy as behind
+  const plain = bundle({ 'u/index.md': '---\ntitle: T\ntags: [a, b]\n---\nbody\n', 'u/x.bin': 'bytes' });
+  assert.equal(digest(plain), 'f6c52f0421d38d49');
+  const nested = bundle({ 'u/index.md': '---\ntitle: T\n---\nbody\n', 'u/run.sh': '#!/bin/sh\necho hi\n', 'u/sub/index.mdx': '---\ntitle: S\n---\nsub\n' });
+  assert.equal(digest(nested), '300d0a4ad3ea9174');
+  const executable = (files: Bundle, path: string): Bundle => new Map([...files].map(([p, f]) => [p, p === path ? { ...f, mode: '100755' } : f]));
+  assert.notEqual(digest(executable(nested, 'u/run.sh')), digest(nested));
+  assert.notEqual(digest(executable(nested, 'u/index.md')), digest(nested));
+  assert.notEqual(digest(executable(nested, 'u/run.sh')), digest(executable(nested, 'u/index.md')));
+  assert.equal(digest(executable(nested, 'u/run.sh')), digest(executable(nested, 'u/run.sh')));
+});
+
+test('an entry digests by its content part, prefixed by its mode unless it is a plain file', () => {
+  const text = '---\ntitle: T\n---\nbody\n';
+  const sha = blobId(enc(text));
+  const unread = (): string => {
+    throw new Error('the text of a non-note or an irregular entry is never read');
+  };
+  assert.equal(entryPart('u/index.md', '100644', sha, () => text), notePart(text));
+  assert.equal(entryPart('u/index.md', '100755', sha, () => text), `100755:${notePart(text)}`);
+  assert.equal(entryPart('u/demo.ts', '100644', sha, unread), sha);
+  assert.equal(entryPart('u/demo.ts', '100755', sha, unread), `100755:${sha}`);
+  assert.equal(entryPart('u/index.md', '120000', sha, unread), `120000:${sha}`);
+  assert.equal(entryPart('u/vendor', '160000', sha, unread), `160000:${sha}`);
 });
 
 test('the digest ignores insertion order, frontmatter formatting and the origin block, never a body or a byte', () => {
