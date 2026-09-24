@@ -16,13 +16,14 @@ import { dirname, join } from 'node:path';
 
 import { digestOfParts, inUnitRoots, isNoteFile, noteIdOfPath, notePart, unitPathProblem } from './syndication-bundle.ts';
 
-/** a failed git command: `stderr` in full, `summary` its first line */
+/** a failed git command: `stderr` in full, `summary` its first non-empty
+ *  line without surrounding whitespace (ssh writes CRLF line ends) */
 export class GitError extends Error {
   readonly args: readonly string[];
   readonly stderr: string;
   readonly summary: string;
   constructor(args: readonly string[], stderr: string) {
-    const summary = stderr.split('\n').find((line) => line.trim()) ?? `git ${args[0]} failed`;
+    const summary = stderr.split('\n').map((line) => line.trim()).find(Boolean) ?? `git ${args[0]} failed`;
     super(summary.replace(/^(fatal|error): /, ''));
     this.name = 'GitError';
     this.args = args;

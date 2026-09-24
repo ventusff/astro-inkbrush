@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { blobId } from '../src/lib/syndication-bundle.ts';
-import { buildTree, readBlobs, readUnitInTree, writeBlobs } from '../src/lib/syndication-git.ts';
+import { buildTree, GitError, readBlobs, readUnitInTree, writeBlobs } from '../src/lib/syndication-git.ts';
 
 const base = mkdtempSync(join(tmpdir(), 'inkbrush-git-'));
 after(() => rmSync(base, { recursive: true, force: true }));
@@ -45,4 +45,11 @@ test('a unit read from a tree names irregular entries, dot segments and duplicat
   const linked = await buildTree(repo, { base: null, remove: [], add: [add[0]!, { path: 'u/demo.ts', sha: blobs.get('u/link')!, mode: '120000' }], indexFile: join(dir, 'idx') });
   const plain = await buildTree(repo, { base: null, remove: [], add: [add[0]!, { path: 'u/demo.ts', sha: blobs.get('u/link')! }], indexFile: join(dir, 'idx') });
   assert.notEqual((await readUnitInTree(repo, linked, '', 'u', [''])).digest, (await readUnitInTree(repo, plain, '', 'u', [''])).digest);
+});
+
+test("a git error's summary is its first non-empty line, without the CR of ssh's CRLF line ends", () => {
+  const err = new GitError(['fetch'], '\r\ngit@github.com: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\r\n');
+  assert.equal(err.summary, 'git@github.com: Permission denied (publickey).');
+  assert.equal(err.message, 'git@github.com: Permission denied (publickey).');
+  assert.equal(new GitError(['push'], '').summary, 'git push failed');
 });
