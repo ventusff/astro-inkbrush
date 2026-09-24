@@ -147,7 +147,9 @@ export interface PopoverOptions {
  * (below-start alignment, clamped into the viewport on both axes), tracking
  * the anchor's live rect on scroll and resize. An anchor inside a
  * position:fixed ancestor scrolls with the viewport, so its popover is
- * position:fixed too and shares that coordinate space. Focus moves to the
+ * position:fixed too and shares that coordinate space. Content that loads
+ * after opening changes the dialog's size, and every size change places it
+ * again, so it never outgrows the viewport's edge. Focus moves to the
  * first focusable child on open (the dialog itself when there is none) and
  * returns to the trigger on close when it is still inside. While open, the
  * trigger carries aria-expanded="true" and aria-controls pointing at the
@@ -186,6 +188,8 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
   // capture catches scrolls of nested scroll containers, not just the page
   window.addEventListener('scroll', place, { passive: true, capture: true });
   window.addEventListener('resize', place, { passive: true });
+  const resized = new ResizeObserver(place);
+  resized.observe(pop);
   requestAnimationFrame(() => pop.classList.add('show'));
   trigger.setAttribute('aria-expanded', 'true');
   (firstFocusable(pop) ?? pop).focus();
@@ -202,6 +206,7 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: Popover
     document.removeEventListener('keydown', onKey, true);
     window.removeEventListener('scroll', place, { capture: true });
     window.removeEventListener('resize', place);
+    resized.disconnect();
     trigger.setAttribute('aria-expanded', 'false');
     trigger.removeAttribute('aria-controls');
     if (pop.contains(document.activeElement)) trigger.focus();
