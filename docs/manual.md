@@ -867,14 +867,26 @@ identity. **Do not accept syndication without both rulesets**
 
 - **Push ruleset** (target: all pushes) with **Restrict file paths**:
   `.github/**` and `_meta/**` (add whatever else the peer's checks
-  execute — `package.json`, scripts). Bypass list: the peer's own
-  maintainers and its promotion identity; never the sender.
+  execute — `package.json`, scripts). Bypass list: the team the peer's
+  own people and its promotion identity belong to; never the sender.
 - **Branch ruleset** targeting **all branches except `syndicate/**`**
   (include *All branches*, exclude `refs/heads/syndicate/**`) with
   **Restrict creations**, **Restrict updates** and **Restrict deletions**.
-  Bypass list: the peer's maintainers and its promotion identity; never
-  the sender. The sender can then create, update and delete only
+  Same bypass list. The sender can then create, update and delete only
   `syndicate/**`, and `main` moves only through the gate.
+- **Tag ruleset** (all tags) with the same three restrictions and the same
+  bypass list.
+
+**Grant the bypass to a team (or to named users), never to a repository
+role or to organization admins.** GitHub evaluates a deploy key with write
+access as holding the repository's roles: a bypass for *Maintain* or
+*Admin* — or for *Organization admin* — lets the sender's deploy key
+through every rule above, and the push reports "Bypassed rule violations"
+instead of being declined. Verify the setup with the sender's own
+credential before accepting anything: pushing to `main`, creating any
+branch outside `syndicate/**`, pushing a tag, and pushing a
+`syndicate/**` commit that touches `.github/**` must each be declined with
+`GH013: Repository rule violations`.
 
 With those in place the sender's credential can at most stage
 submissions, which the gate judges before anything runs or lands, and

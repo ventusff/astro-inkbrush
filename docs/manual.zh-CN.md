@@ -717,13 +717,21 @@ Rules → Rulesets):
 
 - **推送规则集**(target:所有推送),开 **Restrict file paths**:
   `.github/**` 与 `_meta/**`(对方的检查还会执行什么就再加什么——
-  `package.json`、脚本)。豁免名单:对方自己的维护者和它的合入身份;
+  `package.json`、脚本)。豁免名单:对方自己的人和合入身份所在的团队;
   发送方绝不豁免。
 - **分支规则集**,作用于 **`syndicate/**` 之外的所有分支**(包含 *All
   branches*,排除 `refs/heads/syndicate/**`),开 **Restrict creations**、
-  **Restrict updates**、**Restrict deletions**。豁免名单:对方的维护者和它的
-  合入身份;发送方绝不豁免。这样发送方只能建、改、删 `syndicate/**`,
-  `main` 只经把关前进。
+  **Restrict updates**、**Restrict deletions**,豁免名单同上。这样发送方只能
+  建、改、删 `syndicate/**`,`main` 只经把关前进。
+- **标签规则集**(所有标签),同样三项限制、同样的豁免名单。
+
+**豁免只能按团队(或具体的人)给,绝不能按仓库角色或组织管理员给。**GitHub
+把有写权限的部署密钥当作持有仓库角色来判定:给 *Maintain*、*Admin* 或
+*Organization admin* 开豁免,发送方的部署密钥就会穿过上面每一条规则,推送
+只提示 "Bypassed rule violations" 而不被拒绝。接受任何提交之前,先用发送方
+自己的凭据自检:推 `main`、建 `syndicate/**` 以外的分支、推标签、推一个改到
+`.github/**` 的 `syndicate/**` 提交,都必须被 `GH013: Repository rule
+violations` 拒绝。
 
 有了这两条,发送方的凭据至多能暂存一次提交,而暂存的东西在执行或合入
 之前都要经把关裁定;`syndication-verdicts` 分支在 `syndicate/**` 之外,退回
