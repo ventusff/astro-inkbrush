@@ -65,6 +65,11 @@ npm test
   exports the block stamper alone: browser bundles (the playground, a
   site's browser-side preview) import these two, never the root or the
   full module.
+- `astro-inkbrush/translation-contract` → `translationContract({ targetLang,
+  rules })`: the translation contract (writing principles, invariants, the
+  two rule tiers, the self-check) as prompt text. The CMS translate job is
+  built from it — a unit test pins that prompt byte for byte — and external
+  translators build theirs from the same parts. Pure strings, no imports.
 - `scripts/check-content.mjs` / `scripts/check-wikilinks.mjs` /
   `scripts/check-dist.mjs`: standalone check CLIs that import the dialect
   and link rules from the package root. Given `--config`, the first two

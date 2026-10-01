@@ -42,6 +42,7 @@
     "./wiki-blocks": "./src/lib/rehype-wiki-blocks.ts",
     "./markdown": "./src/lib/markdown.ts",
     "./render-pipeline": "./src/lib/render-pipeline.ts",
+    "./translation-contract": "./src/lib/translation-contract.ts",
     "./playground": "./src/wiki/playground/index.ts"
   },
   "files": [

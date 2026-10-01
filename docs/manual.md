@@ -135,6 +135,10 @@ machine running the dev server (configurable via `claude.bin` /
   with hard invariants (anchors, math structure, code logic, component
   props preserved; human-facing text translated — including text inside
   formulas). Refuses (409) if the target already exists. Timeout: 30 min.
+  The principles, invariants, writing rules and self-check are exported as
+  `astro-inkbrush/translation-contract` (`translationContract({ targetLang,
+  rules })`), so a translator outside the CMS — a background sync service,
+  a batch job — holds its output to the same contract.
 
 Every job runs in a **throwaway workspace**: a temporary directory holding
 a copy of the note's directory plus whatever `claude.companions` names for

@@ -4,15 +4,18 @@
  * language (the note's own for edits and answers, the target locale for
  * translations).
  *
- * Every prompt carries the writing rules in two tiers: hard constraints —
- * only what the dialect, the content guard and the MDX compile mechanically
- * refuse — and house style for everything else. A site's own conventions
- * (component vocabulary, heading attributes, generated numbering, …) from
- * `inkbrush.config.ts → claude.rules` join the house-style tier, and
- * `claude.companions` names the files a block-edit job may change beside
- * the note (a translation writes the target file and nothing else —
- * companions stay read-only context).
+ * Every prompt carries the writing rules in two tiers (lib/translation-
+ * contract.ts): hard constraints — only what the dialect, the content guard
+ * and the MDX compile mechanically refuse — and house style for everything
+ * else. A site's own conventions (component vocabulary, heading attributes,
+ * generated numbering, …) from `inkbrush.config.ts → claude.rules` join the
+ * house-style tier; the translate job's principles, invariants and
+ * self-check are the shared translation contract. `claude.companions` names
+ * the files a block-edit job may change beside the note (a translation
+ * writes the target file and nothing else — companions stay read-only
+ * context).
  */
+import { translationContract, writingRules } from '../../lib/translation-contract.ts';
 import type { LocaleDef } from '../shared/locales.ts';
 import type { NoteMeta } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
@@ -21,32 +24,8 @@ import { wikiConfig } from './config.ts';
 const locales = (): readonly LocaleDef[] => wikiConfig().content.locales;
 const langName = (code: string): string => locales().find((l) => l.code === code)?.promptName ?? code;
 
-/** what the dialect, the content guard and the MDX compile mechanically
- *  refuse — a note breaking any of these fails validation and the build */
-const HARD_RULES = [
-  'Display math uses the three-line form: `$$` on its own line, the formula, `$$` on its own line (a single-line $$x$$ is refused).',
-  'Emphasis markers (`*`, `_`, `~~`) must pair; an unpaired marker that could open emphasis is refused.',
-  'Literal braces in prose are escaped: \\{ and \\}; an unescaped `{…}` in MDX prose is a JS expression and is refused.',
-  'A line directly under a paragraph must not start with `+` or `*` — a continuation left behind by wrapping turns into a bullet list and is refused.',
-  'Every formula must render under strict KaTeX; a broken macro, and any HTML entity inside math (&lt; &gt; &amp;), is refused — write \\lt \\gt \\le \\ge and \\&.',
-  'In MDX, a JSX attribute value containing double quotes uses single-quote delimiters; a straight double quote inside a double-quoted attribute breaks the compile.',
-];
-
-/** conventions the checks do not mechanically catch; follow them anyway */
-const STYLE_RULES = [
-  'After wrapping a long sentence, a continuation line must not start with `-` or `1.` either (it reads as a list).',
-  '`<` followed by a letter or digit in prose is written &lt;; inside $…$ math it stays as it is.',
-  'Emphasis is written with ** and *, never with HTML tags.',
-  'Component props do not render markdown or math: write Unicode characters (α, Σ) in them instead.',
-  'A `|` inside a GFM table cell is written \\lvert … \\rvert inside math and \\| elsewhere.',
-];
-
 function rules(): string {
-  const style = [...STYLE_RULES, ...wikiConfig().claude.rules];
-  return [
-    `Hard constraints — the build refuses these:\n${HARD_RULES.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
-    `House style — follow these:\n${style.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
-  ].join('\n');
+  return writingRules(wikiConfig().claude.rules);
 }
 
 function companionNote(companions: string[]): string {
@@ -105,28 +84,20 @@ export function translatePrompt(opts: {
   const { meta, targetId, targetLang } = opts;
   const name = langName(targetLang);
   const targetFile = `${wikiConfig().content.dir}/${targetId}/index.${meta.file.endsWith('.md') ? 'md' : 'mdx'}`;
+  const contract = translationContract({ targetLang: name, rules: wikiConfig().claude.rules });
   return `You are the author of the note "${meta.title}". Rewrite the article in ${name} — as its author, not as a translator. You are working in a copy of the relevant files; paths are relative to the current directory.
 
 Source file: ${meta.file}
 Target file: ${targetFile} (create it with the Write tool; its directory exists)
 
-Writing principles (most important):
-- Restate every paragraph naturally in ${name}: use the terms the ${name}-speaking community actually uses, and reshape sentences to ${name} prose rhythm. The result must read as if it had been written in ${name} from the start — no translationese.
-- The article's structure is invariant: heading hierarchy and order, paragraph sequence, and the flow of the argument correspond one-to-one with the original.
+${contract.principles}
 
-Invariants (check each one):
-- Heading anchor ids and every other identifier are preserved verbatim; only reader-facing text is rewritten.
-- Math keeps its structure and LaTeX notation ($…$ and $$…$$) untouched, BUT every piece of natural-language text inside a formula must be ${name} — \\text{…}/\\mathrm{…}/\\operatorname{…}, words in subscripts, \\underbrace/\\overbrace annotations, \\textbf/\\textit. No source-language characters may survive inside any formula.
-- Code blocks keep their logic untouched, BUT comments (including end-of-line ones), natural-language words in pseudocode and user-visible string literals are translated into ${name}; where the original had bilingual comments, keep only the ${name} half. No source-language characters may survive inside any code block (except examples that deliberately showcase such data).
-- Image paths unchanged; captions translated.
-- JSX component tags and their prop structure stay unchanged; reader-facing copy props (title, kicker, caption slots, …) are translated, machine props (id, demo, canvas, …) are not.
-- Reference entries: paper titles, authors and venues stay in their original language; descriptive text is translated.
-- Every frontmatter copy field (title, description and the like) is rewritten in ${name}; structural fields are preserved verbatim.
+${contract.invariants}
 - You write exactly one file: the target. Files beside the note are read-only context; a change to any other file is refused as a whole.
 
-${rules()}
+${contract.rules}
 
 Process: Read the source file first (long files in several passes — no skipping), then Write the complete target file in one go.
 
-Final self-check (mandatory): re-read the target file and inspect every run of source-language characters — a run inside math ($…$/$$…$$) or code (fenced blocks, inline \`code\`) is a violation; translate and re-check until those regions are clean. Finish with a one- or two-sentence summary (shown on the page).`;
+Final self-check (mandatory): re-read the target file and ${contract.selfCheck} Finish with a one- or two-sentence summary (shown on the page).`;
 }

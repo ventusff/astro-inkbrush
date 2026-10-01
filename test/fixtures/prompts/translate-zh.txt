@@ -1,0 +1,38 @@
+You are the author of the note "A". Rewrite the article in 中文 — as its author, not as a translator. You are working in a copy of the relevant files; paths are relative to the current directory.
+
+Source file: src/content/notes/a/index.md
+Target file: src/content/notes/a/index.md (create it with the Write tool; its directory exists)
+
+Writing principles (most important):
+- Restate every paragraph naturally in 中文: use the terms the 中文-speaking community actually uses, and reshape sentences to 中文 prose rhythm. The result must read as if it had been written in 中文 from the start — no translationese.
+- The article's structure is invariant: heading hierarchy and order, paragraph sequence, and the flow of the argument correspond one-to-one with the original.
+
+Invariants (check each one):
+- Heading anchor ids and every other identifier are preserved verbatim; only reader-facing text is rewritten.
+- Math keeps its structure and LaTeX notation ($…$ and $$…$$) untouched, BUT every piece of natural-language text inside a formula must be 中文 — \text{…}/\mathrm{…}/\operatorname{…}, words in subscripts, \underbrace/\overbrace annotations, \textbf/\textit. No source-language characters may survive inside any formula.
+- Code blocks keep their logic untouched, BUT comments (including end-of-line ones), natural-language words in pseudocode and user-visible string literals are translated into 中文; where the original had bilingual comments, keep only the 中文 half. No source-language characters may survive inside any code block (except examples that deliberately showcase such data).
+- Image paths unchanged; captions translated.
+- JSX component tags and their prop structure stay unchanged; reader-facing copy props (title, kicker, caption slots, …) are translated, machine props (id, demo, canvas, …) are not.
+- Reference entries: paper titles, authors and venues stay in their original language; descriptive text is translated.
+- Every frontmatter copy field (title, description and the like) is rewritten in 中文; structural fields are preserved verbatim.
+- You write exactly one file: the target. Files beside the note are read-only context; a change to any other file is refused as a whole.
+
+Hard constraints — the build refuses these:
+1. Display math uses the three-line form: `$$` on its own line, the formula, `$$` on its own line (a single-line $$x$$ is refused).
+2. Emphasis markers (`*`, `_`, `~~`) must pair; an unpaired marker that could open emphasis is refused.
+3. Literal braces in prose are escaped: \{ and \}; an unescaped `{…}` in MDX prose is a JS expression and is refused.
+4. A line directly under a paragraph must not start with `+` or `*` — a continuation left behind by wrapping turns into a bullet list and is refused.
+5. Every formula must render under strict KaTeX; a broken macro, and any HTML entity inside math (&lt; &gt; &amp;), is refused — write \lt \gt \le \ge and \&.
+6. In MDX, a JSX attribute value containing double quotes uses single-quote delimiters; a straight double quote inside a double-quoted attribute breaks the compile.
+House style — follow these:
+1. After wrapping a long sentence, a continuation line must not start with `-` or `1.` either (it reads as a list).
+2. `<` followed by a letter or digit in prose is written &lt;; inside $…$ math it stays as it is.
+3. Emphasis is written with ** and *, never with HTML tags.
+4. Component props do not render markdown or math: write Unicode characters (α, Σ) in them instead.
+5. A `|` inside a GFM table cell is written \lvert … \rvert inside math and \| elsewhere.
+6. Site rule one.
+7. Site rule two.
+
+Process: Read the source file first (long files in several passes — no skipping), then Write the complete target file in one go.
+
+Final self-check (mandatory): re-read the target file and inspect every run of source-language characters — a run inside math ($…$/$$…$$) or code (fenced blocks, inline `code`) is a violation; translate and re-check until those regions are clean. Finish with a one- or two-sentence summary (shown on the page).
