@@ -180,9 +180,10 @@ CLI 的工作目录就是这份副本,文件工具被权限规则限制在副本
 
 ## 界面语言
 
-CMS 界面内置英文与中文,按站点自己的 `<html lang>` 逐页选择:`zh` 开头用
-中文,其余用英文。刻意不设配置开关——站点本来就声明了自己的语言。日期格式
-跟随同一选择。服务端报错信息为英文。
+CMS 界面内置英文、中文与德文,按站点自己的 `<html lang>` 逐页选择:主标签是
+`zh` 用中文,是 `de` 用德文,其余用英文。刻意不设配置开关——站点本来就声明了
+自己的语言。日期格式跟随同一选择,报错也一样:服务端把每种失败报成代码加参数,
+由页面按自己的语言写成句子。
 
 ## 配置(`inkbrush.config.ts`)
 
@@ -327,7 +328,10 @@ id token 经 Google tokeninfo 端点验签(校 audience 与邮箱已验证),再�
 `allowedDomains` 白名单——**默认拒绝**:空名单谁都进不来;要明确放行所有
 Google 账号就写 `['*']`。名单项可以是域名(`acme.com`)也可以是完整地址
 (`bob@gmail.com`)。登录 state 带签名、绑定发起登录的浏览器、只能用一次,
-10 分钟过期——重放或过期的回调在服务端就会失败。
+10 分钟过期——重放或过期的回调在服务端就会失败。回调和 SAML ACS 一样,任何
+失败都 303 到 `/?login_error=<code>`——`google_state`(不是这个浏览器发起的、
+已过期或已用过)、`google_error`、`wrong_domain` 或 `not_member`——原因写进
+服务端日志。
 
 ### Google Workspace SAML SSO
 
@@ -791,7 +795,7 @@ id 匹配区分大小写,别名/标题回退不区分。解析不到永远不弄
 | `GET /me` | 公开 | 会话 + 各登录方式可用性 + 分享状态(注册表开启时含 `role`) |
 | `POST /auth/dev` | 公开 | `{name,email}` → 会话 cookie;本地登录关闭时 403 |
 | `GET /auth/google` | 公开 | 302 到 Google 授权页(`?return=` 经 `state` 携带) |
-| `GET /auth/google/callback` | 公开 | code → 验签 → cookie → 302 回跳 |
+| `GET /auth/google/callback` | 公开 | code → 验签 → cookie → 302 回跳;失败一律 303 到 `/?login_error=<code>` |
 | `GET /auth/saml/login` | 公开 | 302 到 IdP(`?return=` 作 RelayState) |
 | `POST /auth/saml/callback` | 公开 | ACS;永不 500——失败一律 303 到 `/?login_error=<code>` |
 | `GET /auth/saml/metadata` | 公开 | SP 元数据 XML(证书未配也能输出) |
@@ -834,15 +838,16 @@ AI 任务每用户最多同时 2 个、全机最多 4 个(超出 429);排队中�
 之外的站点,一律 403——浏览器跨站表单必带 Origin,cookie 因此无法被别的
 网页盗用(两个头都没有的是非浏览器客户端,放行);SAML ACS 例外——它的
 鉴权是签名断言本身;
-预期内的 4xx 返回 `{error}` JSON,意外失败返回带参考 id 的 500,服务端日志里
-能按 id 找到。
+预期内的 4xx 返回 `{error, code, params}` JSON——`code` 与 `params` 指明是哪种
+失败(`src/wiki/shared/errors.ts`),`error` 是它的英文说明;意外失败返回带参考
+id 的 500,服务端日志里能按 id 找到。
 
 ## 架构与磁盘状态
 
 ```
 astro.config.ts ──WIKI=1──▶ inkbrush() 集成   (src/wiki/integration.ts)
    ├─ injectScript('page') → src/wiki/client/*   (把手/编辑器/AI/评论/分享界面;
-   │                                              strings.ts = en/zh 字符串表)
+   │                                              strings.ts = en/zh/de 字符串表)
    ├─ dev 中间件 /api/wiki/* → src/wiki/server/*   (ssrLoadModule——服务端代码
    │                                               也热更)
    └─ initWiki(root, { markdown }) → 注册表检查、站点 Markdown 钩子、

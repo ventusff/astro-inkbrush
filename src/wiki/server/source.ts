@@ -27,10 +27,11 @@ import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { copyOriginOf, unitOf } from '../../lib/syndication-bundle.ts';
 import { localePrefixOf } from '../../lib/wikilink-core.ts';
 import type { LocaleDef } from '../shared/locales.ts';
+import { failure, type WikiFailure } from '../shared/errors.ts';
 import type { BlockSource, CopyOrigin, NoteLocale, NoteMeta, RevisionRecord } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
-import { fail, HttpError, json, readBody } from './index.ts';
+import { fail, type HttpError, json, readBody, refusal, refuse } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
 import { createRootedScanner } from './note-scan.ts';
 import { frontmatterField, NOTE_ID } from './note-id.ts';
@@ -84,7 +85,7 @@ export function noteFile(id: string): { file: string; rel: string } | null {
     if (file && existsSync(file)) located.push({ file, rel });
   }
   if (located.length > 1) {
-    throw new HttpError(404, `Note '${id}' has both index.md and index.mdx — remove one of them`);
+    throw refuse(404, 'note-ambiguous', { id });
   }
   return located[0] ?? null;
 }
@@ -151,7 +152,7 @@ export function copyOriginOfFile(file: string): CopyOrigin | null {
 
 /** the 423 every local edit of a copy answers with */
 export function copyRefusal(origin: CopyOrigin): HttpError {
-  return new HttpError(423, `This note is a copy synced from ${origin.wiki} — edit it there`, { code: 'copy' });
+  return refuse(423, 'copy', { wiki: origin.wiki });
 }
 
 /** throws the 423 when `file` (absolute) lies inside a copy */
@@ -224,16 +225,16 @@ export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRec
  */
 export async function writeNote(
   file: string,
-  produce: (current: string) => { next: string; error?: string | undefined },
+  produce: (current: string) => { next: string; error?: WikiFailure | undefined },
   afterWrite?: (next: string) => void,
   commit?: () => Promise<AutocommitResult>,
 ): Promise<AutocommitResult | null> {
   return await withLock(file, async () => {
     const current = readFileSync(file, 'utf8');
     const { next, error } = produce(current);
-    if (error) throw new HttpError(409, error);
+    if (error) throw refusal(409, error);
     const problem = await validateSource(file, next);
-    if (problem) throw new HttpError(422, `The note would not build — not saved: ${problem}`);
+    if (problem) throw refuse(422, 'save-would-not-build', { detail: problem });
     // decided last, under the lock, after everything that awaits: a unit
     // that became a copy meanwhile is not written
     refuseCopyWrite(file);
@@ -313,7 +314,7 @@ export function autocommit(
 export function registerSourceRoutes(on: RouteRegistrar): void {
   on('GET', '/meta/*id', ({ res, params }) => {
     const meta = noteMeta(params['id']!);
-    if (!meta) return fail(res, 404, `Note not found: ${params['id']}`);
+    if (!meta) return fail(res, 404, 'note-not-found');
     json(res, 200, meta);
   });
 
@@ -323,14 +324,14 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     '/block/*id',
     ({ res, params, query }) => {
       const located = noteFile(params['id']!);
-      if (!located) return fail(res, 404, 'Note not found');
+      if (!located) return fail(res, 404, 'note-not-found');
       const start = Number(query.get('start'));
       const end = Number(query.get('end'));
       if (!Number.isInteger(start) || !Number.isInteger(end)) {
-        return fail(res, 400, 'start/end must be integer line numbers');
+        return fail(res, 400, 'bad-request', { detail: 'start/end must be integer line numbers' });
       }
       const block = readBlock(located.file, start, end);
-      if (!block) return fail(res, 416, 'line range outside the file');
+      if (!block) return fail(res, 416, 'line-range');
       json(res, 200, block);
     },
     { auth: true },
@@ -342,11 +343,11 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     async ({ req, res, params, user }) => {
       const id = params['id']!;
       const located = noteFile(id);
-      if (!located) return fail(res, 404, 'Note not found');
+      if (!located) return fail(res, 404, 'note-not-found');
       const body = await readBody<{ start: number; end: number; hash: string; source: string }>(req);
       const { start, end, hash, source } = body;
       if (!Number.isInteger(start) || !Number.isInteger(end) || typeof source !== 'string' || typeof hash !== 'string') {
-        return fail(res, 400, 'missing start/end/hash/source');
+        return fail(res, 400, 'bad-request', { detail: 'missing start/end/hash/source' });
       }
       let before = '';
       const git = await writeNote(
@@ -354,11 +355,11 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
         (current) => {
           const lines = current.split('\n');
           if (start < 1 || end < start || end > lines.length) {
-            return { next: current, error: 'line range outside the file' };
+            return { next: current, error: failure('line-range') };
           }
           before = lines.slice(start - 1, end).join('\n');
           if (sliceHash(before) !== hash) {
-            return { next: current, error: 'This block was modified by someone else — refresh and retry' };
+            return { next: current, error: failure('block-changed') };
           }
           return { next: [...lines.slice(0, start - 1), ...source.split('\n'), ...lines.slice(end)].join('\n') };
         },
@@ -393,7 +394,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
         sanitize?: boolean;
         note?: string;
       }>(req);
-      if (typeof markdown !== 'string') return fail(res, 400, 'missing markdown');
+      if (typeof markdown !== 'string') return fail(res, 400, 'bad-request', { detail: 'missing markdown' });
       json(res, 200, {
         html: await renderMarkdown(markdown, {
           sanitize: sanitize ?? true,
@@ -436,13 +437,13 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
     async ({ req, res, params, user }) => {
       const id = params['id']!;
       const located = noteFile(id);
-      if (!located) return fail(res, 404, 'Note not found');
+      if (!located) return fail(res, 404, 'note-not-found');
       const { id: revisionId } = await readBody<{ id?: string }>(req);
-      if (typeof revisionId !== 'string' || !revisionId) return fail(res, 400, 'missing revision id');
+      if (typeof revisionId !== 'string' || !revisionId) return fail(res, 400, 'bad-request', { detail: 'missing revision id' });
       const rec = readNdjson<RevisionRecord>(revisionsFile()).find((r) => r.note === id && r.id === revisionId);
-      if (!rec) return fail(res, 404, 'Revision record not found');
-      if (rec.lines === '*') return fail(res, 400, 'Whole-file operations cannot be reverted in one click');
-      if (rec.before === rec.after) return fail(res, 400, 'This revision has no content change');
+      if (!rec) return fail(res, 404, 'revision-not-found');
+      if (rec.lines === '*') return fail(res, 400, 'revert-whole-file');
+      if (rec.before === rec.after) return fail(res, 400, 'revert-no-change');
 
       let at = -1;
       const beforeLines = rec.before.split('\n');
@@ -456,7 +457,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
             if (target.every((line, j) => fileLines[i + j] === line)) matches.push(i);
           }
           if (matches.length === 0) {
-            return { next: current, error: 'Later edits overwrote this revision — revert by hand instead' };
+            return { next: current, error: failure('revert-overwritten') };
           }
           let chosen = matches;
           if (matches.length > 1) {
@@ -468,7 +469,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
               : [];
           }
           if (chosen.length !== 1) {
-            return { next: current, error: 'The target content appears more than once — revert by hand instead' };
+            return { next: current, error: failure('revert-ambiguous') };
           }
           at = chosen[0]!;
           return {

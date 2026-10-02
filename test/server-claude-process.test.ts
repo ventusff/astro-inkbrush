@@ -4,7 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { runClaudeJob, type ClaudeJobOptions } from '../src/wiki/server/claude-process.ts';
+import { runClaudeJob, type ClaudeJobOptions, type ClaudeJobResult } from '../src/wiki/server/claude-process.ts';
+import type { WikiFailure } from '../src/wiki/shared/errors.ts';
+
+function failureOf(result: ClaudeJobResult): WikiFailure | null {
+  return result.ok ? null : result.failure;
+}
+
+/** a job-error failure's tool line */
+function detailOf(result: ClaudeJobResult): string {
+  const f = failureOf(result);
+  return f?.code === 'job-error' ? f.params.detail : '';
+}
 
 /** a fake claude bin printing `lines` (stream-json), then running `tail` */
 function fakeBin(dir: string, body: string): string {
@@ -53,7 +64,7 @@ test('timeout escalates SIGTERM → SIGKILL and still waits for close', async ()
   const bin = fakeBin(dir, `process.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);`);
   const result = await runClaudeJob(jobOpts(bin, dir, { timeoutMs: 200, killGraceMs: 300 }));
   assert.equal(result.ok, false);
-  assert.match((result as { error: string }).error, /timed out/);
+  assert.equal(failureOf(result)?.code, 'job-timeout');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -66,7 +77,7 @@ test('a client disconnect terminates the job with its own message', async () => 
     jobOpts(bin, dir, { killOnDisconnect: true, clientClosed: abort.signal, timeoutMs: 10_000 }),
   );
   assert.equal(result.ok, false);
-  assert.match((result as { error: string }).error, /disconnected/);
+  assert.equal(failureOf(result)?.code, 'client-disconnected');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -74,7 +85,7 @@ test('a bin that cannot be spawned reports a start failure', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
   const result = await runClaudeJob(jobOpts(join(dir, 'does-not-exist'), dir, { timeoutMs: 2000 }));
   assert.equal(result.ok, false);
-  assert.match((result as { error: string }).error, /Could not start the claude CLI/);
+  assert.equal(failureOf(result)?.code, 'claude-unavailable');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -87,7 +98,7 @@ test('an oversized unterminated output line kills the job with a clear message',
   );
   const result = await runClaudeJob(jobOpts(bin, dir, { timeoutMs: 30_000, killGraceMs: 500 }));
   assert.equal(result.ok, false);
-  assert.match((result as { error: string }).error, /oversized output line/);
+  assert.match(detailOf(result), /oversized output line/);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -99,8 +110,8 @@ test('non-JSON protocol lines are counted and surfaced on a failure', async () =
   );
   const result = await runClaudeJob(jobOpts(bin, dir));
   assert.equal(result.ok, false);
-  assert.match((result as { error: string }).error, /exited unexpectedly \(code 3\)/);
-  assert.match((result as { error: string }).error, /2 non-JSON protocol line\(s\) ignored/);
+  assert.match(detailOf(result), /exited unexpectedly \(code 3\)/);
+  assert.match(detailOf(result), /2 non-JSON protocol line\(s\) ignored/);
   rmSync(dir, { recursive: true, force: true });
 });
 

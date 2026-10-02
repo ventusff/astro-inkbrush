@@ -1,7 +1,9 @@
 /**
  * Types shared between the wiki server middleware and the injected client.
- * Keep this file dependency-free (both bundles import it).
+ * Keep this file dependency-free (both bundles import it) — ./errors.ts is
+ * the one sibling it reads.
  */
+import type { WikiFailure } from './errors.ts';
 
 /** authenticated identity (dev provider / Google OAuth / Google SAML SSO) */
 export interface WikiUser {
@@ -11,6 +13,27 @@ export interface WikiUser {
   picture?: string;
   provider: 'dev' | 'google' | 'google-saml';
 }
+
+/** why a sign-in flow ended back on the site as `/?login_error=<code>` */
+export type LoginErrorCode =
+  /** the SSO settings on this site are incomplete or wrong */
+  | 'saml_config'
+  /** SSO sign-in is turned off */
+  | 'saml_disabled'
+  /** the identity provider's answer was missing or unreadable */
+  | 'saml_response'
+  /** the identity provider's answer did not verify */
+  | 'saml_invalid'
+  /** the SSO flow failed unexpectedly */
+  | 'saml_error'
+  /** the Google sign-in was not started in this browser, expired, or was already used */
+  | 'google_state'
+  /** Google's answer could not be verified */
+  | 'google_error'
+  /** the account's email is outside the allowed domains */
+  | 'wrong_domain'
+  /** the account is not registered on this site */
+  | 'not_member';
 
 /** provider availability as the client sees it (google & googleSaml alike):
  *  'off' = disabled in inkbrush.config.ts (button not rendered) · 'ready' =
@@ -134,13 +157,26 @@ export interface WikiComment {
   ts: number;
 }
 
+/** what the server adds to a finished edit job's summary */
+export type JobNotice =
+  /** the job ended without changing a file */
+  | 'no-change'
+  /** the change is saved, but its git commit failed (see the server log) */
+  | 'commit-failed';
+
 /** one line of the fetch-stream NDJSON protocol for claude jobs */
 export type ClaudeStreamEvent =
   | { kind: 'init'; sessionId: string }
   | { kind: 'text'; text: string }
   | { kind: 'tool'; label: string }
-  | { kind: 'result'; ok: boolean; summary: string; sessionId: string | null }
-  | { kind: 'error'; message: string };
+  | { kind: 'result'; ok: boolean; summary: string; sessionId: string | null; notice?: JobNotice | undefined }
+  | ({
+      kind: 'error';
+      /** the failure in English */
+      message: string;
+      /** an edit job's failure: nothing was written */
+      unchanged?: boolean | undefined;
+    } & WikiFailure);
 
 /**
  * Who may read a share:
@@ -218,11 +254,40 @@ export interface ShareVisibilityRequest {
   alias?: string;
 }
 
+/** a step of building and publishing a share's snapshot */
+export type ShareStage =
+  /** the cached static build is fresh */
+  | 'build-cached'
+  /** the static build starts */
+  | 'build'
+  /** the build inputs changed during the build — it runs once more */
+  | 'rebuild'
+  /** the build is running (`seconds` so far) */
+  | 'building'
+  | 'built'
+  /** the page's assets are being collected */
+  | 'collecting'
+  /** the snapshot holds `count` assets */
+  | 'snapshot-ready'
+  /** the snapshot (`count` files) is being packed */
+  | 'packing'
+  /** the published snapshot already matches — nothing to upload */
+  | 'unchanged'
+  | 'uploading'
+  /** the gateway's record of the share is being changed */
+  | 'updating';
+
+export interface ShareProgress {
+  stage: ShareStage;
+  count?: number | undefined;
+  seconds?: number | undefined;
+}
+
 /** NDJSON stream of POST /api/wiki/share (a cold snapshot build can take minutes) */
 export type ShareStreamEvent =
-  | { kind: 'progress'; message: string }
+  | ({ kind: 'progress' } & ShareProgress)
   | { kind: 'result'; ok: true; share: ShareRecord }
-  | { kind: 'error'; message: string };
+  | ({ kind: 'error'; message: string } & WikiFailure);
 
 /** GET /api/wiki/share?note=<id> — active (not revoked, not expired) shares
  *  of that note only; the note parameter is required (400 without), and the
@@ -477,10 +542,12 @@ export type SyndicationStreamEvent =
   | {
       kind: 'error';
       message: string;
-      code?: SyndicationErrorCode | undefined;
+      code: SyndicationErrorCode;
       /** this wiki's gate findings or the peer's, one line each */
       problems?: string[] | undefined;
-    };
+    }
+  /** a failure before the publish itself (no such note, a refused request) */
+  | ({ kind: 'error'; message: string } & WikiFailure);
 
 /** an error body of the plain JSON syndication routes (withdraw, overrides) */
 export interface SyndicationErrorResponse {

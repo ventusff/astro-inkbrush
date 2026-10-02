@@ -31,7 +31,8 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
 import { containedPath, realpathDeep } from './paths.ts';
-import { copyOriginOfFile } from './source.ts';
+import { refuse } from './index.ts';
+import { copyOriginOfFile, copyRefusal } from './source.ts';
 import { projectRoot, withLock, writeFileAtomic } from './store.ts';
 
 export interface WorkspaceChange {
@@ -211,14 +212,10 @@ export function createWorkspace(scope: string[]): Workspace {
           const live = fileContent(root, change.rel);
           const base = baseline.get(change.rel) ?? null;
           if (live !== base) {
-            throw new Error(
-              `Conflict: '${change.rel}' was modified while the job ran — nothing was written`,
-            );
+            throw refuse(409, 'job-conflict', { file: change.rel });
           }
           const copy = copyOriginOfFile(abs);
-          if (copy) {
-            throw new Error(`Refused: '${change.rel}' is a copy synced from ${copy.wiki} — nothing was written`);
-          }
+          if (copy) throw copyRefusal(copy);
         }
         const written: string[] = [];
         for (const [abs, change] of targets) {

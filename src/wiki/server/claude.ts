@@ -34,11 +34,12 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { englishOf, failure, type WikiFailure } from '../shared/errors.ts';
 import type { ClaudeStreamEvent } from '../shared/types.ts';
 import { runClaudeJob } from './claude-process.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
-import { fail, ndjsonStream, readBody } from './index.ts';
+import { fail, failureBody, failureOf, json, ndjsonStream, readBody } from './index.ts';
 import { blockEditViolation, revisionSpan, translateViolation } from './job-postconditions.ts';
 import { askPrompt, blockEditPrompt, translatePrompt } from './prompts.ts';
 import { autocommit, copyOrigin, copyRefusal, journalRevision, noteDir, noteFile, noteMeta, validateSource } from './source.ts';
@@ -55,15 +56,19 @@ const userJobs = new Map<string, number>();
 let globalJobs = 0;
 let capacityWaiters: Array<() => void> = [];
 
-/** the 429 message when `email` cannot start a job right now; null = capacity free */
-function saturationError(email: string): string | null {
-  if ((userJobs.get(email) ?? 0) >= MAX_JOBS_PER_USER) {
-    return `You already have ${MAX_JOBS_PER_USER} AI jobs running — wait for one to finish`;
-  }
-  if (globalJobs >= MAX_JOBS_GLOBAL) {
-    return `The machine is already running ${MAX_JOBS_GLOBAL} AI jobs — try again when one finishes`;
-  }
+/** the 429 failure when `email` cannot start a job right now; null = capacity free */
+function saturationError(email: string): WikiFailure | null {
+  if ((userJobs.get(email) ?? 0) >= MAX_JOBS_PER_USER) return failure('ai-busy-user', { max: MAX_JOBS_PER_USER });
+  if (globalJobs >= MAX_JOBS_GLOBAL) return failure('ai-busy-machine', { max: MAX_JOBS_GLOBAL });
   return null;
+}
+
+/** a stream's error event; an edit job's failure (`unchanged`) wrote nothing */
+function errorEvent(f: WikiFailure, unchanged = false): ClaudeStreamEvent {
+  const message = englishOf(f);
+  return unchanged
+    ? { kind: 'error', message: `${message} — nothing was changed`, unchanged: true, ...f }
+    : { kind: 'error', message, ...f };
 }
 
 /**
@@ -201,14 +206,14 @@ async function runEditJob(opts: {
   protectedFiles: string[];
   /** per-job shape constraint on the changes (./job-postconditions.ts);
    *  a violation message refuses the whole application */
-  postcondition?: (changes: WorkspaceChange[], baseline: (rel: string) => string | null) => string | null;
+  postcondition?: (changes: WorkspaceChange[], baseline: (rel: string) => string | null) => WikiFailure | null;
 }): Promise<void> {
   const { stream } = opts;
   let ws: Workspace;
   try {
     ws = createWorkspace(opts.scope);
   } catch (err) {
-    stream.write({ kind: 'error', message: `Could not prepare the workspace: ${(err as Error).message}` });
+    stream.write(errorEvent(failure('job-setup', { detail: (err as Error).message }), true));
     return;
   }
   try {
@@ -232,36 +237,33 @@ async function runEditJob(opts: {
       clientClosed: opts.clientClosed,
     });
     if (!result.ok) {
-      stream.write({ kind: 'error', message: `${result.error} — nothing was changed` });
+      stream.write(errorEvent(result.failure, true));
       return;
     }
     const changes = ws.changes();
     if (changes.length === 0) {
-      stream.write({ kind: 'result', ok: true, summary: result.summary || 'No change was needed.', sessionId: result.sessionId });
+      stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId, notice: 'no-change' });
       return;
     }
     const deleted = changes.find((c) => c.content === null && opts.protectedFiles.includes(c.rel));
     if (deleted) {
-      stream.write({
-        kind: 'error',
-        message: `The job deleted the note's own file (${deleted.rel}) — nothing was changed`,
-      });
+      stream.write(errorEvent(failure('job-deleted-note', { file: deleted.rel }), true));
       return;
     }
     const violation = opts.postcondition?.(changes, (rel) => ws.baseline(rel)) ?? null;
     if (violation) {
-      stream.write({ kind: 'error', message: `${violation} — nothing was changed` });
+      stream.write(errorEvent(violation, true));
       return;
     }
     const problem = await validateChanges(changes);
     if (problem) {
-      stream.write({ kind: 'error', message: `The result would not build — nothing was changed: ${problem}` });
+      stream.write(errorEvent(failure('job-would-not-build', { detail: problem }), true));
       return;
     }
     try {
       await ws.apply(changes);
     } catch (err) {
-      stream.write({ kind: 'error', message: (err as Error).message });
+      stream.write(errorEvent(failureOf(err), true));
       return;
     }
     // every applied change is journaled: the note file with a baseline as a
@@ -302,11 +304,13 @@ async function runEditJob(opts: {
       opts.commitMessage,
       opts.user.name,
     );
-    const summary =
-      git === 'failed'
-        ? `${result.summary}\n\nSaved, but the git commit failed — check the server log.`
-        : result.summary;
-    stream.write({ kind: 'result', ok: true, summary, sessionId: result.sessionId });
+    stream.write({
+      kind: 'result',
+      ok: true,
+      summary: result.summary,
+      sessionId: result.sessionId,
+      ...(git === 'failed' ? { notice: 'commit-failed' as const } : {}),
+    });
   } finally {
     ws.destroy();
   }
@@ -322,18 +326,18 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const body = await readBody<{ id?: string; start?: number; end?: number; instruction?: string }>(req);
       const { id, start, end, instruction } = body;
       if (!id || !Number.isInteger(start) || !Number.isInteger(end) || !instruction?.trim()) {
-        return fail(res, 400, 'missing id/start/end/instruction');
+        return fail(res, 400, 'bad-request', { detail: 'missing id/start/end/instruction' });
       }
       // request-time checks answer with clean HTTP statuses; the queued job
       // re-checks everything against the file as it is when it starts
       const located = noteFile(id);
-      if (!noteMeta(id) || !located) return fail(res, 404, 'Note not found');
+      if (!noteMeta(id) || !located) return fail(res, 404, 'note-not-found');
       const copy = copyOrigin(id);
       if (copy) throw copyRefusal(copy);
       const lineCount = readFileSync(located.file, 'utf8').split('\n').length;
-      if (start! < 1 || end! < start! || end! > lineCount) return fail(res, 416, 'line range outside the file');
+      if (start! < 1 || end! < start! || end! > lineCount) return fail(res, 416, 'line-range');
       const saturated = saturationError(user!.email);
-      if (saturated) return fail(res, 429, saturated);
+      if (saturated) return json(res, 429, failureBody(saturated));
       const stream = ndjsonStream(res);
       const abort = new AbortController();
       res.on('close', () => abort.abort());
@@ -346,15 +350,12 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
           const meta = noteMeta(id);
           const located2 = noteFile(id);
           if (!meta || !located2) {
-            stream.write({ kind: 'error', message: 'Note not found — nothing was changed' });
+            stream.write(errorEvent(failure('note-not-found'), true));
             return;
           }
           const lines = readFileSync(located2.file, 'utf8').split('\n');
           if (start! < 1 || end! < start! || end! > lines.length) {
-            stream.write({
-              kind: 'error',
-              message: 'The selected line range no longer exists (the note changed while the job was queued) — reload and retry',
-            });
+            stream.write(errorEvent(failure('job-range-gone'), true));
             return;
           }
           const source = lines.slice(start! - 1, end).join('\n');
@@ -372,7 +373,7 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
             }),
           };
         } catch (err) {
-          stream.write({ kind: 'error', message: `Could not prepare the job: ${(err as Error).message}` });
+          stream.write(errorEvent(failure('job-setup', { detail: (err as Error).message }), true));
           return;
         }
         const release = await acquireSlots(user!.email);
@@ -408,22 +409,20 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
     async ({ req, res, user }) => {
       const body = await readBody<{ id?: string; message?: string; sessionId?: string }>(req);
       const { id, message, sessionId } = body;
-      if (!id || !message?.trim()) return fail(res, 400, 'missing id/message');
+      if (!id || !message?.trim()) return fail(res, 400, 'bad-request', { detail: 'missing id/message' });
       const meta = noteMeta(id);
-      if (!meta) return fail(res, 404, 'Note not found');
+      if (!meta) return fail(res, 404, 'note-not-found');
       // a session resume is valid only for its issuing user and note
-      if (sessionId && !sessionResumable(sessionId, user!.email, id)) {
-        return fail(res, 403, 'Unknown chat session for this user and note (sessions reset when the server restarts)');
-      }
+      if (sessionId && !sessionResumable(sessionId, user!.email, id)) return fail(res, 403, 'chat-session');
       const saturated = saturationError(user!.email);
-      if (saturated) return fail(res, 429, saturated);
+      if (saturated) return json(res, 429, failureBody(saturated));
       const release = await acquireSlots(user!.email);
       let ws: Workspace;
       try {
         ws = createWorkspace(jobScope(id));
       } catch (err) {
         release();
-        return fail(res, 500, `Could not prepare the workspace: ${(err as Error).message}`);
+        return fail(res, 500, 'job-setup', { detail: (err as Error).message });
       }
       const stream = ndjsonStream(res);
       const abort = new AbortController();
@@ -458,7 +457,7 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
           if (result.sessionId) rememberSession(result.sessionId, user!.email, id);
           stream.write({ kind: 'result', ok: true, summary: result.summary, sessionId: result.sessionId });
         } else {
-          stream.write({ kind: 'error', message: result.error });
+          stream.write(errorEvent(result.failure));
         }
       } finally {
         ws.destroy();
@@ -475,10 +474,10 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
     async ({ req, res, user }) => {
       const body = await readBody<{ id?: string; targetLang?: string }>(req);
       const { id } = body;
-      if (!id) return fail(res, 400, 'missing id');
+      if (!id) return fail(res, 400, 'bad-request', { detail: 'missing id' });
       const meta = noteMeta(id);
       const located = noteFile(id);
-      if (!meta || !located) return fail(res, 404, 'Note not found');
+      if (!meta || !located) return fail(res, 404, 'note-not-found');
       // a translation would add a locale root to the copy
       const copy = copyOrigin(id);
       if (copy) throw copyRefusal(copy);
@@ -488,13 +487,13 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
       const defaultCode = locales.find((l) => l.prefix === '')!.code;
       const firstOther = locales.find((l) => l.code !== defaultCode)?.code ?? defaultCode;
       const targetLang = body.targetLang ?? (meta.lang === defaultCode ? firstOther : defaultCode);
-      if (targetLang === meta.lang) return fail(res, 400, 'Target language equals the current language');
+      if (targetLang === meta.lang) return fail(res, 400, 'translate-same');
       const target = meta.locales.find((l) => l.code === targetLang);
-      if (!target) return fail(res, 400, `Unsupported target language: ${targetLang}`);
-      if (target.exists) return fail(res, 409, `That language version already exists: ${target.id}`);
-      if (!noteDir(target.id)) return fail(res, 400, `Invalid target id: ${target.id}`);
+      if (!target) return fail(res, 400, 'translate-unsupported', { lang: targetLang });
+      if (target.exists) return fail(res, 409, 'translate-exists', { id: target.id });
+      if (!noteDir(target.id)) return fail(res, 400, 'translate-target', { id: target.id });
       const saturated = saturationError(user!.email);
-      if (saturated) return fail(res, 429, saturated);
+      if (saturated) return json(res, 429, failureBody(saturated));
       const stream = ndjsonStream(res);
       const abort = new AbortController();
       res.on('close', () => abort.abort());
@@ -507,20 +506,20 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
           const meta2 = noteMeta(id);
           const located2 = noteFile(id);
           if (!meta2 || !located2) {
-            stream.write({ kind: 'error', message: 'Note not found — nothing was changed' });
+            stream.write(errorEvent(failure('note-not-found'), true));
             return;
           }
           const target2 = meta2.locales.find((l) => l.code === targetLang);
           if (!target2) {
-            stream.write({ kind: 'error', message: `Unsupported target language: ${targetLang} — nothing was changed` });
+            stream.write(errorEvent(failure('translate-unsupported', { lang: targetLang }), true));
             return;
           }
           if (target2.exists) {
-            stream.write({ kind: 'error', message: `That language version already exists: ${target2.id} — nothing was changed` });
+            stream.write(errorEvent(failure('translate-exists', { id: target2.id }), true));
             return;
           }
           if (!noteDir(target2.id)) {
-            stream.write({ kind: 'error', message: `Invalid target id: ${target2.id} — nothing was changed` });
+            stream.write(errorEvent(failure('translate-target', { id: target2.id }), true));
             return;
           }
           const targetDirRel = join(wikiConfig().content.dir, target2.id);
@@ -537,7 +536,7 @@ export function registerClaudeRoutes(on: RouteRegistrar): void {
             }),
           };
         } catch (err) {
-          stream.write({ kind: 'error', message: `Could not prepare the job: ${(err as Error).message}` });
+          stream.write(errorEvent(failure('job-setup', { detail: (err as Error).message }), true));
           return;
         }
         const release = await acquireSlots(user!.email);

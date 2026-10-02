@@ -32,6 +32,7 @@ import { decide, stagingBranch, submissionMessage, type Expectation } from '../.
 import { transformUnit, type TransformResult } from '../../lib/syndication-transform.ts';
 import type { WikiNoteInfo } from '../../lib/wikilink-core.ts';
 import type { SyndicationPeer } from '../config.ts';
+import { englishOf, failure } from '../shared/errors.ts';
 import type {
   CopyState,
   SyndicationActionResponse,
@@ -49,7 +50,7 @@ import type {
 } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
 import type { Ctx, RouteRegistrar } from './index.ts';
-import { HttpError, json, ndjsonStream, readBody } from './index.ts';
+import { failureOf, HttpError, json, ndjsonStream, readBody, refuse } from './index.ts';
 import { revisionSpan } from './job-postconditions.ts';
 import { createRootedScanner } from './note-scan.ts';
 import { siteHooks, noteUrl } from './site.ts';
@@ -575,8 +576,12 @@ export async function publishStream(
       : await unitStatus(peer, unit);
     write({ kind: 'result', ok: true, status });
   } catch (err) {
-    const known = err instanceof SyndicationError ? err : null;
-    write({ kind: 'error', message: err instanceof Error ? err.message : String(err), code: known?.code, problems: known?.problems });
+    if (err instanceof SyndicationError) {
+      write({ kind: 'error', message: err.message, code: err.code, problems: err.problems });
+    } else {
+      const f = failureOf(err);
+      write({ kind: 'error', message: englishOf(f), ...f });
+    }
   }
 }
 
@@ -585,7 +590,7 @@ export async function publishStream(
 /** set (or clear, with null) the unit root's `syndication.<peer>` overrides */
 export async function setOverrides(unit: string, peer: SyndicationPeer, fields: Record<string, unknown> | null, user: Submitter): Promise<void> {
   const located = noteFile(unit);
-  if (!located) throw new HttpError(404, 'Note not found');
+  if (!located) throw refuse(404, 'note-not-found');
   let before = '';
   let after = '';
   let lines = '*';
@@ -593,9 +598,9 @@ export async function setOverrides(unit: string, peer: SyndicationPeer, fields: 
     located.file,
     (current) => {
       const fm = splitFrontmatter(current);
-      if (!fm.present || fm.error) return { next: current, error: 'The note has no readable frontmatter block' };
+      if (!fm.present || fm.error) return { next: current, error: failure('overrides-no-frontmatter') };
       const existing = fm.data['syndication'];
-      if (existing === false) return { next: current, error: 'The note says syndication: false — remove that first' };
+      if (existing === false) return { next: current, error: failure('overrides-never') };
       const table = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...(existing as Record<string, unknown>) } : {};
       if (fields === null) delete table[peer.id];
       else table[peer.id] = fields;
@@ -616,7 +621,7 @@ export async function setOverrides(unit: string, peer: SyndicationPeer, fields: 
 /** the peer the route names, or 404 */
 function requirePeer(ctx: Ctx): SyndicationPeer {
   const peer = peers().find((p) => p.id === ctx.params['peer']);
-  if (!peer) throw new HttpError(404, `No such syndication peer: ${ctx.params['peer']}`);
+  if (!peer) throw refuse(404, 'peer-unknown', { peer: ctx.params['peer'] ?? '' });
   return peer;
 }
 
@@ -627,17 +632,17 @@ function requirePeer(ctx: Ctx): SyndicationPeer {
  * withdrawal does not, the peer's state decides.
  */
 export function noteUnit(note: unknown, local: boolean): string {
-  if (typeof note !== 'string' || !note.trim()) throw new HttpError(400, 'missing note');
+  if (typeof note !== 'string' || !note.trim()) throw refuse(400, 'bad-request', { detail: 'missing note' });
   const id = note.trim();
   const unit = unitOf(id, wikiConfig().content.locales);
   const problem = unitNameProblem(unit, localePrefixes());
-  if (problem) throw new HttpError(400, problem);
-  if (local && (!noteMeta(id) || !existsSync(join(contentRoot(), unit)))) throw new HttpError(404, `'${unit}' is not a unit here`);
+  if (problem) throw refuse(400, 'bad-request', { detail: problem });
+  if (local && (!noteMeta(id) || !existsSync(join(contentRoot(), unit)))) throw refuse(404, 'unit-unknown', { unit });
   return unit;
 }
 
 function requireOn(): void {
-  if (peers().length === 0) throw new HttpError(404, 'Syndication is not configured (inkbrush.config.ts → syndication)');
+  if (peers().length === 0) throw refuse(404, 'syndication-off');
 }
 
 export function registerSyndicationRoutes(on: RouteRegistrar): void {
@@ -648,7 +653,7 @@ export function registerSyndicationRoutes(on: RouteRegistrar): void {
       requireOn();
       const note = query.get('note') ?? '';
       const meta = noteMeta(note);
-      if (!meta) throw new HttpError(404, 'Note not found');
+      if (!meta) throw refuse(404, 'note-not-found');
       const unit = unitOf(note, wikiConfig().content.locales);
       const isCopy = copyOrigin(note);
       const statuses = isCopy || !unit ? [] : await Promise.all(peers().map((peer) => unitStatus(peer, unit)));
@@ -712,7 +717,7 @@ export function registerSyndicationRoutes(on: RouteRegistrar): void {
       const unit = noteUnit(body.note, true);
       const fields = body.fields;
       if (fields !== null && (!fields || typeof fields !== 'object' || Array.isArray(fields))) {
-        throw new HttpError(400, 'fields must be an object of frontmatter fields, or null to clear the overrides');
+        throw refuse(400, 'bad-request', { detail: 'fields must be an object of frontmatter fields, or null to clear the overrides' });
       }
       await setOverrides(unit, peer, fields, ctx.user!);
       json(ctx.res, 200, { ok: true, status: await unitStatus(peer, unit) } satisfies SyndicationActionResponse);

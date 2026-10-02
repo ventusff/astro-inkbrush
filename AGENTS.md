@@ -153,8 +153,11 @@ npm test
   the head) and the index manifest (locales + note identities), and declares
   the shape to check-dist with `--playground`; default builds keep the full
   check and stay byte-identical.
-- UI strings live in `src/wiki/client/strings.ts` (English + Chinese,
-  selected by the page's `<html lang>`); server messages are English.
+- UI strings live in `src/wiki/client/strings.ts` (English, Chinese and
+  German, selected by the page's `<html lang>`; a unit test holds the three
+  tables to the same keys). The server reports every failure as a code with
+  parameters (`src/wiki/shared/errors.ts`) beside its English line; the
+  page words the code — add a code there, not a sentence in a route.
 - Comments and documentation are English; the README and manual ship in
   English and Simplified Chinese — keep the pairs in sync. Commit
   messages: English, entirely — subject and body.

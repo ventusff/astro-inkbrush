@@ -18,7 +18,7 @@
 import type { ContentGuardOptions } from '../../lib/content-guard.ts';
 import type { SitePluginSet } from '../../lib/render-pipeline.ts';
 import { localePrefixOf, type WikiNoteInfo } from '../../lib/wikilink-core.ts';
-import { ApiError, type RequestOptions, type WikiTransport } from '../client/api';
+import { apiFailure, type RequestOptions, type WikiTransport } from '../client/api';
 import type { MeResponse, NoteMeta, RevisionRecord, WikiUser } from '../shared/types';
 import type { NoteOverlay } from './overlay';
 import type { PlaygroundRenderer } from './render';
@@ -115,15 +115,15 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       typeof hash !== 'string' ||
       typeof source !== 'string'
     ) {
-      throw new ApiError(400, 'start, end, hash and source are required');
+      throw apiFailure(400, 'bad-request', { detail: 'start, end, hash and source are required' });
     }
     const block = overlay.blockAt(start, end);
-    if (!block) throw new ApiError(400, `lines ${start}-${end} are not editable here`);
+    if (!block) throw apiFailure(400, 'line-range');
     if ((await sliceHash(block.source)) !== hash) {
-      throw new ApiError(409, 'The block changed under you — reload and edit again');
+      throw apiFailure(409, 'block-changed');
     }
     const edit = overlay.applyEdit(start, end, source);
-    if (typeof edit === 'string') throw new ApiError(400, edit);
+    if (typeof edit === 'string') throw apiFailure(400, 'line-range');
 
     // the whole-source gate, exactly as the dev server's save runs it
     const seg = overlay.segments.find((s) => s.key === edit.key)!;
@@ -142,10 +142,10 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       mdx: note.mdx,
       path: `/${note.file}`,
     });
-    if (problem) throw new ApiError(422, `This edit would not build: ${problem}`);
+    if (problem) throw apiFailure(422, 'save-would-not-build', { detail: problem });
 
     const stored = await putOverride(note.id, edit.key, edit.next);
-    if (!stored) throw new ApiError(507, 'Browser storage is unavailable — the edit cannot be kept');
+    if (!stored) throw apiFailure(507, 'storage-unavailable');
     await addRevision({
       id: uid(),
       ts: Date.now(),
@@ -166,16 +166,16 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
   async function revert(body: { id?: string }): Promise<unknown> {
     const revisions = await revisionsFor(note.id);
     const rec = revisions.find((r) => r.id === body.id);
-    if (!rec) throw new ApiError(404, 'No such revision');
+    if (!rec) throw apiFailure(404, 'revision-not-found');
     const seg = overlay.segments.find((s) => s.key === rec.seg);
-    if (!seg) throw new ApiError(409, 'The revision no longer matches this page');
+    if (!seg) throw apiFailure(409, 'revert-overwritten');
     const at = seg.source.indexOf(rec.after);
     if (at < 0 || seg.source.indexOf(rec.after, at + 1) >= 0) {
-      throw new ApiError(409, 'The text of this revision no longer matches exactly once');
+      throw apiFailure(409, 'revert-ambiguous');
     }
     const next = seg.source.slice(0, at) + rec.before + seg.source.slice(at + rec.after.length);
     const stored = await putOverride(note.id, seg.key, next);
-    if (!stored) throw new ApiError(507, 'Browser storage is unavailable');
+    if (!stored) throw apiFailure(507, 'storage-unavailable');
     await addRevision({
       id: uid(),
       ts: Date.now(),
@@ -204,24 +204,24 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       }
       if (method === 'GET' && p.startsWith('/meta/')) {
         const id = decodeURIComponent(p.slice('/meta/'.length));
-        if (id !== note.id) throw new ApiError(404, `Not this page's note: ${id}`);
+        if (id !== note.id) throw apiFailure(404, 'note-not-found');
         return metaOf(note, await manifest);
       }
       if (p.startsWith('/block/')) {
         const id = decodeURIComponent(p.slice('/block/'.length));
-        if (id !== note.id) throw new ApiError(404, `Not this page's note: ${id}`);
+        if (id !== note.id) throw apiFailure(404, 'note-not-found');
         if (method === 'GET') {
           const start = Number(url.searchParams.get('start'));
           const end = Number(url.searchParams.get('end'));
           const block = overlay.blockAt(start, end);
-          if (!block) throw new ApiError(400, `lines ${start}-${end} are not editable here`);
+          if (!block) throw apiFailure(400, 'line-range');
           return { ...block, hash: await sliceHash(block.source) };
         }
         if (method === 'PUT') return putBlock((body ?? {}) as Parameters<typeof putBlock>[0]);
       }
       if (method === 'POST' && p === '/render') {
         const { markdown } = (body ?? {}) as { markdown?: string };
-        if (typeof markdown !== 'string') throw new ApiError(400, 'markdown is required');
+        if (typeof markdown !== 'string') throw apiFailure(400, 'bad-request', { detail: 'markdown is required' });
         return { html: await renderer.preview(markdown, `/${note.file}`) };
       }
       if (method === 'GET' && p.startsWith('/revisions/')) {
@@ -237,7 +237,7 @@ export function createLocalBackend(opts: LocalBackendOptions): WikiTransport {
       if (method === 'POST' && p.startsWith('/revert/')) {
         return revert((body ?? {}) as { id?: string });
       }
-      throw new ApiError(404, 'Not available in the playground');
+      throw apiFailure(404, 'playground-unavailable');
     },
   };
 }

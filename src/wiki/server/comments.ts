@@ -19,6 +19,9 @@ import { renderMarkdown } from './markdown.ts';
 import { noteFile } from './source.ts';
 import { appendNdjson, noteKey, readNdjson, wikiDataDir } from './store.ts';
 
+/** the longest comment accepted, in characters */
+const MAX_COMMENT = 10_000;
+
 function commentsFile(noteId: string): string {
   return join(wikiDataDir('comments'), `${noteKey(noteId)}.ndjson`);
 }
@@ -38,7 +41,7 @@ function loadComments(noteId: string): StoredComment[] {
 export function registerCommentRoutes(on: RouteRegistrar): void {
   on('GET', '/comments/*id', ({ res, params, user }) => {
     const id = params['id']!;
-    if (!noteFile(id)) return fail(res, 404, 'Note not found');
+    if (!noteFile(id)) return fail(res, 404, 'note-not-found');
     json(res, 200, { comments: loadComments(id).map((c) => commentView(c, user?.email ?? null)) });
   });
 
@@ -47,11 +50,11 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
     '/comments/*id',
     async ({ req, res, params, user }) => {
       const id = params['id']!;
-      if (!noteFile(id)) return fail(res, 404, 'Note not found');
+      if (!noteFile(id)) return fail(res, 404, 'note-not-found');
       const { markdown } = await readBody<{ markdown?: string }>(req);
       const text = markdown?.trim();
-      if (!text) return fail(res, 400, 'Comment cannot be empty');
-      if (text.length > 10_000) return fail(res, 413, 'Comment too long (>10000 characters)');
+      if (!text) return fail(res, 400, 'comment-empty');
+      if (text.length > MAX_COMMENT) return fail(res, 413, 'comment-too-long', { max: MAX_COMMENT });
       const comment: StoredComment = {
         id: randomUUID(),
         // no avatar URL in the record: nothing reads it, so nothing stores it
@@ -76,10 +79,10 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
     ({ res, params, query, user }) => {
       const id = params['id']!;
       const cid = query.get('cid');
-      if (!cid) return fail(res, 400, 'missing cid');
+      if (!cid) return fail(res, 400, 'bad-request', { detail: 'missing cid' });
       const target = loadComments(id).find((c) => c.id === cid);
-      if (!target) return fail(res, 404, 'Comment not found');
-      if (target.author.email !== user!.email) return fail(res, 403, 'You can only delete your own comments');
+      if (!target) return fail(res, 404, 'comment-not-found');
+      if (target.author.email !== user!.email) return fail(res, 403, 'comment-not-yours');
       appendNdjson(commentsFile(id), { id: cid, deleted: true, by: user!.email, ts: Date.now() });
       json(res, 200, { ok: true });
     },

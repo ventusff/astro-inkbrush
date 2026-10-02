@@ -17,7 +17,7 @@ import { currentUser } from './auth';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
 import { rememberScroll } from './scroll';
-import { S } from './strings';
+import { errorText, S } from './strings';
 import { h, popover, time, toast } from './ui';
 
 /** recorded span overlaps the block's current span (heuristic: lines drift
@@ -77,7 +77,7 @@ function entry(ctx: PageContext, rec: RevisionRecord): HTMLElement {
           setTimeout(() => window.location.reload(), 1200);
         } catch (err) {
           revertBtn.disabled = false;
-          toast(err instanceof Error ? err.message : S.history.revertFailed, 'err');
+          toast(errorText(err, S.history.revertFailed), 'err');
         }
       },
     },
@@ -127,7 +127,7 @@ export async function openHistory(
       .filter((r) => r.lines === '*' || overlaps(r, block) || contentHit(r, cur))
       .reverse();
   } catch (err) {
-    toast(err instanceof Error ? err.message : S.history.loadFailed, 'err');
+    toast(errorText(err, S.history.loadFailed), 'err');
     return;
   }
   const title = S.history.title(block.start, block.end);

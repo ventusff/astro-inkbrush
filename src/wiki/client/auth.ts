@@ -14,7 +14,7 @@
  */
 import type { GoogleAuthState, MeResponse, SyndicationPeerInfo, WikiUser } from '../shared/types';
 import { api } from './api';
-import { S } from './strings';
+import { errorText, S } from './strings';
 import { dismissPopover, h, popover, toast, uid } from './ui';
 
 let me: MeResponse = { user: null, providers: { dev: false, google: 'off', googleSaml: 'off' }, share: 'off' };
@@ -136,7 +136,7 @@ function signedOutPanel(rerender: () => void): HTMLElement {
       dismissPopover();
       toast(S.auth.signedIn(user.name));
     } catch (err) {
-      toast(err instanceof Error ? err.message : S.auth.signInFailed, 'err');
+      toast(errorText(err, S.auth.signInFailed), 'err');
     }
   };
   const devForm = me.providers.dev

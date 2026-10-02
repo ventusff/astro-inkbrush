@@ -13,7 +13,7 @@ import { api, stream } from './api';
 import { currentUser } from './auth';
 import type { PageContext } from './index';
 import { rememberScroll } from './scroll';
-import { S } from './strings';
+import { errorText, jobErrorText, languageName, S } from './strings';
 import { h, icon, noteHref, toast } from './ui';
 
 interface StoredMessage {
@@ -106,6 +106,7 @@ export function mountChatPanel(ctx: PageContext): void {
   const langActions = ctx.meta.locales
     .filter((l) => !l.current && (l.exists || !ctx.meta.origin))
     .map((l) => {
+      const label = languageName(l.code, l.label);
       if (l.exists) {
         return h(
           'button',
@@ -117,11 +118,11 @@ export function mountChatPanel(ctx: PageContext): void {
             },
           },
           icon('globe'),
-          ` ${l.label} →`,
+          ` ${label} →`,
         );
       }
-      const btn = h('button', { type: 'button', class: 'wiki-btn' }, icon('globe'), ` ✦ ${l.label}`);
-      translateButtons.push({ btn, code: l.code, label: l.label });
+      const btn = h('button', { type: 'button', class: 'wiki-btn' }, icon('globe'), ` ✦ ${label}`);
+      translateButtons.push({ btn, code: l.code, label });
       return btn;
     });
 
@@ -270,13 +271,16 @@ export function mountChatPanel(ctx: PageContext): void {
           log.scrollTop = log.scrollHeight;
         } else if (event.kind === 'error') {
           spinner.remove();
-          live.append(h('div', { class: 'tool err' }, event.message));
-          state.messages.push({ role: 'claude', content: event.message, html: false });
+          const message = jobErrorText(event);
+          live.append(h('div', { class: 'tool err' }, message));
+          state.messages.push({ role: 'claude', content: message, html: false });
           persist();
           return;
         } else if (event.kind === 'result') {
           spinner.remove();
-          const summary = text.trim() || event.summary;
+          const summary = [text.trim() || event.summary, event.notice ? S.chat.notice[event.notice] : '']
+            .filter(Boolean)
+            .join('\n\n');
           // final pass: render the answer as sanitized markdown (math incl.)
           let html = '';
           try {
@@ -307,7 +311,7 @@ export function mountChatPanel(ctx: PageContext): void {
     } catch (err) {
       if (mine !== generation) return;
       spinner.remove();
-      live.append(h('div', { class: 'tool err' }, err instanceof Error ? err.message : S.common.requestFailed));
+      live.append(h('div', { class: 'tool err' }, errorText(err)));
     } finally {
       if (inflight === request) inflight = null;
       setBusy(false);

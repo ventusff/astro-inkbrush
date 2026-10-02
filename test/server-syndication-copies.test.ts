@@ -65,7 +65,7 @@ test('a workspace apply refuses a target inside a copy', async () => {
   try {
     await assert.rejects(
       ws.apply([{ rel: 'src/content/notes/chasing/demo.ts', content: 'export default 2;\n' }]),
-      /is a copy synced from vortex — nothing was written/,
+      (err: unknown) => err instanceof HttpError && err.status === 423 && err.extra['code'] === 'copy' && /synced from vortex/.test(err.message),
     );
     assert.equal(readFileSync(join(notes, 'chasing', 'demo.ts'), 'utf8'), 'export default 1;\n');
   } finally {

@@ -229,11 +229,12 @@ so the gutter never hides under your sticky header.
 
 ## UI language
 
-The client UI ships in English and Chinese and picks per page from the
-site's own `<html lang>`: a value starting with `zh` gets the Chinese UI,
-anything else gets English. There is deliberately no config knob — the site
-already declares its language. Dates follow the same choice. Server error
-messages are English.
+The client UI ships in English, Chinese and German and picks per page from
+the site's own `<html lang>`: a tag whose primary subtag is `zh` gets the
+Chinese UI, `de` the German one, anything else English. There is
+deliberately no config knob — the site already declares its language. Dates
+follow the same choice, and so do failures: the server reports each one as a
+code with parameters, which the page words in its language.
 
 ## Configuration (`inkbrush.config.ts`)
 
@@ -392,7 +393,10 @@ allowlist: an empty list denies everyone; pass `['*']` to explicitly allow
 any Google account. The login state is signed, bound to the starting
 browser, single-use, and expires after 10 minutes — a replayed or stale
 callback fails server-side. Entries can be domains (`acme.com`) or full addresses
-(`bob@gmail.com`).
+(`bob@gmail.com`). Like the SAML ACS, the callback answers every failure with
+`303 /?login_error=<code>` — `google_state` (not started in this browser,
+expired or already used), `google_error`, `wrong_domain` or `not_member` —
+and logs the reason.
 
 ### Google Workspace SAML SSO
 
@@ -965,7 +969,7 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `GET /me` | public | Session + provider availability + share state (+ `role` when identity is on) |
 | `POST /auth/dev` | public | `{name,email}` → session cookie; 403 when dev login is off |
 | `GET /auth/google` | public | 302 to Google consent (`?return=` carried via `state`) |
-| `GET /auth/google/callback` | public | Code → token verification → cookie → 302 back |
+| `GET /auth/google/callback` | public | Code → token verification → cookie → 302 back; failures 303 to `/?login_error=<code>` |
 | `GET /auth/saml/login` | public | 302 to the IdP (`?return=` as RelayState) |
 | `POST /auth/saml/callback` | public | ACS; never 500s — failures 303 to `/?login_error=<code>` |
 | `GET /auth/saml/metadata` | public | SP metadata XML (works before the cert is configured) |
@@ -1012,7 +1016,9 @@ at 1 MiB (415/413 otherwise); a state-changing request whose `Origin` (or
 refused (403) — a browser's cross-site form post carries its Origin, so a
 cookie cannot be replayed from a foreign page (a request with neither
 header is a non-browser client and passes); the SAML ACS is exempt — its
-authentication is the signed assertion; intentional 4xx errors return `{error}` JSON, and
+authentication is the signed assertion; intentional 4xx errors return
+`{error, code, params}` JSON — `code` and `params` name the failure
+(`src/wiki/shared/errors.ts`), `error` is its English line — and
 unexpected failures a 500 with a reference id that the server log carries.
 
 ## Architecture & state on disk
@@ -1020,7 +1026,7 @@ unexpected failures a 500 with a reference id that the server log carries.
 ```
 astro.config.ts ──WIKI=1──▶ inkbrush() integration   (src/wiki/integration.ts)
    ├─ injectScript('page') → src/wiki/client/*   (handles/editor/AI/comments/share UI;
-   │                                              strings.ts = the en/zh string table)
+   │                                              strings.ts = the en/zh/de string table)
    ├─ dev middleware /api/wiki/* → src/wiki/server/*   (ssrLoadModule — server code
    │                                                    hot-reloads too)
    └─ initWiki(root, { markdown }) → the identity registry check, the site's

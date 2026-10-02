@@ -38,9 +38,9 @@ import type { IncomingMessage } from 'node:http';
 import { originTrusted } from './origins.ts';
 import { jwtVerify, SignJWT } from 'jose';
 
-import type { GoogleAuthState, WikiUser } from '../shared/types.ts';
+import type { GoogleAuthState, LoginErrorCode, WikiUser } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
-import { HttpError } from './index.ts';
+import { refuse } from './index.ts';
 import { createSingleUse, decodeOAuthState, encodeOAuthState } from './oauth-state.ts';
 import { sessionPayloadUser } from './session-payload.ts';
 import { sessionSecret } from './store.ts';
@@ -245,7 +245,7 @@ function baseUrl(req: IncomingMessage): string {
   if (google && google.baseUrl) return google.baseUrl;
   const host = req.headers.host ?? '';
   if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return `http://${host}`;
-  throw new HttpError(503, 'Google login needs auth.google.baseUrl (inkbrush.config.ts) outside localhost');
+  throw refuse(503, 'google-base-url');
 }
 
 function redirectUri(req: IncomingMessage): string {
@@ -304,23 +304,39 @@ export function clearOAuthCookie(req: IncomingMessage): string {
   return `${OAUTH_COOKIE}=; ${cookieAttrs(0, req)}`;
 }
 
+/** a sign-in flow that ends back on the site with `/?login_error=<code>`;
+ *  the message says why, for the server log */
+export class SignInError extends Error {
+  readonly code: LoginErrorCode;
+  constructor(code: LoginErrorCode, message: string) {
+    super(message);
+    this.name = 'SignInError';
+    this.code = code;
+  }
+}
+
 /** verify the callback's `state` against the binding cookie — signature,
  *  expiry (10 min), browser nonce match and single use; returns the return
  *  target and the PKCE verifier, or throws */
 export function googleAuthVerify(req: IncomingMessage, state: string | null): { returnTo: string; verifier: string } {
   const bound = cookieValue(req, OAUTH_COOKIE);
-  if (!state || !bound) throw new Error('Sign-in was not started from this browser');
-  const parsedState = decodeOAuthState(state, sessionSecret(), Date.now());
+  if (!state || !bound) throw new SignInError('google_state', 'Sign-in was not started from this browser');
+  let parsedState: ReturnType<typeof decodeOAuthState>;
+  try {
+    parsedState = decodeOAuthState(state, sessionSecret(), Date.now());
+  } catch (err) {
+    throw new SignInError('google_state', err instanceof Error ? err.message : String(err));
+  }
   const [bp, bm] = bound.split('.');
   if (!bp || !bm || !macEquals(bm, sign(bp))) {
-    throw new Error('Sign-in state is invalid');
+    throw new SignInError('google_state', 'Sign-in state is invalid');
   }
   const parsedBound = JSON.parse(Buffer.from(bp, 'base64url').toString()) as { nonce: string; verifier: string };
   if (!parsedState.nonce || parsedState.nonce !== parsedBound.nonce) {
-    throw new Error('Sign-in state does not match this browser');
+    throw new SignInError('google_state', 'Sign-in state does not match this browser');
   }
   if (!consumedStates.consume(parsedState.nonce)) {
-    throw new Error('This sign-in link has already been used — start again');
+    throw new SignInError('google_state', 'This sign-in link has already been used');
   }
   return { returnTo: safeReturnUrl(parsedState.returnTo), verifier: parsedBound.verifier };
 }
@@ -337,7 +353,7 @@ function emailAllowed(email: string, hd: string | undefined): boolean {
   return rules.some((rule) => rule === lower || rule === domain || rule === hd);
 }
 
-/** code → tokens → verified identity. Throws with a user-facing message. */
+/** code → tokens → verified identity; throws SignInError */
 export async function googleExchangeCode(req: IncomingMessage, code: string, verifier: string): Promise<WikiUser> {
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -351,15 +367,15 @@ export async function googleExchangeCode(req: IncomingMessage, code: string, ver
       code_verifier: verifier,
     }),
   });
-  if (!tokenRes.ok) throw new Error(`Google token exchange failed (${tokenRes.status})`);
+  if (!tokenRes.ok) throw new SignInError('google_error', `Google token exchange failed (${tokenRes.status})`);
   const tokens = (await tokenRes.json()) as { id_token?: string };
-  if (!tokens.id_token) throw new Error('Google returned no id_token');
+  if (!tokens.id_token) throw new SignInError('google_error', 'Google returned no id_token');
 
   // verify signature + audience via Google's tokeninfo endpoint
   const infoRes = await fetch(
     `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokens.id_token)}`,
   );
-  if (!infoRes.ok) throw new Error('id_token verification failed');
+  if (!infoRes.ok) throw new SignInError('google_error', 'id_token verification failed');
   const info = (await infoRes.json()) as {
     aud?: string;
     email?: string;
@@ -368,10 +384,10 @@ export async function googleExchangeCode(req: IncomingMessage, code: string, ver
     picture?: string;
     hd?: string;
   };
-  if (info.aud !== process.env['GOOGLE_CLIENT_ID']) throw new Error('id_token audience mismatch');
-  if (!info.email || info.email_verified !== 'true') throw new Error('Google email not verified');
+  if (info.aud !== process.env['GOOGLE_CLIENT_ID']) throw new SignInError('google_error', 'id_token audience mismatch');
+  if (!info.email || info.email_verified !== 'true') throw new SignInError('google_error', 'Google email not verified');
   if (!emailAllowed(info.email, info.hd)) {
-    throw new Error(`Account ${info.email} is not in an allowed Workspace domain`);
+    throw new SignInError('wrong_domain', `Account ${info.email} is not in an allowed Workspace domain`);
   }
   return {
     name: info.name ?? info.email,

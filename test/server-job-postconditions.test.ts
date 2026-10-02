@@ -32,15 +32,15 @@ test('a block edit that touches lines outside the span is refused', () => {
     'four', // shorter than the outside lines
   ];
   for (const changed of cases) {
-    assert.match(
+    assert.equal(
       blockEditViolation({
         noteRel: NOTE,
         baseline,
         changes: [{ rel: NOTE, content: changed }],
         start: 2,
         end: 3,
-      }) ?? '',
-      /outside the selected block/,
+      })?.code,
+      'job-outside-block',
       `'${changed.replace(/\n/g, '⏎')}' should be refused`,
     );
   }
@@ -58,15 +58,15 @@ test('a block edit may change companions only, and never delete the note', () =>
     }),
     null,
   );
-  assert.match(
+  assert.equal(
     blockEditViolation({
       noteRel: NOTE,
       baseline,
       changes: [{ rel: NOTE, content: null }],
       start: 1,
       end: 2,
-    }) ?? '',
-    /deleted/,
+    })?.code,
+    'job-deleted-note',
   );
 });
 
@@ -81,7 +81,7 @@ test('a translation may change exactly the target file, nothing else', () => {
     }),
     null,
   );
-  assert.match(
+  assert.equal(
     translateViolation({
       sourceRel,
       targetRel,
@@ -89,15 +89,15 @@ test('a translation may change exactly the target file, nothing else', () => {
         { rel: sourceRel, content: 'rewritten source' },
         { rel: targetRel, content: 'x' },
       ],
-    }) ?? '',
-    /modified the source note/,
+    })?.code,
+    'job-touched-source',
   );
-  assert.match(
-    translateViolation({ sourceRel, targetRel, changes: [{ rel: sourceRel, content: null }] }) ?? '',
-    /modified the source note/,
+  assert.equal(
+    translateViolation({ sourceRel, targetRel, changes: [{ rel: sourceRel, content: null }] })?.code,
+    'job-touched-source',
   );
   // a companion change refuses the whole result even with a valid target
-  assert.match(
+  assert.equal(
     translateViolation({
       sourceRel,
       targetRel,
@@ -105,20 +105,20 @@ test('a translation may change exactly the target file, nothing else', () => {
         { rel: targetRel, content: 'x' },
         { rel: 'notes/a/companion.ts', content: 'y' },
       ],
-    }) ?? '',
-    /besides the target/,
+    })?.code,
+    'job-stray-file',
   );
-  assert.match(
-    translateViolation({ sourceRel, targetRel, changes: [{ rel: 'notes/en/a/other.md', content: 'x' }] }) ?? '',
-    /besides the target/,
+  assert.equal(
+    translateViolation({ sourceRel, targetRel, changes: [{ rel: 'notes/en/a/other.md', content: 'x' }] })?.code,
+    'job-stray-file',
   );
-  assert.match(
-    translateViolation({ sourceRel, targetRel, changes: [{ rel: targetRel, content: null }] }) ?? '',
-    /did not produce the target file/,
+  assert.equal(
+    translateViolation({ sourceRel, targetRel, changes: [{ rel: targetRel, content: null }] })?.code,
+    'job-no-target',
   );
-  assert.match(
-    translateViolation({ sourceRel, targetRel, changes: [] }) ?? '',
-    /did not produce the target file/,
+  assert.equal(
+    translateViolation({ sourceRel, targetRel, changes: [] })?.code,
+    'job-no-target',
   );
 });
 

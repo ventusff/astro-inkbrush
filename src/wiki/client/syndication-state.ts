@@ -45,6 +45,7 @@ import type {
   SyndicationSubmission,
   SyndicationUnitStatus,
 } from '../shared/types';
+import { isWikiFailure, type WikiFailure } from '../shared/errors';
 import { api, ApiError, stream } from './api';
 
 /* ---------------- failures and outcomes ---------------- */
@@ -52,8 +53,11 @@ import { api, ApiError, stream } from './api';
 /** why a request did not go through, however the server said it — a publish
  *  stream's error event, a JSON error body, or no answer at all */
 export interface Failure {
-  /** the server's code, when it gave one this client knows */
+  /** the server's syndication code, when it gave one this client knows */
   code: SyndicationErrorCode | null;
+  /** a request-level failure (no such note, a refused request), when the
+   *  server reported one this client knows */
+  wiki: WikiFailure | null;
   /** the HTTP status of an answer without a known code; 0 when no answer
    *  arrived (the network failed, or the stream broke off) */
   http: number;
@@ -96,12 +100,13 @@ export function failureOf(err: unknown): Failure {
     const problems = err.body['problems'];
     return {
       code: errorCode(err.body['code']),
+      wiki: err.failure,
       http: err.status,
       message: err.message,
       problems: Array.isArray(problems) ? problems.map(String) : [],
     };
   }
-  return { code: null, http: 0, message: err instanceof Error ? err.message : String(err), problems: [] };
+  return { code: null, wiki: null, http: 0, message: err instanceof Error ? err.message : String(err), problems: [] };
 }
 
 export type Action = 'publish' | 'withdraw' | 'overrides';
@@ -222,9 +227,17 @@ async function publishStream(peer: string, request: SyndicationPublishRequest, o
     if (event.kind === 'progress') on.progress({ stage: event.stage, seconds: event.seconds });
     else if (event.kind === 'submitted') on.submitted(event.commit, event.revision);
     else if (event.kind === 'result') return event.status;
-    else throw new StreamFailure({ code: errorCode(event.code), http: 500, message: event.message, problems: event.problems ?? [] });
+    else {
+      throw new StreamFailure({
+        code: errorCode(event.code),
+        wiki: isWikiFailure(event) ? (event as WikiFailure) : null,
+        http: 500,
+        message: event.message,
+        problems: 'problems' in event ? (event.problems ?? []) : [],
+      });
+    }
   }
-  throw new StreamFailure({ code: null, http: 0, message: 'the stream ended without a result', problems: [] });
+  throw new StreamFailure({ code: null, wiki: null, http: 0, message: 'the stream ended without a result', problems: [] });
 }
 
 /** plain JSON values compare by content */

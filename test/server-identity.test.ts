@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { IdentityValidationError, validateUserRecords } from '../src/wiki/server/identity-records.ts';
+import type { WikiErrorCode } from '../src/wiki/shared/errors.ts';
+
+/** a validation refusal carrying `code` */
+function refusedWith(code: WikiErrorCode): (err: unknown) => boolean {
+  return (err) => err instanceof IdentityValidationError && err.failure.code === code;
+}
 
 const roles = ['member', 'admin'];
 
@@ -26,8 +32,8 @@ test('shape violations are refused', () => {
 });
 
 test('emails must contain @ and be unique (case-insensitively)', () => {
-  assert.throws(() => validateUserRecords([{ email: 'nope', name: 'x', role: 'admin' }], roles), /invalid email/);
-  assert.throws(() => validateUserRecords([{ name: 'x', role: 'admin' }], roles), /invalid email/);
+  assert.throws(() => validateUserRecords([{ email: 'nope', name: 'x', role: 'admin' }], roles), refusedWith('members-email'));
+  assert.throws(() => validateUserRecords([{ name: 'x', role: 'admin' }], roles), refusedWith('members-email'));
   assert.throws(
     () =>
       validateUserRecords(
@@ -37,11 +43,11 @@ test('emails must contain @ and be unique (case-insensitively)', () => {
         ],
         roles,
       ),
-    /duplicate email/,
+    refusedWith('members-duplicate'),
   );
 });
 
 test('roles must come from the configured vocabulary', () => {
-  assert.throws(() => validateUserRecords([{ email: 'a@b.c', name: 'x', role: 'owner' }], roles), /unknown role/);
-  assert.throws(() => validateUserRecords([{ email: 'a@b.c', name: 'x' }], roles), /unknown role/);
+  assert.throws(() => validateUserRecords([{ email: 'a@b.c', name: 'x', role: 'owner' }], roles), refusedWith('members-role'));
+  assert.throws(() => validateUserRecords([{ email: 'a@b.c', name: 'x' }], roles), refusedWith('members-role'));
 });

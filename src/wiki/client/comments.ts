@@ -7,7 +7,7 @@ import type { NoteMeta, WikiComment } from '../shared/types';
 import { api } from './api';
 import { currentUser, onAuthChange } from './auth';
 import type { PageContext } from './index';
-import { S } from './strings';
+import { errorText, S } from './strings';
 import { h, time, toast } from './ui';
 
 /** Initial avatar. Decorative: the author's name is rendered right next to
@@ -86,7 +86,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
                       comments = comments.filter((c) => c.id !== comment.id);
                       redrawCount();
                     } catch (err) {
-                      toast(err instanceof Error ? err.message : S.comments.deleteFailed, 'err');
+                      toast(errorText(err, S.comments.deleteFailed), 'err');
                     }
                   },
                 },
@@ -191,7 +191,7 @@ async function render(meta: NoteMeta, column: Element): Promise<void> {
         if (previewing) previewBtn.click();
         toast(S.comments.posted);
       } catch (err) {
-        toast(err instanceof Error ? err.message : S.comments.postFailed, 'err');
+        toast(errorText(err, S.comments.postFailed), 'err');
       } finally {
         submitBtn.disabled = false;
       }

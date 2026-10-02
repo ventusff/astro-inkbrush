@@ -23,7 +23,15 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import type { MeResponse, WikiUser } from '../shared/types.ts';
+import {
+  englishOf,
+  failure,
+  isWikiFailure,
+  type ParamsArg,
+  type WikiErrorCode,
+  type WikiFailure,
+} from '../shared/errors.ts';
+import type { LoginErrorCode, MeResponse, WikiUser } from '../shared/types.ts';
 import {
   clearOAuthCookie,
   clearSessionCookie,
@@ -37,6 +45,7 @@ import {
   isSecureRequest,
   safeReturnUrl,
   sessionUser,
+  SignInError,
 } from './auth.ts';
 import { wikiConfig } from './config.ts';
 import { crossSiteBlocked } from './csrf.ts';
@@ -100,7 +109,7 @@ function decodeSegment(seg: string): string {
   try {
     return decodeURIComponent(seg);
   } catch {
-    throw new HttpError(400, `malformed path segment: ${seg}`);
+    throw refuse(400, 'bad-request', { detail: `malformed path segment: ${seg}` });
   }
 }
 
@@ -133,15 +142,22 @@ export function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-export function fail(res: ServerResponse, status: number, message: string): void {
-  json(res, status, { error: message });
+/** the error body of a failure: its English line, code and parameters */
+export function failureBody(f: WikiFailure): { error: string; code: WikiErrorCode; params: WikiFailure['params'] } {
+  return { error: englishOf(f), code: f.code, params: f.params };
+}
+
+/** answer with a failure (../shared/errors.ts) */
+export function fail<K extends WikiErrorCode>(res: ServerResponse, status: number, code: K, ...params: ParamsArg<K>): void {
+  json(res, status, failureBody(failure(code, ...params)));
 }
 
 /** an error carrying the HTTP status the router should answer with (4xx
  *  semantics — logged as a warning, no console.error stack) */
 export class HttpError extends Error {
   readonly status: number;
-  /** further fields of the error body beside `error` (a refusal code) */
+  /** further fields of the error body beside `error` (a failure's code and
+   *  parameters, a syndication code and its findings) */
   readonly extra: Record<string, unknown>;
   constructor(status: number, message: string, extra: Record<string, unknown> = {}) {
     super(message);
@@ -149,6 +165,26 @@ export class HttpError extends Error {
     this.status = status;
     this.extra = extra;
   }
+}
+
+/** an HttpError answering with a failure (../shared/errors.ts) */
+export function refusal(status: number, f: WikiFailure): HttpError {
+  const { error, ...rest } = failureBody(f);
+  return new HttpError(status, error, rest);
+}
+
+/** an HttpError answering with a failure, by code */
+export function refuse<K extends WikiErrorCode>(status: number, code: K, ...params: ParamsArg<K>): HttpError {
+  return refusal(status, failure(code, ...params));
+}
+
+/** the failure an error stands for — a refusal's own, or `unexpected` with
+ *  the error's line (a stream reports every failure this way) */
+export function failureOf(err: unknown): WikiFailure {
+  if (err instanceof HttpError && isWikiFailure(err.extra)) {
+    return { code: err.extra['code'], params: err.extra['params'] } as WikiFailure;
+  }
+  return failure('unexpected', { detail: err instanceof Error ? err.message : String(err) });
 }
 
 /** request body ceiling; every endpoint posts small JSON (a note's markdown at most) */
@@ -159,7 +195,7 @@ export const BODY_LIMIT = 1024 * 1024;
  *  the connection closed cleanly */
 async function readCapped(req: IncomingMessage, limit = BODY_LIMIT): Promise<string> {
   const declared = Number(req.headers['content-length']);
-  const tooBig = (): HttpError => new HttpError(413, `Request body too large (max ${limit} bytes)`);
+  const tooBig = (): HttpError => refuse(413, 'body-too-large', { limit });
   if (Number.isFinite(declared) && declared > limit) {
     req.resume();
     throw tooBig();
@@ -200,14 +236,14 @@ export async function readBody<T>(req: IncomingMessage): Promise<T> {
   const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
   if (type !== 'application/json') {
     req.resume();
-    throw new HttpError(415, 'JSON bodies must be sent as application/json');
+    throw refuse(415, 'bad-request', { detail: 'JSON bodies must be sent as application/json' });
   }
   const text = await readCapped(req);
   if (!text) return {} as T;
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new HttpError(400, 'Request body is not valid JSON');
+    throw refuse(400, 'bad-request', { detail: 'Request body is not valid JSON' });
   }
 }
 
@@ -261,14 +297,10 @@ on('GET', '/me', ({ req, user, res }) => {
 
 on('POST', '/auth/dev', async ({ req, res }) => {
   if (!devLoginEnabled(req)) {
-    return fail(
-      res,
-      403,
-      'Dev login is disabled (inkbrush.config.ts → auth.dev; without an explicit dev: true it serves loopback clients only)',
-    );
+    return fail(res, 403, 'dev-login-off');
   }
   const { name, email } = await readBody<{ name?: string; email?: string }>(req);
-  if (!name?.trim() || !email?.includes('@')) return fail(res, 400, 'A name and a valid email are required');
+  if (!name?.trim() || !email?.includes('@')) return fail(res, 400, 'dev-login-fields');
   const user: WikiUser = { name: name.trim(), email: email.trim(), provider: 'dev' };
   res.setHeader('set-cookie', await createSessionCookie(user, req));
   json(res, 200, { user });
@@ -277,28 +309,31 @@ on('POST', '/auth/dev', async ({ req, res }) => {
 on('GET', '/auth/google', ({ req, res, query }) => {
   const state = googleState();
   if (state === 'off') {
-    return fail(res, 404, 'Google login is not enabled (inkbrush.config.ts → auth.google)');
+    return fail(res, 404, 'google-off');
   }
   if (state === 'unconfigured') {
-    return fail(res, 503, 'Google login is enabled but GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET is missing from the environment');
+    return fail(res, 503, 'google-unconfigured');
   }
   const start = googleAuthStart(req, safeReturnUrl(query.get('return')));
   res.setHeader('set-cookie', start.cookie);
   redirect(res, 302, start.url);
 });
 
+// Every failure is a 303 back to /?login_error=<code>, as the SAML callback
+// answers; the reason goes to the server log.
 on('GET', '/auth/google/callback', async ({ req, res, query }) => {
-  const code = query.get('code');
-  if (!code) return fail(res, 400, 'missing code');
   try {
+    const code = query.get('code');
+    if (!code) throw new SignInError('google_error', 'the callback carries no code');
     const { returnTo, verifier } = googleAuthVerify(req, query.get('state'));
     const user = await googleExchangeCode(req, code, verifier);
     await provision(user);
     res.setHeader('set-cookie', [await createSessionCookie(user, req), clearOAuthCookie(req)]);
     redirect(res, 302, returnTo);
   } catch (err) {
+    console.warn('[wiki google] sign-in failed:', err instanceof Error ? err.message : err);
     res.setHeader('set-cookie', clearOAuthCookie(req));
-    fail(res, 403, err instanceof Error ? err.message : 'Google sign-in failed');
+    redirect(res, 303, `/?login_error=${err instanceof SignInError ? err.code : 'google_error'}`);
   }
 });
 
@@ -312,7 +347,7 @@ async function provision(user: WikiUser): Promise<void> {
     if (record.name.trim()) user.name = record.name;
   } else {
     const record = findIdentityUser(user.email);
-    if (!record) throw new Error(`${user.email} is not a member of this site`);
+    if (!record) throw new SignInError('not_member', `${user.email} is not a member of this site`);
     if (record.name.trim()) user.name = record.name;
   }
 }
@@ -322,14 +357,10 @@ async function provision(user: WikiUser): Promise<void> {
 on('GET', '/auth/saml/login', async ({ res, query }) => {
   const state = googleSamlState();
   if (state === 'off') {
-    return fail(res, 404, 'SAML login is not enabled (inkbrush.config.ts → auth.googleSaml)');
+    return fail(res, 404, 'saml-off');
   }
   if (state === 'unconfigured') {
-    return fail(
-      res,
-      503,
-      'SAML login is enabled but not fully configured (entryPoint / idpEntityId / certFile / baseUrl)',
-    );
+    return fail(res, 503, 'saml-unconfigured');
   }
   const relay = safeReturnUrl(query.get('return'));
   try {
@@ -345,7 +376,7 @@ on('GET', '/auth/saml/login', async ({ res, query }) => {
 // (as registered with the IdP). Every failure degrades gracefully to a
 // 303 back to /?login_error=<code> — this endpoint must never 500.
 on('POST', '/auth/saml/callback', async ({ req, res }) => {
-  const errorRedirect = (code: string): void => redirect(res, 303, `/?login_error=${code}`);
+  const errorRedirect = (code: LoginErrorCode): void => redirect(res, 303, `/?login_error=${code}`);
   try {
     if (googleSamlState() !== 'ready') return errorRedirect('saml_disabled');
     const { saml } = buildSaml();
@@ -399,7 +430,7 @@ on('POST', '/auth/saml/callback', async ({ req, res }) => {
 // configured (so entityID/ACS can be verified during setup)
 on('GET', '/auth/saml/metadata', ({ res }) => {
   if (googleSamlState() === 'off') {
-    return fail(res, 404, 'SAML login is not enabled (inkbrush.config.ts → auth.googleSaml)');
+    return fail(res, 404, 'saml-off');
   }
   const { saml } = buildSaml();
   res.statusCode = 200;
@@ -515,7 +546,7 @@ export async function handleApi(
   const path = url.pathname.replace(/^\/api\/wiki/, '') || '/';
   try {
     const matched = matchRoute(req.method ?? 'GET', path);
-    if (!matched) return fail(res, 404, `no route: ${req.method} ${path}`);
+    if (!matched) return fail(res, 404, 'bad-request', { detail: `no route: ${req.method} ${path}` });
     if (
       crossSiteBlocked({
         method: req.method ?? 'GET',
@@ -525,17 +556,17 @@ export async function handleApi(
         trustedOrigins: wikiConfig().auth.session.trustedOrigins,
       })
     ) {
-      return fail(res, 403, 'Cross-site request refused');
+      return fail(res, 403, 'cross-site');
     }
     const user = await sessionUser(req);
     const identity = identityConfig();
     if (matched.route.auth === 'admin') {
-      if (!identity) return fail(res, 404, `no route: ${req.method} ${path}`);
-      if (!user) return fail(res, 401, 'Sign in required');
-      if (findIdentityUser(user.email)?.role !== identity.adminRole) return fail(res, 403, 'Admin only');
+      if (!identity) return fail(res, 404, 'bad-request', { detail: `no route: ${req.method} ${path}` });
+      if (!user) return fail(res, 401, 'sign-in-required');
+      if (findIdentityUser(user.email)?.role !== identity.adminRole) return fail(res, 403, 'admin-only');
     } else if (matched.route.auth) {
-      if (!user) return fail(res, 401, 'Sign in required');
-      if (identity && !findIdentityUser(user.email)) return fail(res, 403, 'Not a member of this site');
+      if (!user) return fail(res, 401, 'sign-in-required');
+      if (identity && !findIdentityUser(user.email)) return fail(res, 403, 'not-member');
     }
     await matched.route.handler({ req, res, params: matched.params, query: url.searchParams, user });
   } catch (err) {
@@ -547,7 +578,7 @@ export async function handleApi(
     }
     const id = randomUUID().slice(0, 8);
     console.error(`[wiki api] ${req.method} ${path} → 500 (${id})`, err);
-    if (!res.headersSent) fail(res, 500, `Internal error (${id})`);
+    if (!res.headersSent) fail(res, 500, 'internal', { id });
     else res.end();
   }
 }

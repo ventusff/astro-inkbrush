@@ -11,13 +11,14 @@
  * lines '*' — an audit row the one-click revert refuses.
  * Kept free of config/server imports so every rule is unit-testable.
  */
+import { failure, type WikiFailure } from '../shared/errors.ts';
 import type { WorkspaceChange } from './workspace.ts';
 
 /**
  * A block edit must keep every line outside the selected start..end span
  * byte-identical to the baseline: the changed file has to be the baseline's
- * outside lines spliced around a replacement block. Returns a violation
- * message, or null when the change is within bounds. A missing change to
+ * outside lines spliced around a replacement block. Returns the violation,
+ * or null when the change is within bounds. A missing change to
  * the note file passes (the job may have changed companions only).
  */
 export function blockEditViolation(opts: {
@@ -29,28 +30,22 @@ export function blockEditViolation(opts: {
   /** selected span, 1-based inclusive line numbers in the baseline */
   start: number;
   end: number;
-}): string | null {
+}): WikiFailure | null {
   const change = opts.changes.find((c) => c.rel === opts.noteRel);
   if (!change) return null;
-  if (change.content === null) return `The job deleted the note's own file (${opts.noteRel})`;
-  if (opts.baseline === null) {
-    return `The note file (${opts.noteRel}) has no baseline to edit a block of`;
-  }
+  if (change.content === null) return failure('job-deleted-note', { file: opts.noteRel });
+  if (opts.baseline === null) return failure('job-no-baseline', { file: opts.noteRel });
   const before = opts.baseline.split('\n');
   const after = change.content.split('\n');
   const prefix = before.slice(0, opts.start - 1);
   const suffix = before.slice(opts.end);
-  const outside = `lines outside the selected block (L${opts.start}-${opts.end}) of ${opts.noteRel}`;
-  if (after.length < prefix.length + suffix.length) {
-    return `The job changed ${outside}`;
-  }
+  const outside = failure('job-outside-block', { file: opts.noteRel, start: opts.start, end: opts.end });
+  if (after.length < prefix.length + suffix.length) return outside;
   for (let i = 0; i < prefix.length; i++) {
-    if (after[i] !== prefix[i]) return `The job changed ${outside}`;
+    if (after[i] !== prefix[i]) return outside;
   }
   for (let i = 0; i < suffix.length; i++) {
-    if (after[after.length - suffix.length + i] !== suffix[i]) {
-      return `The job changed ${outside}`;
-    }
+    if (after[after.length - suffix.length + i] !== suffix[i]) return outside;
   }
   return null;
 }
@@ -58,7 +53,7 @@ export function blockEditViolation(opts: {
 /**
  * A translation's change set may contain only the target file, and must
  * contain it with content: any change to the source note or to any other
- * path refuses the whole result. Returns a violation message, or null when
+ * path refuses the whole result. Returns the violation, or null when
  * the change set is exactly the target.
  */
 export function translateViolation(opts: {
@@ -67,17 +62,15 @@ export function translateViolation(opts: {
   /** project-relative path the translation must be written to */
   targetRel: string;
   changes: WorkspaceChange[];
-}): string | null {
+}): WikiFailure | null {
   const stray = opts.changes.find((c) => c.rel !== opts.targetRel);
   if (stray) {
     return stray.rel === opts.sourceRel
-      ? `The job modified the source note (${opts.sourceRel})`
-      : `The job changed a file besides the target (${stray.rel})`;
+      ? failure('job-touched-source', { file: opts.sourceRel })
+      : failure('job-stray-file', { file: stray.rel });
   }
   const target = opts.changes.find((c) => c.rel === opts.targetRel);
-  if (!target || target.content === null) {
-    return `The job did not produce the target file (${opts.targetRel})`;
-  }
+  if (!target || target.content === null) return failure('job-no-target', { file: opts.targetRel });
   return null;
 }
 

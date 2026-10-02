@@ -31,12 +31,14 @@ import { Readable } from 'node:stream';
 
 import * as tar from 'tar';
 
+import { englishOf, failure, type WikiFailure } from '../shared/errors.ts';
 import { isShareVisibility, parseIdentity, type ShareIdentity } from '../shared/share-identity.ts';
 import type {
   GoogleAuthState,
   ShareCreateRequest,
   ShareListResponse,
   SharePinRequest,
+  ShareProgress,
   ShareRecord,
   ShareStreamEvent,
   ShareVisibility,
@@ -45,7 +47,7 @@ import type {
 import { wikiConfig } from './config.ts';
 import { findUser as findIdentityUser, identityConfig } from './identity.ts';
 import type { Ctx, RouteRegistrar } from './index.ts';
-import { fail, json, ndjsonStream, readBody } from './index.ts';
+import { fail, failureBody, failureOf, type HttpError, json, ndjsonStream, readBody, refuse } from './index.ts';
 import { followDue, snapshotFingerprint, startShareFollower } from './share-follow.ts';
 import { noteUrl } from './site.ts';
 import { buildSnapshot, latestMtime } from './snapshot.ts';
@@ -99,16 +101,12 @@ function shareConf(): ShareConf | null {
 function requireShare(ctx: Ctx): ShareConf | null {
   const share = wikiConfig().share;
   if (share === false) {
-    fail(ctx.res, 404, 'Share is not configured (inkbrush.config.ts → share)');
+    fail(ctx.res, 404, 'share-off');
     return null;
   }
   const conf = shareConf();
   if (!conf) {
-    fail(
-      ctx.res,
-      503,
-      'Share is enabled but gatewayUrl / publicBase / SHARE_GATEWAY_TOKEN is missing',
-    );
+    fail(ctx.res, 503, 'share-unconfigured');
     return null;
   }
   return conf;
@@ -239,16 +237,20 @@ async function gatewayFetch(
 }
 
 /** the gateway must answer before a (minutes-long) build starts; a failure
- *  is the message the caller answers 502 with */
-async function gatewayPreflight(conf: ShareConf): Promise<string | null> {
+ *  is what the caller answers 502 with */
+async function gatewayPreflight(conf: ShareConf): Promise<WikiFailure | null> {
   try {
     const ping = await gatewayFetch(conf, '/admin/s', {}, 5000);
-    if (ping.status === 401) return 'Share gateway rejected SHARE_GATEWAY_TOKEN';
-    if (!ping.ok) return `Share gateway error (HTTP ${ping.status})`;
+    if (ping.status === 401) return failure('gateway-token');
+    if (!ping.ok) return failure('gateway-status', { status: ping.status, detail: '' });
     return null;
   } catch (err) {
-    return `Share gateway unreachable (${conf.gatewayUrl}): ${err instanceof Error ? err.message : String(err)}`;
+    return gatewayUnreachable(conf, err);
   }
+}
+
+function gatewayUnreachable(conf: ShareConf, err: unknown): WikiFailure {
+  return failure('gateway-unreachable', { url: conf.gatewayUrl, detail: err instanceof Error ? err.message : String(err) });
 }
 
 /** header values are latin1 — a CJK note id travels percent-encoded */
@@ -269,20 +271,20 @@ interface Bundle {
 async function packSnapshot(
   route: string,
   visibility: ShareVisibility,
-  progress: (message: string) => void,
+  progress: (progress: ShareProgress) => void,
   signal: AbortSignal,
 ): Promise<Bundle> {
   const snapshot = await buildSnapshot(projectRoot(), route, progress, signal, { indexable: visibility === 'public' });
   const fingerprint = snapshotFingerprint(snapshot);
   const tgzPath = `${snapshot.dir}.tgz`;
-  progress(`Packing snapshot (${snapshot.files.length + 1} files)…`);
+  progress({ stage: 'packing', count: snapshot.files.length + 1 });
   // index.html at the tar root — the gateway extracts into site/ as-is
   await tar.c({ gzip: true, cwd: snapshot.dir, file: tgzPath, portable: true }, readdirSync(snapshot.dir));
   const size = statSync(tgzPath).size;
   if (size > BUNDLE_LIMIT) {
     rmSync(snapshot.dir, { recursive: true, force: true });
     rmSync(tgzPath, { force: true });
-    throw new Error(`snapshot bundle is ${Math.round(size / 1048576)} MiB, above the ${BUNDLE_LIMIT / 1048576} MiB limit`);
+    throw refuse(413, 'snapshot-too-large', { size: Math.round(size / 1048576), limit: BUNDLE_LIMIT / 1048576 });
   }
   return { snapDir: snapshot.dir, tgzPath, size, fingerprint };
 }
@@ -318,10 +320,10 @@ async function uploadBundle(
 }
 
 /** the gateway's refusal of a change, as the author reads it */
-async function gatewayRefusal(res: Response, what: string): Promise<string> {
+async function gatewayRefusal(res: Response): Promise<HttpError> {
   const text = (await res.text()).slice(0, 300);
-  if (res.status === 409) return `The share gateway refused: ${text}`;
-  return `gateway ${what} failed (HTTP ${res.status}): ${text}`;
+  if (res.status === 409) return refuse(502, 'gateway-refused', { detail: text });
+  return refuse(502, 'gateway-status', { status: res.status, detail: text });
 }
 
 /** PATCH what a share is — visibility, credential, alias — content untouched */
@@ -336,10 +338,8 @@ async function patchGateway(
     { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) },
     30_000,
   );
-  if (res.status === 404) {
-    throw new Error('The share gateway no longer holds this share, or does not know share visibilities yet');
-  }
-  if (!res.ok) throw new Error(await gatewayRefusal(res, 'update'));
+  if (res.status === 404) throw refuse(502, 'gateway-unknown-share');
+  if (!res.ok) throw await gatewayRefusal(res);
 }
 
 /* ---------------- republish (follow + "publish this version") ---------------- */
@@ -347,7 +347,7 @@ async function patchGateway(
 /** one publish per share at a time: a click, the follower and a visibility
  *  change cannot overlap on one share */
 async function withPublishing<T>(id: string, work: () => Promise<T>): Promise<T> {
-  if (publishing.has(id)) throw new Error('This share is being published right now — wait for it to finish');
+  if (publishing.has(id)) throw refuse(409, 'share-busy');
   publishing.add(id);
   try {
     return await work();
@@ -361,7 +361,7 @@ async function withPublishing<T>(id: string, work: () => Promise<T>): Promise<T>
  *  publishes what the share has become, not what it was */
 function activeShare(id: string): ShareRecord {
   const record = readShares().find((r) => r.id === id && isActive(r));
-  if (!record) throw new Error('Share not found');
+  if (!record) throw refuse(404, 'share-not-found');
   return record;
 }
 
@@ -376,7 +376,7 @@ function activeShare(id: string): ShareRecord {
 async function republishHeld(
   conf: ShareConf,
   record: ShareRecord,
-  progress: (message: string) => void,
+  progress: (progress: ShareProgress) => void,
   signal: AbortSignal,
   force = false,
 ): Promise<ShareRecord> {
@@ -386,14 +386,12 @@ async function republishHeld(
     signal.throwIfAborted();
     const publishedAt = new Date().toISOString();
     if (!force && bundle.fingerprint === record.publishedHash) {
-      progress('The published snapshot already matches — nothing to upload');
+      progress({ stage: 'unchanged' });
     } else {
-      progress('Uploading to the share gateway…');
+      progress({ stage: 'uploading' });
       const put = await uploadBundle(conf, record.id, bundle, { 'x-share-note': noteHeader(record.note) });
-      if (put.status === 404) {
-        throw new Error('The share gateway no longer holds this share — revoke it and share the note again');
-      }
-      if (!put.ok) throw new Error(await gatewayRefusal(put, 'update'));
+      if (put.status === 404) throw refuse(502, 'gateway-lost');
+      if (!put.ok) throw await gatewayRefusal(put);
     }
     let current: ShareRecord | null = null;
     await updateShares((shares) => {
@@ -403,7 +401,7 @@ async function republishHeld(
       stored.publishedHash = bundle!.fingerprint;
       current = stored;
     });
-    if (!current) throw new Error('The share was revoked while it was being published');
+    if (!current) throw refuse(409, 'share-revoked-meanwhile');
     return current;
   } finally {
     discardBundle(bundle);
@@ -415,7 +413,7 @@ async function republishHeld(
 function republish(
   conf: ShareConf,
   id: string,
-  progress: (message: string) => void,
+  progress: (progress: ShareProgress) => void,
   signal: AbortSignal,
   { unlessPinned = false } = {},
 ): Promise<ShareRecord> {
@@ -464,7 +462,7 @@ function changeVisibility(
   conf: ShareConf,
   id: string,
   identity: ShareIdentity,
-  progress: (message: string) => void,
+  progress: (progress: ShareProgress) => void,
   signal: AbortSignal,
 ): Promise<ShareRecord> {
   return withPublishing(id, async () => {
@@ -472,12 +470,10 @@ function changeVisibility(
     const alias = identity.visibility === 'public' ? identity.alias : null;
     const next: ShareRecord = { ...record, visibility: identity.visibility, alias, url: shareUrl(conf, id, alias) };
     const entersPublic = record.visibility !== 'public' && next.visibility === 'public';
-    if (entersPublic && record.pinned) {
-      throw new Error('Unpin the share first — making it public would publish the note as it is now');
-    }
+    if (entersPublic && record.pinned) throw refuse(409, 'share-unpin-first');
     if (entersPublic) await republishHeld(conf, next, progress, signal, true);
     signal.throwIfAborted();
-    progress('Updating the share gateway…');
+    progress({ stage: 'updating' });
     try {
       await patchGateway(conf, id, {
         visibility: next.visibility,
@@ -493,7 +489,7 @@ function changeVisibility(
         stored.url = next.url;
         current = stored;
       });
-      if (!current) throw new Error('The share was revoked while it was being changed');
+      if (!current) throw refuse(409, 'share-revoked-meanwhile');
       return current;
     } catch (err) {
       await reconcile(conf, id).catch(() => undefined);
@@ -540,6 +536,12 @@ export function startShareFollowing(): void {
 
 /* ---------------- routes ---------------- */
 
+/** a share stream's error event for whatever stopped it */
+function errorEvent(err: unknown): ShareStreamEvent {
+  const f = failureOf(err);
+  return { kind: 'error', message: englishOf(f), ...f };
+}
+
 export function registerShareRoutes(on: RouteRegistrar): void {
   on(
     'POST',
@@ -551,34 +553,29 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       const body = await readBody<ShareCreateRequest>(req);
       const note = typeof body.note === 'string' ? body.note.trim() : '';
       const expiresDays = body.expiresDays ?? null;
-      if (!note || !noteMeta(note)) return fail(res, 404, 'Note not found');
+      if (!note || !noteMeta(note)) return fail(res, 404, 'note-not-found');
       const route = noteUrl(note);
       const identity = parseIdentity(body);
-      if (typeof identity === 'string') return fail(res, 400, identity);
+      if ('code' in identity) return json(res, 400, failureBody(identity));
       if (expiresDays !== null && expiresDays !== 7 && expiresDays !== 30) {
-        return fail(res, 400, 'expiresDays must be 7, 30 or null');
+        return fail(res, 400, 'bad-request', { detail: 'expiresDays must be 7, 30 or null' });
       }
       // one active share per note
       const existing = readShares().find((r) => r.note === note && isActive(r));
       if (existing) {
-        return json(res, 409, {
-          error: 'This note already has an active share link — revoke it first',
-          share: shareView(existing, user!.email),
-        });
+        return json(res, 409, { ...failureBody(failure('share-exists')), share: shareView(existing, user!.email) });
       }
       // reserve the note before any building starts; released in finally
-      if (creating.has(note)) {
-        return fail(res, 409, 'A share for this note is already being created — wait for it to finish');
-      }
+      if (creating.has(note)) return fail(res, 409, 'share-creating');
       creating.add(note);
       try {
         // the gateway is checked before the (minutes-long) build
         const unreachable = await gatewayPreflight(conf);
-        if (unreachable) return fail(res, 502, unreachable);
+        if (unreachable) return json(res, 502, failureBody(unreachable));
 
         const stream = ndjsonStream(res);
-        const progress = (message: string): void => {
-          stream.write({ kind: 'progress', message } satisfies ShareStreamEvent);
+        const progress = (p: ShareProgress): void => {
+          stream.write({ kind: 'progress', ...p } satisfies ShareStreamEvent);
         };
         // a creator who disconnects cancels the snapshot work
         const closed = new AbortController();
@@ -591,7 +588,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
 
           const id = mintId();
           const expiresAt = expiresDays ? new Date(Date.now() + expiresDays * 86_400_000).toISOString() : null;
-          progress('Uploading to the share gateway…');
+          progress({ stage: 'uploading' });
           const put = await uploadBundle(conf, id, bundle, {
             'x-share-visibility': identity.visibility,
             ...(identity.visibility === 'password' ? { 'x-share-password': await hashPassword(identity.password) } : {}),
@@ -601,10 +598,8 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           });
           // a gateway from before visibilities reads a PUT without a password
           // header as an update of an unknown id
-          if (put.status === 404 && identity.visibility !== 'password') {
-            throw new Error('The share gateway does not know link or public shares yet — update the gateway, or share with a password');
-          }
-          if (!put.ok) throw new Error(await gatewayRefusal(put, 'upload'));
+          if (put.status === 404 && identity.visibility !== 'password') throw refuse(502, 'gateway-outdated');
+          if (!put.ok) throw await gatewayRefusal(put);
 
           const createdAt = new Date().toISOString();
           const record: ShareRecord = {
@@ -634,7 +629,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
               }
               shares.push(record);
             });
-            if (lostRace) throw new Error('This note already has an active share link — revoke it first');
+            if (lostRace) throw refuse(409, 'share-exists');
           } catch (err) {
             await gatewayFetch(conf, `/admin/s/${id}`, { method: 'DELETE' }, 10_000).catch((cleanupErr: unknown) => {
               console.error(`[wiki share] could not delete orphaned gateway share ${id}:`, cleanupErr);
@@ -644,10 +639,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           // the creator can always revoke what they just created
           stream.write({ kind: 'result', ok: true, share: shareView(record, user!.email) } satisfies ShareStreamEvent);
         } catch (err) {
-          stream.write({
-            kind: 'error',
-            message: err instanceof Error ? err.message : String(err),
-          } satisfies ShareStreamEvent);
+          stream.write(errorEvent(err));
         } finally {
           discardBundle(bundle);
         }
@@ -666,7 +658,7 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       const conf = requireShare(ctx);
       if (!conf) return;
       const note = ctx.query.get('note');
-      if (!note) return fail(ctx.res, 400, 'missing note parameter');
+      if (!note) return fail(ctx.res, 400, 'bad-request', { detail: 'missing note parameter' });
       const shares = readShares()
         .filter((r) => isActive(r) && r.note === note)
         .map((r) => shareView(r, ctx.user!.email));
@@ -682,15 +674,11 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       const conf = requireShare(ctx);
       if (!conf) return;
       const record = readShares().find((r) => r.id === ctx.params['id'] && isActive(r));
-      if (!record) return fail(ctx.res, 404, 'Share not found');
-      if (!canManage(record, ctx.user!.email)) {
-        return fail(ctx.res, 403, 'Only the share creator (or an admin) can publish it');
-      }
-      if (publishing.has(record.id)) {
-        return fail(ctx.res, 409, 'This share is being published right now — wait for it to finish');
-      }
+      if (!record) return fail(ctx.res, 404, 'share-not-found');
+      if (!canManage(record, ctx.user!.email)) return fail(ctx.res, 403, 'share-not-yours', { action: 'publish' });
+      if (publishing.has(record.id)) return fail(ctx.res, 409, 'share-busy');
       const unreachable = await gatewayPreflight(conf);
-      if (unreachable) return fail(ctx.res, 502, unreachable);
+      if (unreachable) return json(ctx.res, 502, failureBody(unreachable));
       const stream = ndjsonStream(ctx.res);
       const closed = new AbortController();
       ctx.res.on('close', () => closed.abort());
@@ -698,12 +686,12 @@ export function registerShareRoutes(on: RouteRegistrar): void {
         const current = await republish(
           conf,
           record.id,
-          (message) => stream.write({ kind: 'progress', message } satisfies ShareStreamEvent),
+          (p) => stream.write({ kind: 'progress', ...p } satisfies ShareStreamEvent),
           closed.signal,
         );
         stream.write({ kind: 'result', ok: true, share: shareView(current, ctx.user!.email) } satisfies ShareStreamEvent);
       } catch (err) {
-        stream.write({ kind: 'error', message: err instanceof Error ? err.message : String(err) } satisfies ShareStreamEvent);
+        stream.write(errorEvent(err));
       }
       stream.close();
     },
@@ -717,19 +705,15 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       const conf = requireShare(ctx);
       if (!conf) return;
       const body = await readBody<ShareVisibilityRequest>(ctx.req);
-      if (typeof body.visibility !== 'string') return fail(ctx.res, 400, 'visibility is required');
+      if (typeof body.visibility !== 'string') return fail(ctx.res, 400, 'bad-request', { detail: 'visibility is required' });
       const identity = parseIdentity(body);
-      if (typeof identity === 'string') return fail(ctx.res, 400, identity);
+      if ('code' in identity) return json(ctx.res, 400, failureBody(identity));
       const record = readShares().find((r) => r.id === ctx.params['id'] && isActive(r));
-      if (!record) return fail(ctx.res, 404, 'Share not found');
-      if (!canManage(record, ctx.user!.email)) {
-        return fail(ctx.res, 403, 'Only the share creator (or an admin) can change it');
-      }
-      if (publishing.has(record.id)) {
-        return fail(ctx.res, 409, 'This share is being published right now — wait for it to finish');
-      }
+      if (!record) return fail(ctx.res, 404, 'share-not-found');
+      if (!canManage(record, ctx.user!.email)) return fail(ctx.res, 403, 'share-not-yours', { action: 'change' });
+      if (publishing.has(record.id)) return fail(ctx.res, 409, 'share-busy');
       const unreachable = await gatewayPreflight(conf);
-      if (unreachable) return fail(ctx.res, 502, unreachable);
+      if (unreachable) return json(ctx.res, 502, failureBody(unreachable));
       const stream = ndjsonStream(ctx.res);
       const closed = new AbortController();
       ctx.res.on('close', () => closed.abort());
@@ -738,12 +722,12 @@ export function registerShareRoutes(on: RouteRegistrar): void {
           conf,
           record.id,
           identity,
-          (message) => stream.write({ kind: 'progress', message } satisfies ShareStreamEvent),
+          (p) => stream.write({ kind: 'progress', ...p } satisfies ShareStreamEvent),
           closed.signal,
         );
         stream.write({ kind: 'result', ok: true, share: shareView(current, ctx.user!.email) } satisfies ShareStreamEvent);
       } catch (err) {
-        stream.write({ kind: 'error', message: err instanceof Error ? err.message : String(err) } satisfies ShareStreamEvent);
+        stream.write(errorEvent(err));
       }
       stream.close();
     },
@@ -756,12 +740,10 @@ export function registerShareRoutes(on: RouteRegistrar): void {
     async (ctx) => {
       if (!requireShare(ctx)) return;
       const body = await readBody<SharePinRequest>(ctx.req);
-      if (typeof body.pinned !== 'boolean') return fail(ctx.res, 400, 'pinned must be a boolean');
+      if (typeof body.pinned !== 'boolean') return fail(ctx.res, 400, 'bad-request', { detail: 'pinned must be a boolean' });
       const record = readShares().find((r) => r.id === ctx.params['id'] && isActive(r));
-      if (!record) return fail(ctx.res, 404, 'Share not found');
-      if (!canManage(record, ctx.user!.email)) {
-        return fail(ctx.res, 403, 'Only the share creator (or an admin) can pin it');
-      }
+      if (!record) return fail(ctx.res, 404, 'share-not-found');
+      if (!canManage(record, ctx.user!.email)) return fail(ctx.res, 403, 'share-not-yours', { action: 'pin' });
       let current: ShareRecord = record;
       await updateShares((shares) => {
         const stored = shares.find((r) => r.id === record.id);
@@ -781,22 +763,14 @@ export function registerShareRoutes(on: RouteRegistrar): void {
       const conf = requireShare(ctx);
       if (!conf) return;
       const record = readShares().find((r) => r.id === ctx.params['id'] && !r.revokedAt);
-      if (!record) return fail(ctx.res, 404, 'Share not found');
-      if (!canManage(record, ctx.user!.email)) {
-        return fail(ctx.res, 403, 'Only the share creator (or an admin) can revoke it');
-      }
+      if (!record) return fail(ctx.res, 404, 'share-not-found');
+      if (!canManage(record, ctx.user!.email)) return fail(ctx.res, 403, 'share-not-yours', { action: 'revoke' });
       try {
         const del = await gatewayFetch(conf, `/admin/s/${record.id}`, { method: 'DELETE' }, 10_000);
         // gateway 404 = already gone (expired/manually removed) — revoke anyway
-        if (!del.ok && del.status !== 404) {
-          return fail(ctx.res, 502, `gateway revoke failed (HTTP ${del.status})`);
-        }
+        if (!del.ok && del.status !== 404) return fail(ctx.res, 502, 'gateway-status', { status: del.status, detail: '' });
       } catch (err) {
-        return fail(
-          ctx.res,
-          502,
-          `Share gateway unreachable (${conf.gatewayUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        );
+        return json(ctx.res, 502, failureBody(gatewayUnreachable(conf, err)));
       }
       await updateShares((shares) => {
         const current = shares.find((r) => r.id === record.id);

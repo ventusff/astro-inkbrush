@@ -24,10 +24,10 @@ import type {
   ShareVisibility,
   ShareVisibilityRequest,
 } from '../shared/types';
-import { api, ApiError, stream } from './api';
+import { api, stream } from './api';
 import { currentUser, onAuthChange, shareAvailability } from './auth';
 import type { PageContext } from './index';
-import { formatDate, S } from './strings';
+import { errorText, eventText, formatDate, S } from './strings';
 import { h, icon, popover, toast, uid } from './ui';
 
 /* ---------------- helpers ---------------- */
@@ -249,18 +249,6 @@ async function reloadActive(ctx: PanelCtx): Promise<void> {
   }
 }
 
-/** a failed stream, as a toast — the gateway being down gets its own line */
-function reportFailure(err: unknown, fallback: string): void {
-  toast(
-    err instanceof ApiError && err.status === 502
-      ? S.share.gatewayUnreachable(err.message)
-      : err instanceof Error
-        ? err.message
-        : fallback,
-    'err',
-  );
-}
-
 interface ChangeForm {
   el: HTMLElement;
   setDisabled: (value: boolean) => void;
@@ -283,9 +271,9 @@ function changeForm(ctx: PanelCtx, record: ShareRecord, setBusy: (value: boolean
     try {
       let result: ShareRecord | null = null;
       for await (const event of stream<ShareStreamEvent>(`/share/${record.id}/visibility`, request)) {
-        if (event.kind === 'progress') status.textContent = event.message;
+        if (event.kind === 'progress') status.textContent = S.share.stage[event.stage](event);
         else if (event.kind === 'result') result = event.share;
-        else if (event.kind === 'error') throw new Error(event.message);
+        else if (event.kind === 'error') throw new Error(eventText(event));
       }
       if (!result) throw new Error(S.share.streamEnded);
       setBusy(false);
@@ -296,7 +284,7 @@ function changeForm(ctx: PanelCtx, record: ShareRecord, setBusy: (value: boolean
     } catch (err) {
       setBusy(false);
       status.textContent = '';
-      reportFailure(err, S.share.visibilityFailed);
+      toast(errorText(err, S.share.visibilityFailed), 'err');
     }
   };
   const el = h(
@@ -351,9 +339,9 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
         try {
           let result: ShareRecord | null = null;
           for await (const event of stream<ShareStreamEvent>(`/share/${record.id}/publish`, {})) {
-            if (event.kind === 'progress') status.textContent = event.message;
+            if (event.kind === 'progress') status.textContent = S.share.stage[event.stage](event);
             else if (event.kind === 'result') result = event.share;
-            else if (event.kind === 'error') throw new Error(event.message);
+            else if (event.kind === 'error') throw new Error(eventText(event));
           }
           if (!result) throw new Error(S.share.streamEnded);
           setBusy(false);
@@ -363,7 +351,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
         } catch (err) {
           setBusy(false);
           status.textContent = '';
-          reportFailure(err, S.share.publishFailed);
+          toast(errorText(err, S.share.publishFailed), 'err');
           // the share may have moved meanwhile (the follower publishing the
           // same note answers 409): show the record as it is now
           void reloadActive(ctx);
@@ -389,7 +377,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
           toast(share.pinned ? S.share.pinned : S.share.unpinned);
         } catch (err) {
           setBusy(false);
-          toast(err instanceof Error ? err.message : S.share.pinFailed, 'err');
+          toast(errorText(err, S.share.pinFailed), 'err');
         }
       },
     },
@@ -412,7 +400,7 @@ function activeView(ctx: PanelCtx, record: ShareRecord, password?: string): HTML
           ctx.render(createForm(ctx));
         } catch (err) {
           setBusy(false);
-          toast(err instanceof Error ? err.message : S.share.revokeFailed, 'err');
+          toast(errorText(err, S.share.revokeFailed), 'err');
         }
       },
     },
@@ -486,9 +474,9 @@ function createForm(ctx: PanelCtx): HTMLElement {
         expiresDays: expiry.value ? (Number(expiry.value) as 7 | 30) : null,
       };
       for await (const event of stream<ShareStreamEvent>('/share', body)) {
-        if (event.kind === 'progress') status.textContent = event.message;
+        if (event.kind === 'progress') status.textContent = S.share.stage[event.stage](event);
         else if (event.kind === 'result') result = event.share;
-        else if (event.kind === 'error') throw new Error(event.message);
+        else if (event.kind === 'error') throw new Error(eventText(event));
       }
       if (!result) throw new Error(S.share.streamEnded);
       ctx.setBusy(false);
@@ -501,7 +489,7 @@ function createForm(ctx: PanelCtx): HTMLElement {
       form.setDisabled(false);
       expiry.disabled = false;
       status.textContent = '';
-      reportFailure(err, S.share.shareFailed);
+      toast(errorText(err, S.share.shareFailed), 'err');
     }
   };
 
@@ -547,7 +535,7 @@ async function openSharePopover(anchor: HTMLElement, noteId: string, reflect: Pa
       h(
         'div',
         { class: 'wiki-share-hint wiki-share-error' },
-        err instanceof Error ? err.message : S.share.loadFailed,
+        errorText(err, S.share.loadFailed),
       ),
     );
   }

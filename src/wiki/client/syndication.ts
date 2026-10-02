@@ -33,7 +33,7 @@ import type {
 import { api } from './api';
 import { currentUser, onAuthChange, syndicationPeers } from './auth';
 import type { PageContext } from './index';
-import { formatDate, S } from './strings';
+import { failureText, formatDate, S } from './strings';
 import { type Attempt, type Failure, failureOf, type Job, PeerSync } from './syndication-state';
 import { firstFocusable, h, icon, noteHref, popover, toast, uid } from './ui';
 
@@ -111,9 +111,10 @@ function hasCopy(copy: CopyState | null): boolean {
 /** a failure in the page's language: a code or an HTTP status says what
  *  happened; the server's own line is added only where it is a tool's
  *  output (git's error, a validator's finding) */
-function failureText(failure: Failure, peer: string): string {
+function syncFailureText(failure: Failure, peer: string): string {
   if (failure.code) return S.sync.error[failure.code](peer, failure.message);
-  return S.sync.http(failure.http, failure.message);
+  if (failure.wiki) return failureText(failure.wiki);
+  return S.common.http(failure.http);
 }
 
 function refusalText(refusal: SyndicationRefusal): string {
@@ -130,7 +131,7 @@ function jobLine(job: Job | null, peer: string): string {
 
 /** the toast of an operation's end */
 function outcomeToast(attempt: Attempt, peer: string): [string, 'ok' | 'err'] {
-  if (attempt.failure && attempt.outcome !== 'unknown') return [failureText(attempt.failure, peer), 'err'];
+  if (attempt.failure && attempt.outcome !== 'unknown') return [syncFailureText(attempt.failure, peer), 'err'];
   return [S.sync.outcome[attempt.action][attempt.outcome](peer), attempt.outcome === 'rejected' ? 'err' : 'ok'];
 }
 
@@ -400,7 +401,7 @@ function attemptBlock(attempt: Attempt | null, status: SyndicationUnitStatus, pe
   // a submission whose answer went missing is still open, not failed
   if (!attempt || !failure || attempt.outcome === 'unknown') return null;
   if (failure.code === 'rejected' && status.submission?.state === 'rejected') return null;
-  const title = S.sync.attemptFailed[attempt.action](formatDate(attempt.at), failureText(failure, peer));
+  const title = S.sync.attemptFailed[attempt.action](formatDate(attempt.at), syncFailureText(failure, peer));
   return failure.problems.length ? problemsBlock(title, failure.problems) : hint(title, 'alert');
 }
 
@@ -669,7 +670,7 @@ function rowContent(sync: PeerSync, row: SyndicationOverviewCopy): HTMLElement[]
         ? h(
             'div',
             { class: 'wiki-sync-row-note' },
-            h('div', { id: findingsId, class: 'wiki-sync-alert' }, failureText(failure, peer)),
+            h('div', { id: findingsId, class: 'wiki-sync-alert' }, syncFailureText(failure, peer)),
             failure.problems.length
               ? h(
                   'ul',
@@ -814,7 +815,7 @@ function openPeerPopover(anchor: HTMLElement, page: NotePage, sync: PeerSync, cl
     render(noteView(sync, page, draft, showOverview), job?.state === 'running');
   };
   const showError = (err: unknown): void => {
-    render(hint(failureText(failureOf(err), peer), 'alert'));
+    render(hint(syncFailureText(failureOf(err), peer), 'alert'));
   };
   /** (re)build the overview when its rows or its error changed */
   const showRows = (): void => {

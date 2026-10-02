@@ -68,7 +68,7 @@ import { hasPathSegment, toPosixPath } from '../../lib/path-segments.ts';
 import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type MaskOptions } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
 import type { RouteRegistrar } from './index.ts';
-import { fail, HttpError, json, readBody } from './index.ts';
+import { fail, json, readBody, refuse } from './index.ts';
 import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from '../../lib/markdown-escape.ts';
 import { assetsBasenameCandidates, containedPath, isWithin, vaultPathCandidates } from './paths.ts';
 import { noteUrl } from './site.ts';
@@ -454,10 +454,9 @@ export async function importNote(sourcePath: string, opts?: { force?: boolean })
             // the note on disk is not what the importer published (a manual
             // edit, or a record predating the baseline): a manual edit
             // always wins — refuse, force included
-            throw new HttpError(
-              409,
-              `refusing to overwrite ${noteRel}: it no longer matches the last import — reconcile or remove the note first`,
-            );
+            throw refuse(409, 'bad-request', {
+              detail: `refusing to overwrite ${noteRel}: it no longer matches the last import — reconcile or remove the note first`,
+            });
           }
           mkdirSync(noteDir, { recursive: true });
           // assets land before the note: a reader never sees a note whose
@@ -583,13 +582,13 @@ export function registerInboxRoutes(on: RouteRegistrar): void {
     '/inbox/import',
     async ({ req, res }) => {
       const dir = inboxDir();
-      if (!dir) return fail(res, 400, 'Inbox is not enabled (inkbrush.config.ts → inbox.dir)');
+      if (!dir) return fail(res, 400, 'inbox-off');
       const { path } = await readBody<{ path?: string }>(req);
-      if (!path) return fail(res, 400, 'missing path');
+      if (!path) return fail(res, 400, 'bad-request', { detail: 'missing path' });
       const abs = containedPath(dir, path);
-      if (!abs) return fail(res, 400, 'path must be inside the inbox directory');
-      if (!existsSync(abs)) return fail(res, 404, `file does not exist: ${path}`);
-      if (!isInboxNote(abs)) return fail(res, 400, 'not an importable note file');
+      if (!abs) return fail(res, 400, 'bad-request', { detail: 'path must be inside the inbox directory' });
+      if (!existsSync(abs)) return fail(res, 404, 'inbox-missing', { path });
+      if (!isInboxNote(abs)) return fail(res, 400, 'bad-request', { detail: 'not an importable note file' });
       const result = await importNote(abs, { force: true });
       json(res, 200, { ok: true, slug: result?.slug, warnings: result?.warnings ?? [] });
     },

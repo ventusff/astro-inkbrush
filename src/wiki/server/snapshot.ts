@@ -39,7 +39,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 
 import { POLLUTION_MARKERS } from '../../lib/pollution-markers.ts';
+import type { ShareProgress } from '../shared/types.ts';
 import { childEnv } from './child-env.ts';
+import { refuse } from './index.ts';
 import { containedPath } from './paths.ts';
 
 export interface Snapshot {
@@ -49,7 +51,7 @@ export interface Snapshot {
   files: string[];
 }
 
-type Progress = (message: string) => void;
+type Progress = (progress: ShareProgress) => void;
 
 /* ---------------- cached WIKI-free build ---------------- */
 
@@ -160,7 +162,7 @@ function runAstroBuild(
     // heartbeat keeps the NDJSON stream alive during a minutes-long cold build
     const started = Date.now();
     const heartbeat = setInterval(() => {
-      onProgress(`astro build running… ${Math.round((Date.now() - started) / 1000)}s`);
+      onProgress({ stage: 'building', seconds: Math.round((Date.now() - started) / 1000) });
     }, 10_000);
     // timeout / cancellation: SIGTERM, then SIGKILL after a grace window
     let killReason: string | null = null;
@@ -225,7 +227,7 @@ async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSig
   const stampFile = join(root, '.wiki', 'share-dist.stamp');
   const run = async (): Promise<void> => {
     if (snapshotCache(root).fresh) {
-      onProgress('Using cached static build');
+      onProgress({ stage: 'build-cached' });
       return;
     }
     // the stamp records the build's start: an input edited while the build
@@ -234,22 +236,18 @@ async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSig
     // build that mixes pre- and post-edit inputs
     for (let attempt = 1; ; attempt++) {
       signal?.throwIfAborted();
-      onProgress(
-        attempt === 1
-          ? 'Building the static site (WIKI-free astro build) — may take a few minutes on first share…'
-          : 'The build inputs changed during the build — rebuilding once…',
-      );
+      onProgress({ stage: attempt === 1 ? 'build' : 'rebuild' });
       const startedAt = Date.now();
       await runAstroBuild(root, '.wiki/share-dist', onProgress, signal);
       // the post-build drift check shares the cache predicate: the build
       // reflects its inputs only when its start is newer than every input
       if (latestInputMtime(root) < startedAt) {
         writeFileSync(stampFile, String(startedAt));
-        onProgress('Static build finished');
+        onProgress({ stage: 'built' });
         return;
       }
       if (attempt >= 2) {
-        throw new Error('the site keeps changing while the snapshot builds — retry when edits pause');
+        throw refuse(409, 'snapshot-unstable');
       }
     }
   };
@@ -1010,7 +1008,7 @@ export async function buildSnapshot(
     throw new Error(`route '${noteRoute}' not found in the static build (.wiki/share-dist)`);
   }
 
-  onProgress('Collecting the page asset closure…');
+  onProgress({ stage: 'collecting' });
   const html = readFileSync(htmlPath, 'utf8');
   const snapDir = await mkdtemp(join(tmpdir(), 'inkbrush-share-'));
   // the temp dir is owned by the caller only once this returns; any failure
@@ -1082,7 +1080,7 @@ export async function buildSnapshot(
     mkdirSync(join(snapDir, dirname(PRELOAD_SHIM)), { recursive: true });
     writeFileSync(join(snapDir, PRELOAD_SHIM), PRELOAD_SHIM_SOURCE);
     files.push(PRELOAD_SHIM);
-    onProgress(`Snapshot ready (${files.length} assets)`);
+    onProgress({ stage: 'snapshot-ready', count: files.length });
     return { dir: snapDir, files };
   } catch (err) {
     rmSync(snapDir, { recursive: true, force: true });

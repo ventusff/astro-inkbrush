@@ -24,11 +24,12 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { failure } from '../shared/errors.ts';
 import type { IdentityUser, IdentityUsersResponse } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
 import { IdentityValidationError, validateUserRecords } from './identity-records.ts';
 import type { RouteRegistrar } from './index.ts';
-import { fail, json, readBody } from './index.ts';
+import { failureBody, json, readBody } from './index.ts';
 import { withLock, writeFileAtomic } from './store.ts';
 
 export { IdentityValidationError };
@@ -115,9 +116,7 @@ export function findUser(email: string): IdentityUser | null {
 function validateUsers(conf: IdentityConf, input: unknown): IdentityUser[] {
   const users = validateUserRecords(input, conf.roles);
   if (!users.some((u) => u.role === conf.adminRole)) {
-    throw new IdentityValidationError(
-      `at least one '${conf.adminRole}' must remain`,
-    );
+    throw new IdentityValidationError(failure('members-admin', { role: conf.adminRole }));
   }
   return users;
 }
@@ -178,7 +177,7 @@ export function registerIdentityRoutes(on: RouteRegistrar): void {
       try {
         json(res, 200, { users: await saveUsers(users) });
       } catch (err) {
-        if (err instanceof IdentityValidationError) return fail(res, 400, err.message);
+        if (err instanceof IdentityValidationError) return json(res, 400, failureBody(err.failure));
         throw err;
       }
     },

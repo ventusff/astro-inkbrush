@@ -6,7 +6,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseIdentity } from '../src/wiki/shared/share-identity.ts';
+import { englishOf } from '../src/wiki/shared/errors.ts';
+import { parseIdentity as parse, type ShareIdentity } from '../src/wiki/shared/share-identity.ts';
+
+/** the identity, or the English line of its failure */
+function parseIdentity(body: Parameters<typeof parse>[0]): ShareIdentity | string {
+  const result = parse(body);
+  return 'code' in result ? englishOf(result) : result;
+}
 
 test('no visibility means a password share, as older clients send it', () => {
   assert.deepEqual(parseIdentity({ password: 'hunter2-secret' }), { visibility: 'password', password: 'hunter2-secret', alias: null });

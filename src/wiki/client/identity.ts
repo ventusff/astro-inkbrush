@@ -9,7 +9,7 @@
  */
 import type { IdentityUser, IdentityUsersResponse } from '../shared/types';
 import { api } from './api';
-import { S } from './strings';
+import { errorText, S } from './strings';
 import { h, popover, toast } from './ui';
 
 export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
@@ -17,7 +17,7 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
   try {
     data = await api.get<IdentityUsersResponse>('/identity/users');
   } catch (err) {
-    toast(err instanceof Error ? err.message : S.identity.loadFailed, 'err');
+    toast(errorText(err, S.identity.loadFailed), 'err');
     return;
   }
 
@@ -45,7 +45,7 @@ export async function openMembersPanel(anchor: HTMLElement): Promise<void> {
       users = res.users;
       toast(S.identity.saved);
     } catch (err) {
-      toast(err instanceof Error ? err.message : S.identity.saveFailed, 'err');
+      toast(errorText(err, S.identity.saveFailed), 'err');
     } finally {
       busy = false;
       render();

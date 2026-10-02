@@ -17,6 +17,7 @@
  */
 import { spawn } from 'node:child_process';
 
+import { failure, type WikiFailure } from '../shared/errors.ts';
 import type { ClaudeStreamEvent } from '../shared/types.ts';
 import { childEnv } from './child-env.ts';
 
@@ -68,7 +69,7 @@ export interface ClaudeJobOptions {
 
 export type ClaudeJobResult =
   | { ok: true; summary: string; sessionId: string | null }
-  | { ok: false; error: string; sessionId: string | null };
+  | { ok: false; failure: WikiFailure; sessionId: string | null };
 
 /** file-tool permission rules, confined to the working directory */
 const READ_RULES = ['Read(./**)'];
@@ -136,7 +137,7 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
     try {
       child = spawn(opts.bin, args, { cwd: opts.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
-      resolvePromise({ ok: false, error: `Could not start the claude CLI: ${(err as Error).message}`, sessionId: null });
+      resolvePromise({ ok: false, failure: failure('claude-unavailable', { detail: (err as Error).message }), sessionId: null });
       return;
     }
 
@@ -156,14 +157,14 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
     const timer = setTimeout(() => {
       terminate({
         ok: false,
-        error: `Job timed out (${Math.round(opts.timeoutMs / 1000)}s) and was terminated`,
+        failure: failure('job-timeout', { seconds: Math.round(opts.timeoutMs / 1000) }),
         sessionId,
       });
     }, opts.timeoutMs);
 
     if (opts.killOnDisconnect) {
       opts.clientClosed.addEventListener('abort', () => {
-        terminate({ ok: false, error: 'Client disconnected', sessionId });
+        terminate({ ok: false, failure: failure('client-disconnected'), sessionId });
       });
     }
 
@@ -191,14 +192,14 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
         // the semantic result; the promise settles at close, when the child
         // can no longer write into the workspace
         const id = line.session_id ?? sessionId;
-        if (line.is_error) record({ ok: false, error: line.result || 'The job reported an error', sessionId: id });
+        if (line.is_error) record({ ok: false, failure: failure('job-error', { detail: line.result || 'the job reported an error' }), sessionId: id });
         else record({ ok: true, summary: line.result ?? '', sessionId: id });
       }
     };
 
     let buffer = '';
-    /** stdout lines that are not JSON — a nonzero count is surfaced on the
-     *  job failure message and in the server log */
+    /** stdout lines that are not JSON — a nonzero count is surfaced in the
+     *  server log and on a job-error failure's detail */
     let malformedLines = 0;
     let overflowed = false;
     child.stdout!.on('data', (chunk: Buffer) => {
@@ -209,7 +210,9 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
         buffer = '';
         terminate({
           ok: false,
-          error: `claude produced an oversized output line (over ${MAX_STDOUT_BUFFER / (1024 * 1024)} MB of unterminated stream-json) — job terminated`,
+          failure: failure('job-error', {
+            detail: `claude produced an oversized output line (over ${MAX_STDOUT_BUFFER / (1024 * 1024)} MB of unterminated stream-json) — job terminated`,
+          }),
           sessionId,
         });
         return;
@@ -233,7 +236,7 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
     child.on('error', (err) => {
       const result: ClaudeJobResult = {
         ok: false,
-        error: `Could not start the claude CLI: ${err.message} (set WIKI_CLAUDE_BIN to point at it)`,
+        failure: failure('claude-unavailable', { detail: err.message }),
         sessionId,
       };
       record(result);
@@ -245,16 +248,19 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       if (malformedLines > 0) {
         console.warn(`[wiki claude] ${malformedLines} non-JSON line(s) on the stream-json stdout were ignored`);
       }
-      let result =
-        outcome ?? {
-          ok: false,
-          error: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
-          sessionId,
-        };
-      if (!result.ok && malformedLines > 0) {
-        result = { ...result, error: `${result.error} (${malformedLines} non-JSON protocol line(s) ignored)` };
-      }
-      finish(result);
+      const result: ClaudeJobResult = outcome ?? {
+        ok: false,
+        failure: failure('job-error', {
+          detail: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
+        }),
+        sessionId,
+      };
+      const ignored = ` (${malformedLines} non-JSON protocol line(s) ignored)`;
+      finish(
+        !result.ok && result.failure.code === 'job-error' && malformedLines > 0
+          ? { ...result, failure: failure('job-error', { detail: result.failure.params.detail + ignored }) }
+          : result,
+      );
     });
   });
 }

@@ -8,7 +8,7 @@ import { stream } from './api';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
 import { rememberScroll } from './scroll';
-import { S } from './strings';
+import { errorText, jobErrorText, S } from './strings';
 import { h, icon, popover, toast } from './ui';
 
 /** `anchor` positions the popover; `trigger` is the button that owns it */
@@ -116,7 +116,7 @@ export function openAiPopover(
         else if (event.kind === 'text') appendText(event.text);
         else if (event.kind === 'error') {
           finish();
-          log.append(h('span', { class: 'err' }, event.message));
+          log.append(h('span', { class: 'err' }, jobErrorText(event)));
           runBtn.remove();
           return;
         } else if (event.kind === 'result') {
@@ -135,7 +135,7 @@ export function openAiPopover(
       // the stream ended (clean EOF) without an error/result event
       fail(S.ai.streamEnded);
     } catch (err) {
-      fail(err instanceof Error ? err.message : S.common.requestFailed);
+      fail(errorText(err));
     }
   };
 

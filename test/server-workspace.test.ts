@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
+import { failureOf } from '../src/wiki/server/index.ts';
 import { setProjectRoot } from '../src/wiki/server/store.ts';
 import { createWorkspace } from '../src/wiki/server/workspace.ts';
 
@@ -74,7 +75,7 @@ test('changes are computed against the creation baseline and a drifted file refu
   writeFileSync(join(root, 'notes', 'a', 'index.md'), 'concurrent edit\n');
   const changes = ws.changes();
   assert.deepEqual(changes, [{ rel: 'notes/a/index.md', content: 'job result\n' }]);
-  await assert.rejects(ws.apply(changes), /Conflict.*nothing was written/);
+  await assert.rejects(ws.apply(changes), (err: unknown) => failureOf(err).code === 'job-conflict');
   assert.equal(readFileSync(join(root, 'notes', 'a', 'index.md'), 'utf8'), 'concurrent edit\n');
   ws.destroy();
   rmSync(base, { recursive: true, force: true });

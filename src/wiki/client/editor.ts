@@ -20,7 +20,7 @@ import { api, ApiError } from './api';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
 import { rememberScroll } from './scroll';
-import { S } from './strings';
+import { errorText, S } from './strings';
 import { h, toast } from './ui';
 
 let activeCleanup: (() => void) | null = null;
@@ -48,7 +48,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
       `/block/${ctx.meta.id}?start=${block.start}&end=${block.end}`,
     );
   } catch (err) {
-    toast(err instanceof Error ? err.message : S.editor.readFailed, 'err');
+    toast(errorText(err, S.editor.readFailed), 'err');
     onClose();
     return;
   }
@@ -126,8 +126,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         // an aborted request carries a bumped generation; anything else is a
         // real failure and replaces the (now stale) preview with the error
         if (generation !== previewGeneration) return;
-        const message =
-          err instanceof ApiError ? `${S.editor.previewFailed} — ${err.message}` : S.editor.previewFailed;
+        const message = err instanceof ApiError ? `${S.editor.previewFailed} — ${errorText(err)}` : S.editor.previewFailed;
         previewBody.replaceChildren(h('div', { class: 'preview-error' }, message));
       } finally {
         if (previewRequest === request) previewRequest = null;
@@ -182,7 +181,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         saveBtn.disabled = false;
         cancelBtn.disabled = false;
         saveBtn.textContent = S.editor.save;
-        const message = err instanceof ApiError ? err.message : S.editor.saveFailed;
+        const message = err instanceof ApiError ? errorText(err) : S.editor.saveFailed;
         errorBox.textContent = message;
         errorBox.hidden = false;
         if (err instanceof ApiError && err.status === 409) toast(message, 'err');
