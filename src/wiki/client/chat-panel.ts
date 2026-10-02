@@ -1,14 +1,16 @@
 /**
  * Page-level Claude panel: a floating action button opens a slide-in glass
  * sidebar for chatting about the current note (claude-cli --resume keeps the
- * conversation), plus a one-click translate action per configured locale
- * whose twin doesn't exist yet — none on a copy synced from another wiki,
- * whose locales are written at its origin.
+ * conversation), plus the note's other languages: on the default locale's
+ * page a jump to each existing twin, on every page a one-click translate
+ * action per configured locale whose twin doesn't exist yet — none on a
+ * copy synced from another wiki, whose locales are written at its origin.
  *
  * Panel state (messages, session id, open/closed) lives in sessionStorage so
  * it survives the HMR reloads that follow saved edits; a stored value that
  * fails shape validation is discarded.
  */
+import { languageActions } from '../shared/locales';
 import { api, stream } from './api';
 import { currentUser } from './auth';
 import type { PageContext } from './index';
@@ -100,31 +102,29 @@ export function mountChatPanel(ctx: PageContext): void {
     icon('close'),
   );
 
-  // one action per other locale: existing → jump there, missing → translate
-  // to it (never for a copy: its locales are written at its origin)
+  // the page's actions for its other languages (shared/locales.ts decides
+  // which): a jump opens the twin, a translate button writes the missing one
   const translateButtons: { btn: HTMLButtonElement; code: string; label: string }[] = [];
-  const langActions = ctx.meta.locales
-    .filter((l) => !l.current && (l.exists || !ctx.meta.origin))
-    .map((l) => {
-      const label = languageName(l.code, l.label);
-      if (l.exists) {
-        return h(
-          'button',
-          {
-            type: 'button',
-            class: 'wiki-btn',
-            onclick: () => {
-              window.location.href = noteHref(l.id);
-            },
+  const langActions = languageActions(ctx.meta).map(({ kind, locale }) => {
+    const label = languageName(locale.code, locale.label);
+    if (kind === 'jump') {
+      return h(
+        'button',
+        {
+          type: 'button',
+          class: 'wiki-btn',
+          onclick: () => {
+            window.location.href = noteHref(locale.id);
           },
-          icon('globe'),
-          ` ${label} →`,
-        );
-      }
-      const btn = h('button', { type: 'button', class: 'wiki-btn' }, icon('globe'), ` ✦ ${label}`);
-      translateButtons.push({ btn, code: l.code, label });
-      return btn;
-    });
+        },
+        icon('globe'),
+        ` ${label} →`,
+      );
+    }
+    const btn = h('button', { type: 'button', class: 'wiki-btn' }, icon('globe'), ` ✦ ${label}`);
+    translateButtons.push({ btn, code: locale.code, label });
+    return btn;
+  });
 
   const panel = h(
     'aside',

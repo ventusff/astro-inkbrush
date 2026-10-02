@@ -310,7 +310,11 @@ the AI translation targets. Note ids carry their locale as a path prefix;
 **exactly one entry must have `prefix: ''`** — that's the default locale,
 whose notes live unprefixed at the content root. Codes and prefixes must
 be unique, and a non-empty prefix is a single path segment (`en/`);
-anything else refuses to start. The default table is:
+anything else refuses to start. The language switcher lives on the default
+locale's pages only: a translation's reader stays in that language, so a
+page in any other locale links to no other language — no switch, and the
+syndication popover's links to the note and its copies, which open the
+default locale's pages, are left out there as well. The default table is:
 
 ```ts
 locales: [

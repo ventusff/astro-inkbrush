@@ -30,6 +30,7 @@ import type {
   SyndicationRefusal,
   SyndicationUnitStatus,
 } from '../shared/types';
+import { onDefaultLocale } from '../shared/locales';
 import { api } from './api';
 import { currentUser, onAuthChange, syndicationPeers } from './auth';
 import type { PageContext } from './index';
@@ -44,6 +45,10 @@ type Part = HTMLElement | null;
 interface NotePage {
   noteId: string;
   unit: string | null;
+  /** the page shows the default locale's note: links to the unit's pages —
+   *  its note here, its copy on a peer — open the default locale's pages,
+   *  so they appear on this page only (shared/locales.ts onDefaultLocale) */
+  linksUnit: boolean;
   /** reads every peer's status of a note */
   read: (note: string) => Promise<void>;
 }
@@ -336,9 +341,9 @@ function withdrawAction(ctx: NoteCtx, copy: CopyState | null): Part {
   });
 }
 
-/** when the copy was received, and a link to it */
-function copyFacts(status: SyndicationUnitStatus): Part {
-  const href = safeUrl(status.copyUrl);
+/** when the copy was received, and a link to it where the page links the unit */
+function copyFacts(page: NotePage, status: SyndicationUnitStatus): Part {
+  const href = page.linksUnit ? safeUrl(status.copyUrl) : null;
   if (!status.synced && !href) return null;
   return h(
     'div',
@@ -419,12 +424,12 @@ function standingBody(ctx: NoteCtx, status: SyndicationUnitStatus, standing: Sta
       return [
         hint(S.sync.unsettledExplain[ctx.sync.attempt(ctx.unit)?.action === 'withdraw' ? 'withdraw' : 'publish'](peer)),
         status.state !== 'ready' && status.error ? h('div', { class: 'wiki-sync-errline wiki-sync-mono' }, status.error) : null,
-        copyFacts(status),
+        copyFacts(ctx.page, status),
       ];
     case 'pending':
       return [
         hint(S.sync.pendingExplain(formatDate(status.submission?.at ?? ctx.sync.job(ctx.unit)?.submitted?.at ?? Date.now()))),
-        copyFacts(status),
+        copyFacts(ctx.page, status),
         hasCopy(status.copy) ? h('button', { type: 'button', class: 'wiki-btn', disabled: true }, S.sync.withdraw) : null,
       ];
     case 'rejected': {
@@ -445,7 +450,7 @@ function standingBody(ctx: NoteCtx, status: SyndicationUnitStatus, standing: Sta
           hint(S.sync.refusedTitle, 'alert'),
           h('ul', { class: 'wiki-sync-list' }, ...(status.refusals ?? []).map((refusal) => h('li', {}, refusalText(refusal)))),
         ),
-        ...(hasCopy(status.copy) ? [copyFacts(status), withdrawAction(ctx, status.copy)] : []),
+        ...(hasCopy(status.copy) ? [copyFacts(ctx.page, status), withdrawAction(ctx, status.copy)] : []),
       ];
     case 'absent':
       return [...planSection(status.plan, peer), publishButton(ctx, S.sync.publish(peer), {})];
@@ -458,7 +463,7 @@ function standingBody(ctx: NoteCtx, status: SyndicationUnitStatus, standing: Sta
     case 'foreign':
       return [hint(S.sync.foreignExplain(peer))];
     case 'current':
-      return [copyFacts(status), withdrawAction(ctx, status.copy)];
+      return [copyFacts(ctx.page, status), withdrawAction(ctx, status.copy)];
     case 'behind':
       return [
         hint(
@@ -467,7 +472,7 @@ function standingBody(ctx: NoteCtx, status: SyndicationUnitStatus, standing: Sta
             status.sourceChangedAt ? formatDate(status.sourceChangedAt) : null,
           ),
         ),
-        copyFacts(status),
+        copyFacts(ctx.page, status),
         ...planSection(status.plan, peer),
         publishButton(ctx, S.sync.publishAgain, {}),
         withdrawAction(ctx, status.copy),
@@ -476,7 +481,7 @@ function standingBody(ctx: NoteCtx, status: SyndicationUnitStatus, standing: Sta
       return [
         hint(S.sync.changedExplain),
         status.behind ? hint(S.sync.changedBehind) : null,
-        copyFacts(status),
+        copyFacts(ctx.page, status),
         ...planSection(status.plan, peer),
         confirmedPublish(ctx, S.sync.overwrite, S.sync.overwriteConfirm(peer), { force: true }),
         withdrawAction(ctx, status.copy),
@@ -639,12 +644,12 @@ function publishable(sync: PeerSync, row: SyndicationOverviewCopy): boolean {
 
 /** one row's content: dot, title, state, and what the unit's own operation
  *  says — its progress, its place in the queue, or its failure's findings */
-function rowContent(sync: PeerSync, row: SyndicationOverviewCopy): HTMLElement[] {
+function rowContent(sync: PeerSync, page: NotePage, row: SyndicationOverviewCopy): HTMLElement[] {
   const peer = sync.peer.title;
   const job = sync.job(row.unit);
   const attempt = sync.attempt(row.unit);
   const standing = rowStandingOf(sync, row);
-  const href = safeUrl(row.copyUrl);
+  const href = page.linksUnit ? safeUrl(row.copyUrl) : null;
   const running = jobLine(job, peer);
   const failure = !job && attempt?.failure && attempt.outcome !== 'unknown' ? attempt.failure : null;
   const verdict = row.submission?.state === 'rejected' ? (row.submission.problems ?? []) : [];
@@ -654,7 +659,7 @@ function rowContent(sync: PeerSync, row: SyndicationOverviewCopy): HTMLElement[]
     h(
       'div',
       { class: 'wiki-sync-row-main' },
-      row.missing
+      row.missing || !page.linksUnit
         ? h('span', { class: 'wiki-sync-row-title' }, row.title)
         : h('a', { class: 'wiki-sync-row-title', href: noteHref(row.unit) }, row.title),
       h(
@@ -728,7 +733,7 @@ function overviewKey(sync: PeerSync): string {
   return `${sync.overview().map((row) => row.unit).join('\n')}\0${sync.overviewError() ?? ''}`;
 }
 
-function overviewView(sync: PeerSync, back: () => void): OverviewView {
+function overviewView(sync: PeerSync, page: NotePage, back: () => void): OverviewView {
   const peer = sync.peer.title;
   const failure = sync.overviewError();
   const error = failure === null ? null : S.sync.error.unreachable(peer, failure);
@@ -751,7 +756,7 @@ function overviewView(sync: PeerSync, back: () => void): OverviewView {
   };
   const list = h('ul', { class: 'wiki-sync-rows' });
   for (const row of sync.overview()) {
-    const li = h('li', { class: 'wiki-sync-row' }, ...rowContent(sync, row));
+    const li = h('li', { class: 'wiki-sync-row' }, ...rowContent(sync, page, row));
     rows.set(row.unit, li);
     list.append(li);
   }
@@ -773,7 +778,7 @@ function overviewView(sync: PeerSync, back: () => void): OverviewView {
       const row = sync.overview().find((candidate) => candidate.unit === unit);
       if (li && row) {
         const parked = parkFocus(li);
-        li.replaceChildren(...rowContent(sync, row));
+        li.replaceChildren(...rowContent(sync, page, row));
         if (parked) preferredFocus(li)?.focus();
       }
       countBehind();
@@ -820,7 +825,7 @@ function openPeerPopover(anchor: HTMLElement, page: NotePage, sync: PeerSync, cl
   /** (re)build the overview when its rows or its error changed */
   const showRows = (): void => {
     if (overview?.key === overviewKey(sync)) return;
-    overview = overviewView(sync, backToNote);
+    overview = overviewView(sync, page, backToNote);
     render(overview.el);
   };
   /** the overview's live line: the unit running and its stage, said once each */
@@ -993,6 +998,7 @@ export function mountSyndication(pageCtx: PageContext): void {
   const page: NotePage = {
     noteId: meta.id,
     unit: null,
+    linksUnit: onDefaultLocale(meta.locales),
     read: async (note) => {
       const tickets = syncs.map((sync) => sync.beginRead());
       const { unit, peers: statuses } = await api.get<SyndicationNoteResponse>(`/syndication?note=${encodeURIComponent(note)}`);
