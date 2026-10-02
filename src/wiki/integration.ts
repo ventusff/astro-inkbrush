@@ -55,6 +55,26 @@ function viteId(abs: string): string {
   return `/@fs${abs}`;
 }
 
+/**
+ * The packages the browser client imports, statically or through its lazy
+ * chunks (the editor, the syndication panel). The client entry is injected
+ * into every page from outside the site's source tree, so Vite's startup
+ * dependency scan never reaches it: a package missing here is discovered by
+ * the first page that loads it, and Vite then re-optimizes in the middle of
+ * that visit — the modules the page already requested answer 504 and every
+ * open page reloads. test/integration-config.test.ts holds this list equal to
+ * the client's actual imports.
+ */
+export const CLIENT_DEPENDENCIES = [
+  '@codemirror/autocomplete',
+  '@codemirror/commands',
+  '@codemirror/lang-markdown',
+  '@codemirror/lang-yaml',
+  '@codemirror/view',
+  'decode-named-character-reference',
+  'yaml',
+];
+
 export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
   let root = process.cwd();
   let srcDir = '';
@@ -82,26 +102,14 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
             // Left watched, every file a snapshot build writes there is a
             // page-reload broadcast to every connected browser.
             server: { watch: { ignored: ['**/.wiki/**'] } },
-            // CodeMirror is reached through a lazy import (editor.ts), which
-            // Vite's startup dependency scan does not see, so it is
-            // pre-bundled explicitly. Each entry is resolved from this
-            // package's own directory (`astro-inkbrush > dep`): under pnpm's
-            // strict layout the dependency exists only in this package's
-            // node_modules, and where the site root cannot resolve the
-            // package itself (in-repo layouts) Vite falls back to the root.
-            // Node's own resolver is no stand-in for Vite's here — it walks
-            // pnpm's flat store and finds what Vite refuses.
-            optimizeDeps: {
-              include: [
-                '@codemirror/autocomplete',
-                '@codemirror/commands',
-                '@codemirror/lang-markdown',
-                '@codemirror/lang-yaml',
-                '@codemirror/language',
-                '@codemirror/state',
-                '@codemirror/view',
-              ].map((dep) => `astro-inkbrush > ${dep}`),
-            },
+            // Each client dependency is resolved from this package's own
+            // directory (`astro-inkbrush > dep`): under pnpm's strict layout
+            // the dependency exists only in this package's node_modules, and
+            // where the site root cannot resolve the package itself (in-repo
+            // layouts) Vite falls back to the root. Node's own resolver is no
+            // stand-in for Vite's here — it walks pnpm's flat store and finds
+            // what Vite refuses.
+            optimizeDeps: { include: CLIENT_DEPENDENCIES.map((dep) => `astro-inkbrush > ${dep}`) },
           },
         });
       },
