@@ -503,8 +503,9 @@ const FOLLOWER_KEY = '__wikiShareFollower';
 /**
  * The follower: every minute, active unpinned shares whose note changed
  * after the published version and has been quiet for
- * `share.followIdleMinutes` are republished, one at a time. Starting it
- * again replaces the running one (server module reloads).
+ * `share.followIdleMinutes` are republished, one at a time, by the process
+ * on duty (./duty.ts). Starting it again replaces the running one (server
+ * module reloads).
  */
 export function startShareFollowing(): void {
   const globals = globalThis as Record<string, unknown>;

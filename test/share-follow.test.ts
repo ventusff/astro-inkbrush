@@ -96,3 +96,30 @@ test('a probe never overlaps with a running one', async () => {
   stop();
   assert.equal(maxActive, 1);
 });
+
+test('off duty the follower publishes nothing; losing duty midway stops before the next share', async () => {
+  const published: string[] = [];
+  let duty = false;
+  const stop = startShareFollower<string>({
+    intervalMs: 5,
+    due: () => ['a', 'b', 'c'].filter((id) => !published.includes(id)),
+    publish: async (id) => {
+      published.push(id);
+      await sleep(10);
+      if (id === 'a') duty = false;
+    },
+    describe: (id) => id,
+    log: () => undefined,
+    onDuty: () => duty,
+  });
+  await sleep(40);
+  assert.deepEqual(published, []);
+  duty = true;
+  await sleep(60);
+  // publishing 'a' cost the duty: 'b' waits
+  assert.deepEqual(published, ['a']);
+  duty = true;
+  await sleep(80);
+  stop();
+  assert.deepEqual(published, ['a', 'b', 'c']);
+});

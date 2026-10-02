@@ -42,6 +42,8 @@
  *
  * Files that exist when the watcher starts are marked as seen and not
  * imported; POST /api/wiki/inbox/import {path} imports a specific file.
+ * Every watcher event acts only while this process is on duty (./duty.ts):
+ * of several processes watching one vault, one imports.
  * State lives in .wiki/data/inbox-sync.json (content hash → re-import on
  * change, same slug); every read-modify-write of it holds its lock. Paths
  * are compared segment-wise (src/lib/path-segments.ts), so the filters and
@@ -67,6 +69,7 @@ import { splitFrontmatter } from '../../lib/frontmatter.ts';
 import { hasPathSegment, toPosixPath } from '../../lib/path-segments.ts';
 import { buildWikilinkResolver, cachedScan, extractWikilinks, maskNonProse, type MaskOptions } from '../../lib/wikilinks.ts';
 import { wikiConfig } from './config.ts';
+import { onDuty } from './duty.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, json, readBody, refuse } from './index.ts';
 import { escapeLinkUrl, escapeMarkdownText, yamlFrontmatter } from '../../lib/markdown-escape.ts';
@@ -512,7 +515,9 @@ function markSeen(dir: string, sourcePath: string): Promise<void> {
 
 const WATCHER_KEY = '__wikiInboxWatcher';
 
-export function startInboxWatcher(): void {
+/** watch the configured inbox, replacing a running watcher (server module
+ *  reloads); the returned function stops it */
+export function startInboxWatcher(): () => Promise<void> {
   const globals = globalThis as Record<string, unknown>;
   const previous = globals[WATCHER_KEY] as FSWatcher | undefined;
   if (previous) void previous.close();
@@ -521,11 +526,11 @@ export function startInboxWatcher(): void {
   const dir = inboxDir();
   if (!dir) {
     console.log('[wiki inbox] no watch dir configured (inkbrush.config.ts → inbox.dir) — inbox sync off');
-    return;
+    return async () => undefined;
   }
   if (!existsSync(dir)) {
     console.warn(`[wiki inbox] watch dir does not exist, skipping: ${dir}`);
-    return;
+    return async () => undefined;
   }
   let ready = false;
   const watcher = watch(dir, {
@@ -540,12 +545,12 @@ export function startInboxWatcher(): void {
     console.error(`[wiki inbox] ${what} failed for ${path}:`, err);
   };
   watcher.on('add', (path) => {
-    if (!isInboxNote(path)) return;
+    if (!isInboxNote(path) || !onDuty()) return;
     if (!ready) markSeen(dir, path).catch(report('marking', path));
     else importNote(path).catch(report('import', path));
   });
   watcher.on('change', (path) => {
-    if (!ready || !isInboxNote(path)) return;
+    if (!ready || !isInboxNote(path) || !onDuty()) return;
     // only a note imported before is re-imported on change
     const state = readJson<SyncState>(stateFile(), {});
     if (state[stateKey(dir, path)]?.importedAt === null) return;
@@ -556,6 +561,10 @@ export function startInboxWatcher(): void {
     console.log(`[wiki inbox] watching ${dir}`);
   });
   globals[WATCHER_KEY] = watcher;
+  return async () => {
+    if (globals[WATCHER_KEY] === watcher) delete globals[WATCHER_KEY];
+    await watcher.close();
+  };
 }
 
 /* ---------------- routes ---------------- */

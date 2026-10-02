@@ -11,7 +11,8 @@
  *  - hands the site's Markdown pipeline (`markdown` option) to the server,
  *    so preview and save-time validation use the page's own plugins
  *  - calls the server-side init (project root + whatever the deployment's
- *    inkbrush.config.ts enables, e.g. the optional Obsidian inbox watcher)
+ *    inkbrush.config.ts enables, e.g. the optional Obsidian inbox watcher),
+ *    handing it the site's `onDuty` verdict for the background tasks
  */
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -29,6 +30,12 @@ export interface InkbrushOptions {
    *  the AI gate run them too; `page` names the full page pipeline for the
    *  whole-note gates when the preview lists leave whole-note plugins out. */
   markdown?: SiteMarkdownHooks;
+  /** whether this process runs the CMS's background tasks right now (the
+   *  inbox importer, the share follower, the snapshot warmer), asked before
+   *  every run. A site serving one state directory from several processes
+   *  at once — a rolling deploy — answers true in exactly one of them.
+   *  Omitted = always. */
+  onDuty?: () => boolean;
 }
 
 /**
@@ -78,7 +85,7 @@ export const CLIENT_DEPENDENCIES = [
 export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
   let root = process.cwd();
   let srcDir = '';
-  const serverOptions = { markdown: options.markdown };
+  const serverOptions = { markdown: options.markdown, onDuty: options.onDuty };
   return {
     name: 'inkbrush',
     hooks: {
@@ -142,7 +149,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
         // double-start across HMR reloads.
         try {
           const mod = (await server.ssrLoadModule(serverEntry)) as {
-            initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined }) => void;
+            initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined; onDuty?: (() => boolean) | undefined }) => void;
           };
           mod.initWiki(root, serverOptions);
         } catch (err) {

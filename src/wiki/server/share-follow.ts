@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { onDuty } from './duty.ts';
 import type { Snapshot } from './snapshot.ts';
 
 /** sha256 over the snapshot's files (index.html and the asset closure), by
@@ -52,21 +53,27 @@ export interface FollowerOptions<T> {
   publish: (share: T) => Promise<void>;
   describe: (share: T) => string;
   log: (message: string) => void;
+  /** this process publishes right now; asked before every publish
+   *  (default: the site's duty verdict, ./duty.ts) */
+  onDuty?: () => boolean;
 }
 
 /**
  * Runs due publishes one at a time: a probe that finds work publishes each
- * due share in turn and never overlaps with itself. The returned function
- * stops the loop.
+ * due share in turn and never overlaps with itself; off duty it publishes
+ * nothing, and a probe that loses duty midway stops before the next share.
+ * The returned function stops the loop.
  */
 export function startShareFollower<T>(opts: FollowerOptions<T>): () => void {
   const intervalMs = opts.intervalMs ?? 60_000;
+  const duty = opts.onDuty ?? onDuty;
   let running = false;
   const tick = async (): Promise<void> => {
-    if (running) return;
+    if (running || !duty()) return;
     running = true;
     try {
       for (const share of opts.due()) {
+        if (!duty()) break;
         const label = opts.describe(share);
         try {
           await opts.publish(share);

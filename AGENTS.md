@@ -34,14 +34,18 @@ npm test
 
 ## The site-integration contract (changes here affect every consumer)
 
-- `inkbrush({ markdown })` integration: injects the client, mounts the
+- `inkbrush({ markdown, onDuty })` integration: injects the client, mounts the
   `/api/wiki/*` middleware, runs server init. `markdown` carries the site's
   own remark/rehype plugins, its note-id → URL rule and its frontmatter
   schema (`frontmatter`: any Standard Schema — an `astro/zod` schema as it
   is), so the editor preview, the save-time validation and the AI gate
   render and refuse a note the way the page build does; `markdown.page`
   names the full page pipeline for the whole-note gates when the preview
-  lists leave whole-note plugins (heading numbering) out. Dev-mode only; it must inject **nothing** outside WIKI
+  lists leave whole-note plugins (heading numbering) out. `onDuty`
+  (`() => boolean`, omitted = always true) names the process that runs the
+  background tasks — inbox importer, share follower, snapshot warmer — when
+  several serve one `.wiki/` at once; each task asks it before every run.
+  Dev-mode only; it must inject **nothing** outside WIKI
   mode — byte-identical builds are the hard line.
 - `rehypeWikiBlocks`: sites add it (WIKI mode only) to their pipeline for
   block ↔ source-line mapping.

@@ -49,6 +49,7 @@ import {
 } from './auth.ts';
 import { wikiConfig } from './config.ts';
 import { crossSiteBlocked } from './csrf.ts';
+import { setDutyCheck } from './duty.ts';
 import {
   addUserIfAbsent as addIdentityUserIfAbsent,
   ensureRegistry,
@@ -65,6 +66,8 @@ export interface ApiOptions {
   root: string;
   /** the site's Markdown pipeline, from `inkbrush({ markdown })` */
   markdown?: SiteMarkdownHooks | undefined;
+  /** whether this process runs the background tasks, from `inkbrush({ onDuty })` */
+  onDuty?: (() => boolean) | undefined;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -472,11 +475,13 @@ export type RouteRegistrar = typeof on;
  * the config and verifies the identity registry — a failure there throws,
  * so a misconfigured deployment fails dev startup loudly instead of serving
  * with broken auth. The inbox watcher is genuinely optional: its failure is
- * logged explicitly and does not stop the server.
+ * logged explicitly and does not stop the server. The background tasks
+ * started here run only while the site's `onDuty` verdict says so (./duty.ts).
  */
 export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): void {
   setProjectRoot(root);
   setSiteHooks(opts.markdown);
+  setDutyCheck(opts.onDuty);
   wikiConfig();
   ensureRegistry();
   try {

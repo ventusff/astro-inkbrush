@@ -68,6 +68,20 @@ the editor. The same schema runs ahead of the build in a content repo's CI:
 the schema or a factory `({ z }) => schema` called with Astro's zod, so the
 module a content repo keeps beside its notes needs no dependencies.
 
+The CMS runs three background tasks: the inbox importer, the share
+follower and the snapshot warmer. A site that serves one `.wiki/` from more
+than one process at a time — a rolling deploy keeps the outgoing and the
+incoming instance up together for a while — names the one that runs them:
+
+```ts
+inkbrush({ markdown, onDuty: () => isOnDuty() })
+```
+
+Each task asks `onDuty()` before every run and skips that run when it
+answers false; a check that throws counts as false. Request-triggered work
+(a manual import, a share, a publish) runs wherever the request lands.
+Without the option every process is on duty — the single-instance case.
+
 The integration only runs under `astro dev`; in any other command it logs a
 warning and does nothing. In WIKI mode it also turns off Astro's dev toolbar
 (editors don't need island-audit instrumentation) while keeping the error
@@ -494,10 +508,13 @@ static snapshot. First, **who can read**:
    runs a **WIKI-free, production-mode `astro build`** (`NODE_ENV=production`
    whatever the dev server's own environment says) with the site's own
    installed astro binary, an allowlisted environment and a 10-minute cap.
-   The build is cached in `.wiki/share-dist` and reused while no build input
+   The build is cached under `.wiki/share-dist` and reused while no build input
    (`src/`, `public/`, `packages/`, `vendor/`, the astro config, the package
    manifest and lockfiles) has changed; a cold build takes as long as the
-   site's own build, so progress streams live. With `share.prewarm: true`
+   site's own build, so progress streams live. Every build runs into a
+   directory of its own and replaces the cached one only once complete, so
+   a share copies from a whole build even while another one runs — in this
+   process or in another serving the same `.wiki/`. With `share.prewarm: true`
    the cached build is kept fresh in the background — the inputs are probed
    every 15 s and the site rebuilt once it has been quiet for 30 s after a
    change — so a share request finds it ready and spends only the seconds
@@ -1064,7 +1081,8 @@ and identity records carry emails and roles.
   data/inbox-sync.json      inbox watcher state (content hashes)
   data/shares.json          share records (incl. revoked, for audit)
   data/syndication/<peer>.git  bare partial mirror of a peer's content repository
-  share-dist/               cached WIKI-free build for snapshots
+  share-dist/<build>/       cached WIKI-free builds for snapshots, one directory each
+  share-dist.stamp          names the current build; a build becomes current only once complete
   tmp/                      scratch directories (a copy being packed), removed when done
 ```
 

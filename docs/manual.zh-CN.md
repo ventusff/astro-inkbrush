@@ -58,6 +58,18 @@ integrations: [inkbrush({
 `({ z }) => schema`(以 Astro 自带的 zod 调用)的模块加载它,所以放在内容仓
 笔记旁边的 schema 模块不需要任何依赖。
 
+CMS 有三项后台任务:收件箱导入、分享跟随重发、分享快照的后台构建。站点若有
+多个进程同时用同一个 `.wiki/` 提供服务——滚动发布时新旧两个实例会同时在线
+一阵——就指定由哪一个来跑:
+
+```ts
+inkbrush({ markdown, onDuty: () => isOnDuty() })
+```
+
+每项任务每次执行前问一次 `onDuty()`,答 false 就跳过这一次;判定函数抛错按
+false 算。请求触发的事(手动导入、建分享、手动重发)落在哪个进程就在哪个进程
+做。不传这个选项时每个进程都当班——也就是单实例的情形。
+
 集成只在 `astro dev` 下运行;其他命令下只打一行警告、什么都不做。WIKI 模式
 还会关掉 Astro 的 dev 工具条(编辑者不需要开发仪表),但保留错误浮层——
 内容写坏时,它就是编辑者的报错界面。
@@ -412,7 +424,9 @@ ACS(验签、邮箱域过白名单、身份注册表开启时自动登记新用�
    **WIKI-free 的生产模式 `astro build`**(`NODE_ENV=production`,与 dev
    进程自己的环境无关)。构建缓存在 `.wiki/share-dist`,只要任一构建输入
    (`src/`、`public/`、`packages/`、`vendor/`、astro 配置、包清单与锁文件)
-   都没变就直接复用;冷构建耗时等于整站构建,所以进度实时流式回传。开
+   都没变就直接复用;冷构建耗时等于整站构建,所以进度实时流式回传。每次构建
+   写进自己的目录,完整写完才替换缓存里的那一份,所以别处正在构建时(本进程或
+   共用同一个 `.wiki/` 的另一个进程),分享拿到的也总是一份完整的构建。开
    `share.prewarm: true` 则后台保温:每 15 秒探测一次输入,站点改动后安静
    30 秒即重建,点分享时构建已就绪,只剩打包上传的几秒。随后抽出该路由的
    `index.html` 与完整资源闭包(HTML 属性 → CSS `url()`/`@import` → JS
@@ -880,7 +894,8 @@ scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——�
   data/inbox-sync.json      收件箱监听状态(内容哈希)
   data/shares.json          分享记录(含已撤销的,作审计)
   data/syndication/<peer>.git  对方内容仓库的 bare 部分克隆镜像
-  share-dist/               快照用的 WIKI-free 构建缓存
+  share-dist/<build>/       快照用的 WIKI-free 构建缓存,每次构建一个目录
+  share-dist.stamp          指明当前用哪一次构建;构建完整写完才成为当前
   tmp/                      临时目录(打包中的副本),用完即删
 ```
 

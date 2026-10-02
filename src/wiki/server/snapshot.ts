@@ -2,8 +2,8 @@
  * Static snapshot builder for the share module.
  *
  * A share is a self-contained copy of one built page: a WIKI-free
- * `astro build` into `.wiki/share-dist` (cached across shares while every
- * build input's mtime is older than the cached build's start stamp), then
+ * `astro build` under `.wiki/share-dist` (cached across shares while every
+ * build input's mtime is older than the cached build's start), then
  * the route's index.html plus its complete asset closure (CSS → url() refs,
  * JS → import graph + emitted `/_astro/…` asset strings) copied into a temp
  * dir. A required asset reference (script src, stylesheet link, image
@@ -18,11 +18,18 @@
  * Build inputs tracked by the cache: src/, public/, packages/, vendor/, the
  * astro config, package.json and the lockfiles. Environment variables that
  * change a build are not tracked — a deployment that builds differently by
- * env removes `.wiki/share-dist` when the env changes. With `share.prewarm`
- * a background warmer (startSnapshotWarmer) rebuilds after the inputs
- * change and go quiet, so a share request finds the cache fresh.
+ * env removes `.wiki/share-dist.stamp` when the env changes. With
+ * `share.prewarm` a background warmer (startSnapshotWarmer) rebuilds after
+ * the inputs change and go quiet, so a share request finds the cache fresh.
+ *
+ * Every build runs into a directory of its own and becomes current in one
+ * atomic step (see "cached builds" below): processes that serve the same
+ * `.wiki/` — the two instances of a rolling deploy — may build at the same
+ * time and read while the other builds, and none of them sees a half-written
+ * or mixed build.
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -31,6 +38,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -41,8 +49,10 @@ import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { POLLUTION_MARKERS } from '../../lib/pollution-markers.ts';
 import type { ShareProgress } from '../shared/types.ts';
 import { childEnv } from './child-env.ts';
+import { onDuty } from './duty.ts';
 import { refuse } from './index.ts';
 import { containedPath } from './paths.ts';
+import { writeFileAtomic } from './store.ts';
 
 export interface Snapshot {
   /** temp dir with index.html at its root — caller tars + removes it */
@@ -199,8 +209,70 @@ function runAstroBuild(
   });
 }
 
-// serialize builds — two concurrent share creations must not race one outDir
-let buildChain: Promise<void> = Promise.resolve();
+/* ---------------- cached builds ---------------- */
+
+/*
+ * `.wiki/share-dist/` holds the builds. A build runs into `<name>.partial/`
+ * (`<name>` = its start time in ms and a random suffix), is renamed to
+ * `<name>/` once complete, and becomes current when `.wiki/share-dist.stamp`
+ * — written atomically — names it with its start time. A reader resolves the
+ * stamp once and reads that one directory, which nothing writes again.
+ *
+ * Publishing prunes the directory. Kept: the current build, the one it
+ * replaced (a share may still be copying from it), and every build started
+ * within BUILD_LIFETIME_MS — partial or complete, it may belong to a build
+ * still running in another process, about to be published. Everything else
+ * goes, a superseded build included once it is that old.
+ */
+
+/** the longest a build can run before it is killed, with a margin */
+const BUILD_LIFETIME_MS = BUILD_TIMEOUT_MS + BUILD_KILL_GRACE_MS + 60_000;
+const BUILD_NAME = /^(\d+)-[0-9a-f]{8}(\.partial)?$/;
+
+interface CurrentBuild {
+  name: string;
+  startedAt: number;
+}
+
+const buildsDir = (root: string): string => join(root, '.wiki', 'share-dist');
+const stampFile = (root: string): string => join(root, '.wiki', 'share-dist.stamp');
+
+/** the build the stamp names; null when there is no stamp or it names no
+ *  complete build (the cache holds nothing to recover: it rebuilds) */
+function currentBuild(root: string): CurrentBuild | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(stampFile(root), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (typeof value !== 'object' || value === null) return null;
+  const { name, startedAt } = value as Record<string, unknown>;
+  const match = typeof name === 'string' ? BUILD_NAME.exec(name) : null;
+  if (!match || match[2] || typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return null;
+  return { name: name as string, startedAt };
+}
+
+/** make a complete build current and prune what the current one no longer needs */
+function publishBuild(root: string, partial: string, name: string, startedAt: number): string {
+  const dir = join(buildsDir(root), name);
+  renameSync(partial, dir);
+  const replaced = currentBuild(root)?.name;
+  writeFileAtomic(stampFile(root), JSON.stringify({ name, startedAt }));
+  const keep = new Set([name, replaced, currentBuild(root)?.name]);
+  const now = Date.now();
+  for (const entry of readdirSync(buildsDir(root))) {
+    if (keep.has(entry)) continue;
+    const match = BUILD_NAME.exec(entry);
+    if (match && now - Number(match[1]) < BUILD_LIFETIME_MS) continue;
+    rmSync(join(buildsDir(root), entry), { recursive: true, force: true });
+  }
+  return dir;
+}
+
+// serialize this process's builds — a share request arriving mid-build
+// waits for that build and then finds it cached
+let buildChain: Promise<unknown> = Promise.resolve();
 
 /** newest mtime (ms) across every build input */
 function latestInputMtime(root: string): number {
@@ -208,44 +280,53 @@ function latestInputMtime(root: string): number {
 }
 
 /**
- * The cached build against its inputs: `fresh` says the cached build
- * reflects them — a build whose start stamp is newer than every input's
- * mtime; `latestInput` is that newest mtime, which also dates the site's
- * last change.
+ * The cached build against its inputs: `fresh` says the current build
+ * reflects them — it started after every input's last change — and `dir`
+ * is that build's directory (null when not fresh); `latestInput` is the
+ * newest input mtime, which also dates the site's last change.
  */
-export function snapshotCache(root: string): { fresh: boolean; latestInput: number } {
-  const outDir = join(root, '.wiki', 'share-dist');
-  const stampFile = join(root, '.wiki', 'share-dist.stamp');
-  const stamp = existsSync(stampFile) ? Number(readFileSync(stampFile, 'utf8').trim()) : 0;
+export function snapshotCache(root: string): { fresh: boolean; dir: string | null; latestInput: number } {
+  const current = currentBuild(root);
   const latestInput = latestInputMtime(root);
-  const fresh = existsSync(join(outDir, 'index.html')) && Number.isFinite(stamp) && stamp > latestInput;
-  return { fresh, latestInput };
+  const dir =
+    current && current.startedAt > latestInput && existsSync(join(buildsDir(root), current.name, 'index.html'))
+      ? join(buildsDir(root), current.name)
+      : null;
+  return { fresh: dir !== null, dir, latestInput };
 }
 
+/** the directory of a build that reflects the current inputs — the cached
+ *  one, or a new one */
 async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSignal): Promise<string> {
-  const outDir = join(root, '.wiki', 'share-dist');
-  const stampFile = join(root, '.wiki', 'share-dist.stamp');
-  const run = async (): Promise<void> => {
-    if (snapshotCache(root).fresh) {
+  const run = async (): Promise<string> => {
+    const cached = snapshotCache(root).dir;
+    if (cached) {
       onProgress({ stage: 'build-cached' });
-      return;
+      return cached;
     }
-    // the stamp records the build's start: an input edited while the build
-    // runs is newer than the stamp, so the drift check below catches it and
-    // rebuilds once; a second drift fails the share rather than serving a
-    // build that mixes pre- and post-edit inputs
+    mkdirSync(buildsDir(root), { recursive: true, mode: 0o700 });
+    // a build reflects its inputs only when it started after their last
+    // change: an input edited while the build runs makes it drift, and it
+    // is rebuilt once; a second drift fails the share rather than serving
+    // a build that mixes pre- and post-edit inputs
     for (let attempt = 1; ; attempt++) {
       signal?.throwIfAborted();
       onProgress({ stage: attempt === 1 ? 'build' : 'rebuild' });
       const startedAt = Date.now();
-      await runAstroBuild(root, '.wiki/share-dist', onProgress, signal);
-      // the post-build drift check shares the cache predicate: the build
-      // reflects its inputs only when its start is newer than every input
-      if (latestInputMtime(root) < startedAt) {
-        writeFileSync(stampFile, String(startedAt));
-        onProgress({ stage: 'built' });
-        return;
+      const name = `${startedAt}-${randomBytes(4).toString('hex')}`;
+      const partial = join(buildsDir(root), `${name}.partial`);
+      try {
+        await runAstroBuild(root, relative(root, partial), onProgress, signal);
+      } catch (err) {
+        rmSync(partial, { recursive: true, force: true });
+        throw err;
       }
+      if (latestInputMtime(root) < startedAt) {
+        const dir = publishBuild(root, partial, name, startedAt);
+        onProgress({ stage: 'built' });
+        return dir;
+      }
+      rmSync(partial, { recursive: true, force: true });
       if (attempt >= 2) {
         throw refuse(409, 'snapshot-unstable');
       }
@@ -253,8 +334,7 @@ async function ensureBuild(root: string, onProgress: Progress, signal?: AbortSig
   };
   const chained = buildChain.then(run, run);
   buildChain = chained.catch(() => undefined);
-  await chained;
-  return outDir;
+  return await chained;
 }
 
 /* ---------------- prewarm ---------------- */
@@ -269,6 +349,9 @@ export interface WarmerOptions {
    *  own drift check */
   idleMs?: number;
   log?: (message: string) => void;
+  /** this process builds right now; asked before every probe (default:
+   *  the site's duty verdict, ./duty.ts) */
+  onDuty?: () => boolean;
 }
 
 /**
@@ -279,20 +362,21 @@ export interface WarmerOptions {
  * mid-build waits for that build, then hits the cache). A failed build is
  * logged and retried once the inputs change again — the same inputs would
  * fail the same way, and a share request still triggers its own build.
- * Starting a warmer replaces a running one (server module reloads); the
- * returned function stops it.
+ * Off duty a probe does nothing. Starting a warmer replaces a running one
+ * (server module reloads); the returned function stops it.
  */
 export function startSnapshotWarmer(root: string, opts: WarmerOptions = {}): () => void {
   const intervalMs = opts.intervalMs ?? 15_000;
   const idleMs = opts.idleMs ?? 30_000;
   const log = opts.log ?? ((message: string): void => console.log(`[wiki share] ${message}`));
+  const duty = opts.onDuty ?? onDuty;
   const globals = globalThis as Record<string, unknown>;
   (globals[WARMER_KEY] as (() => void) | undefined)?.();
   let building = false;
   /** start of the last failed attempt; the inputs must change past it */
   let failedAt: number | null = null;
   const tick = (): void => {
-    if (building) return;
+    if (building || !duty()) return;
     const { fresh, latestInput } = snapshotCache(root);
     if (fresh || Date.now() - latestInput < idleMs) return;
     if (failedAt !== null && latestInput < failedAt) return;
