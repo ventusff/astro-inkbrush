@@ -533,7 +533,6 @@ export type SyndicationStreamEvent =
       stage: SyndicationStage;
       /** seconds waited so far (stage 'waiting') */
       seconds?: number | undefined;
-      message: string;
     }
   /** the submission reached the peer's repository: from here on its outcome
    *  is the peer's to decide, whatever happens to this stream */

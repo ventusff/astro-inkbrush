@@ -341,7 +341,8 @@ async function exclusively<T>(peer: SyndicationPeer, unit: string, work: () => P
   }
 }
 
-export type Progress = (stage: SyndicationStage, message: string, seconds?: number) => void;
+/** a publish's progress: the stage it reached and, while waiting, the seconds waited; the page words it */
+export type Progress = (stage: SyndicationStage, seconds?: number) => void;
 
 interface Submitter {
   name: string;
@@ -427,10 +428,10 @@ export function submitPublish(
   progress: Progress = () => undefined,
 ): Promise<{ commit: string; revision: string; synced: string } | null> {
   return exclusively(peer, unit, async () => {
-    progress('fetching', `Fetching ${peer.title}'s repository…`);
+    progress('fetching');
     const { dir, view, expect } = await preflight(peer, unit, 'publish', { adopt: opts.adopt === true, force: opts.force === true });
 
-    progress('preparing', 'Preparing the copy…');
+    progress('preparing');
     const files = unitFiles(unit);
     if (!files) throw new SyndicationError('refused', `'${unit}' is not a unit here`);
     const transform = transformFor(peer, unit, files, view);
@@ -442,7 +443,7 @@ export function submitPublish(
       return null;
     }
 
-    progress('checking', "Checking the copy with this wiki's gates…");
+    progress('checking');
     const site = siteHooks();
     const problems: string[] = [];
     const decoder = new TextDecoder();
@@ -468,7 +469,7 @@ export function submitPublish(
     }
     if (problems.length > 0) throw new SyndicationError('invalid', 'The copy would not build here', problems);
 
-    progress('submitting', `Submitting to ${stagingBranch(originName(), unit)}…`);
+    progress('submitting');
     const repoFiles = new Map([...stamped].map(([path, file]) => [`${peer.contentDir}${path}`, file]));
     const blobs = await writeBlobs(dir, new Map([...repoFiles].map(([path, file]) => [path, file.bytes])), wikiTempDir('syndication'));
     const tree = await buildTree(dir, {
@@ -538,7 +539,7 @@ export async function awaitVerdict(
         : unitState(view, unit, originName()).kind === 'absent');
     const elapsed = Math.round((Date.now() - started) / 1000);
     if (accepted || Date.now() - started >= waitMs || signal.aborted) return statusFrom(peer, unit, view);
-    progress('waiting', `Waiting for ${peer.title}'s gate (${elapsed}s)…`, elapsed);
+    progress('waiting', elapsed);
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, pollMs);
       signal.addEventListener('abort', () => {
@@ -565,8 +566,8 @@ export async function publishStream(
   signal: AbortSignal,
   timing?: { waitMs?: number | undefined; pollMs?: number | undefined },
 ): Promise<void> {
-  const progress: Progress = (stage, message, seconds) => {
-    write({ kind: 'progress', stage, message, ...(seconds === undefined ? {} : { seconds }) });
+  const progress: Progress = (stage, seconds) => {
+    write({ kind: 'progress', stage, ...(seconds === undefined ? {} : { seconds }) });
   };
   try {
     const staged = await submitPublish(peer, unit, user, opts, progress);
