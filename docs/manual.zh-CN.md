@@ -235,6 +235,7 @@ export default defineInkbrushConfig({
 | `inbox.ignore` | `[]` | 导入跳过清单(路径/文件名前缀) |
 | `autocommit` | `false` | 每次保存后在内容仓自动 git commit(作者 = 登录用户) |
 | `autopush` | `false` | 每次 autocommit 后异步 git push——部署机开启 |
+| `skipCi` | `false` | 每条自动提交的信息末尾加一行 `[skip ci]`——站上保存与线上就是同一台服务器(一站一面)时开启,保存本身已经生效,不该再让任何流水线重建或重启 |
 | `claude.bin` / `claude.model` | `'claude'` / CLI 自身默认 | AI 端点用哪个 CLI / 哪个模型 |
 | `claude.companions` | 无 | `(note) => string[]`——笔记目录之外,任务还可以读写的项目相对路径(文件或目录) |
 | `claude.rules` | `[]` | 站点自己的写作规范,追加在方言规则之后进入每条提示词 |
@@ -304,7 +305,7 @@ locales: [
 | `WIKI_IDENTITY_DIR` | `identity.dir`(设置即启用 identity 模块) |
 | `WIKI_INBOX_DIR` | `inbox.dir`(设为空字符串 = 本次运行不监听) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore`(逗号分隔) |
-| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` | `autocommit` / `autopush`(`0`/`1`) |
+| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `skipCi`(`0`/`1`) |
 | `WIKI_TRUST_PROXY` | `server.trustProxy`(`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |

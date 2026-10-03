@@ -212,6 +212,12 @@ export interface WikiConfigInput {
   /** async git push of the content repo after each autocommit (turn on for
    *  deployment machines). default false */
   autopush?: boolean;
+  /** end every autocommit message with a `[skip ci]` line, the marker GitHub
+   *  Actions and dokploy both honour. For a single-surface deployment — the
+   *  server that saved the note is the site — a save is already live, and no
+   *  pipeline should rebuild or restart anything for it. Leave off when CI
+   *  turns pushed saves into a static site. default false */
+  skipCi?: boolean;
   /** the AI endpoints: which claude CLI runs the jobs, and what a job may see */
   claude?: {
     /** executable (default 'claude') */
@@ -289,6 +295,7 @@ export interface WikiConfig {
   };
   autocommit: boolean;
   autopush: boolean;
+  skipCi: boolean;
   claude: {
     bin: string;
     model: string | null;

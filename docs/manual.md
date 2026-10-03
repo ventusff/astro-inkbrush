@@ -288,6 +288,7 @@ export default defineInkbrushConfig({
 | `inbox.ignore` | `[]` | Import skip list (path/basename prefixes) |
 | `autocommit` | `false` | git commit in the content repo after every save (author = the signed-in user) |
 | `autopush` | `false` | async git push after each autocommit — turn on for deployment machines |
+| `skipCi` | `false` | every autocommit message ends with a `[skip ci]` line — for a single-surface deployment, where the saving server is the site and no pipeline should rebuild or restart for a save |
 | `claude.bin` / `claude.model` | `'claude'` / CLI default | Which CLI binary / `--model` the AI endpoints run |
 | `claude.companions` | none | `(note) => string[]` — project-relative files or directories a job may read and change beside the note's directory |
 | `claude.rules` | `[]` | The site's own writing constraints, appended to the dialect's in every prompt |
@@ -366,7 +367,7 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_IDENTITY_DIR` | `identity.dir` (setting it enables the module) |
 | `WIKI_INBOX_DIR` | `inbox.dir` (empty string = watcher off for this run) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore` (comma-separated) |
-| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` | `autocommit` / `autopush` (`0`/`1`) |
+| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `skipCi` (`0`/`1`) |
 | `WIKI_TRUST_PROXY` | `server.trustProxy` (`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |

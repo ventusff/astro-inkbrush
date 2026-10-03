@@ -15,7 +15,8 @@
  * Edit history is two layers: the journal is the fine-grained per-block
  * audit log (each record has a unique id); git in the content repo is the
  * durable versioning — `autocommit` commits each save with the signed-in
- * user as author, `autopush` pushes asynchronously after each commit.
+ * user as author, `autopush` pushes asynchronously after each commit, and
+ * `skipCi` marks each commit so no pipeline reacts to a save.
  */
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -289,7 +290,10 @@ export function autocommit(
       await execFileP('git', ['add', '-A', '--', ...rels], { cwd: repoRoot });
       const { stdout } = await execFileP('git', ['status', '--porcelain', '--', ...rels], { cwd: repoRoot });
       if (!stdout.trim()) return outside ? 'failed' : 'clean';
-      await execFileP('git', ['commit', '-m', message, '--author', `${user} <wiki@local>`, '--', ...rels], {
+      // `[skip ci]` as its own trailing line: GitHub Actions and dokploy look for
+      // the marker anywhere in the message, and the subject line stays readable.
+      const text = cfg.skipCi ? `${message}\n\n[skip ci]` : message;
+      await execFileP('git', ['commit', '-m', text, '--author', `${user} <wiki@local>`, '--', ...rels], {
         cwd: repoRoot,
       });
     } catch (err) {

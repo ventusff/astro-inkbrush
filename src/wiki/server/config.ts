@@ -255,6 +255,7 @@ export function wikiConfig(): WikiConfig {
     },
     autocommit: envFlag('WIKI_AUTOCOMMIT') ?? input.autocommit ?? false,
     autopush: envFlag('WIKI_AUTOPUSH') ?? input.autopush ?? false,
+    skipCi: envFlag('WIKI_SKIP_CI') ?? input.skipCi ?? false,
     claude: {
       bin: envStr('WIKI_CLAUDE_BIN') ?? input.claude?.bin ?? 'claude',
       model: envStr('WIKI_CLAUDE_MODEL') ?? input.claude?.model ?? null,
