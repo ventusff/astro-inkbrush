@@ -214,6 +214,10 @@ rules:
 - Obsidian clipper frontmatter (`author` / `source` / `url` / `saved`)
   becomes a `> Source: …` line; a description is derived from the first
   substantive paragraph.
+- The words the importer adds — the `Inbox` brand, the `Obsidian sync · <date>`
+  subtitle, the Source line, the link label, the missing-attachment marker —
+  are written in the language of the default locale (Chinese, English and
+  German have their own; any other language takes the English).
 
 `inbox.ignore` skips noise: each entry is matched as a prefix of the
 vault-relative path and of the file name — either match skips the file;

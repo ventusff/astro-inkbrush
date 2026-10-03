@@ -112,7 +112,7 @@ function decodeSegment(seg: string): string {
   try {
     return decodeURIComponent(seg);
   } catch {
-    throw refuse(400, 'bad-request', { detail: `malformed path segment: ${seg}` });
+    throw refuse(400, 'bad-path', { segment: seg });
   }
 }
 
@@ -239,14 +239,14 @@ export async function readBody<T>(req: IncomingMessage): Promise<T> {
   const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
   if (type !== 'application/json') {
     req.resume();
-    throw refuse(415, 'bad-request', { detail: 'JSON bodies must be sent as application/json' });
+    throw refuse(415, 'not-json');
   }
   const text = await readCapped(req);
   if (!text) return {} as T;
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw refuse(400, 'bad-request', { detail: 'Request body is not valid JSON' });
+    throw refuse(400, 'bad-json');
   }
 }
 

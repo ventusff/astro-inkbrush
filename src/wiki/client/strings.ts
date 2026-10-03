@@ -874,6 +874,9 @@ const ZH_VISIBILITY: Record<string, string> = { password: '凭密码', link: '�
 
 const ZH_ERRORS: ErrorTable = {
   'bad-request': ({ detail }) => `请求格式不对（${detail}）`,
+  'bad-path': ({ segment }) => `地址里有一段编码不对：${segment}`,
+  'not-json': () => '请求内容要按 application/json 发送',
+  'bad-json': () => '请求内容不是合法的 JSON',
   'body-too-large': ({ limit }) => `请求内容太大（上限 ${limit} 字节）`,
   'cross-site': () => '拒绝了来自别的网站的请求',
   'sign-in-required': () => '请先登录',
@@ -924,7 +927,12 @@ const ZH_ERRORS: ErrorTable = {
   'claude-unavailable': ({ detail }) => `无法启动 claude 命令行：${detail}（用 WIKI_CLAUDE_BIN 指定它的位置）`,
   'job-timeout': ({ seconds }) => `任务超时（${seconds} 秒），已被终止`,
   'client-disconnected': () => '浏览器断开了连接',
-  'job-error': ({ detail }) => `AI 任务失败：${detail}`,
+  'job-error': ({ detail }) => `AI 任务失败${detail ? `：${detail}` : ''}`,
+  'job-output-overflow': ({ megabytes }) => `claude 输出的一行超过了 ${megabytes} MB 还没结束，任务已被终止`,
+  'job-exited': ({ exitCode, detail, ignoredLines }) =>
+    `claude 意外退出（退出码 ${exitCode}）${detail ? `：${detail}` : ''}${
+      ignoredLines > 0 ? `（有 ${ignoredLines} 行输出不是 JSON，已忽略）` : ''
+    }`,
   'job-deleted-note': ({ file }) => `任务删掉了笔记文件本身（${file}）`,
   'job-no-baseline': ({ file }) => `笔记文件（${file}）没有可供修改的原始版本`,
   'job-outside-block': ({ file, start, end }) => `任务改动了 ${file} 里选中块（L${start}-${end}）以外的行`,
@@ -956,6 +964,10 @@ const ZH_ERRORS: ErrorTable = {
   'gateway-outdated': () => '分享网关还不支持「有链接就能看」和「完全公开」，请升级网关，或改用密码分享',
   'snapshot-unstable': () => '构建快照期间站点一直在改动，等改动停下来再试',
   'snapshot-too-large': ({ size, limit }) => `快照有 ${size} MiB，超过了 ${limit} MiB 的上限`,
+  'build-missing': ({ path }) => `找不到 astro 程序（${path}），请先安装站点的依赖`,
+  'build-start': ({ detail }) => `无法启动 astro 构建：${detail}`,
+  'build-timeout': ({ minutes }) => `astro 构建超时（${minutes} 分钟），已被终止`,
+  'build-failed': ({ exitCode, detail }) => `astro 构建失败（退出码 ${exitCode}）${detail ? `：…${detail}` : ''}`,
 
   'syndication-off': () => '本站没有配置同步（inkbrush.config.ts → syndication）',
   'peer-unknown': ({ peer }) => `没有这个同步对象：${peer}`,
@@ -1468,6 +1480,9 @@ const DE_VISIBILITY: Record<string, string> = { password: 'Mit Passwort', link: 
 
 const DE_ERRORS: ErrorTable = {
   'bad-request': ({ detail }) => `Die Anfrage ist fehlerhaft (${detail})`,
+  'bad-path': ({ segment }) => `Ein Abschnitt der Adresse ist falsch kodiert: ${segment}`,
+  'not-json': () => 'Der Inhalt der Anfrage muss als application/json gesendet werden',
+  'bad-json': () => 'Der Inhalt der Anfrage ist kein gültiges JSON',
   'body-too-large': ({ limit }) => `Die Anfrage ist zu groß (höchstens ${limit} Byte)`,
   'cross-site': () => 'Anfrage von einer fremden Website abgelehnt',
   'sign-in-required': () => 'Bitte melde dich zuerst an',
@@ -1524,7 +1539,13 @@ const DE_ERRORS: ErrorTable = {
     `Die claude-CLI ließ sich nicht starten: ${detail} (mit WIKI_CLAUDE_BIN auf sie zeigen)`,
   'job-timeout': ({ seconds }) => `Der Job hat das Zeitlimit überschritten (${seconds} s) und wurde beendet`,
   'client-disconnected': () => 'Der Browser hat die Verbindung getrennt',
-  'job-error': ({ detail }) => `Der AI-Job ist fehlgeschlagen: ${detail}`,
+  'job-error': ({ detail }) => `Der AI-Job ist fehlgeschlagen${detail ? `: ${detail}` : ''}`,
+  'job-output-overflow': ({ megabytes }) =>
+    `claude hat eine Ausgabezeile von über ${megabytes} MB geschrieben, ohne sie abzuschließen – der Job wurde beendet`,
+  'job-exited': ({ exitCode, detail, ignoredLines }) =>
+    `claude hat sich unerwartet beendet (Exit-Code ${exitCode})${detail ? `: ${detail}` : ''}${
+      ignoredLines > 0 ? ` (${ignoredLines} Ausgabezeilen ohne gültiges JSON ignoriert)` : ''
+    }`,
   'job-deleted-note': ({ file }) => `Der Job hat die Datei der Notiz selbst gelöscht (${file})`,
   'job-no-baseline': ({ file }) => `Die Notizdatei (${file}) hat keinen Ausgangsstand, in dem sich ein Block bearbeiten ließe`,
   'job-outside-block': ({ file, start, end }) =>
@@ -1562,6 +1583,11 @@ const DE_ERRORS: ErrorTable = {
     'Das Share-Gateway kennt noch keine Freigaben per Link oder öffentliche Freigaben – aktualisiere das Gateway oder teile mit Passwort',
   'snapshot-unstable': () => 'Die Website ändert sich laufend, während der Snapshot gebaut wird – versuch es, wenn die Änderungen ruhen',
   'snapshot-too-large': ({ size, limit }) => `Das Snapshot-Paket hat ${size} MiB und liegt über der Grenze von ${limit} MiB`,
+  'build-missing': ({ path }) => `Das astro-Programm fehlt (${path}) – installiere zuerst die Abhängigkeiten der Website`,
+  'build-start': ({ detail }) => `Der astro-Build ließ sich nicht starten: ${detail}`,
+  'build-timeout': ({ minutes }) => `Der astro-Build hat das Zeitlimit überschritten (${minutes} min) und wurde beendet`,
+  'build-failed': ({ exitCode, detail }) =>
+    `Der astro-Build ist fehlgeschlagen (Exit-Code ${exitCode})${detail ? `: …${detail}` : ''}`,
 
   'syndication-off': () => 'Syndication ist auf dieser Website nicht eingerichtet (inkbrush.config.ts → syndication)',
   'peer-unknown': ({ peer }) => `Kein solches Ziel-Wiki: ${peer}`,

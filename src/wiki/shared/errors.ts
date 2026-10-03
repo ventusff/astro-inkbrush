@@ -24,6 +24,12 @@ export interface WikiErrorParams {
   /* —— the request —— */
   /** a request no page sends (a missing field, a malformed body) */
   'bad-request': { detail: string };
+  /** a path segment that is not valid percent-encoding */
+  'bad-path': { segment: string };
+  /** a body not declared as application/json */
+  'not-json': {};
+  /** a body declared as JSON that does not parse */
+  'bad-json': {};
   'body-too-large': { limit: number };
   'cross-site': {};
   'sign-in-required': {};
@@ -82,7 +88,14 @@ export interface WikiErrorParams {
   'claude-unavailable': { detail: string };
   'job-timeout': { seconds: number };
   'client-disconnected': {};
+  /** the job reported an error; `detail` is its own line, '' when it gave none */
   'job-error': { detail: string };
+  /** the claude CLI wrote a line longer than the stream reader holds */
+  'job-output-overflow': { megabytes: number };
+  /** the claude CLI exited without a result; `detail` is the end of its
+   *  stderr ('' when it wrote none), `ignoredLines` the stdout lines that
+   *  were not JSON */
+  'job-exited': { exitCode: number | null; detail: string; ignoredLines: number };
   'job-deleted-note': { file: string };
   'job-no-baseline': { file: string };
   'job-outside-block': { file: string; start: number; end: number };
@@ -117,6 +130,13 @@ export interface WikiErrorParams {
   'gateway-outdated': {};
   'snapshot-unstable': {};
   'snapshot-too-large': { size: number; limit: number };
+  /** the site has no astro binary at `path` */
+  'build-missing': { path: string };
+  /** the astro build could not be started */
+  'build-start': { detail: string };
+  'build-timeout': { minutes: number };
+  /** the astro build exited nonzero; `detail` is the end of its output */
+  'build-failed': { exitCode: number | null; detail: string };
 
   /* —— syndication routes —— */
   'syndication-off': {};
@@ -179,6 +199,9 @@ const SHARE_ACTION_VERB: Record<ShareAction, string> = {
  *  wording on an English page */
 export const ENGLISH_ERRORS: ErrorTable = {
   'bad-request': ({ detail }) => detail,
+  'bad-path': ({ segment }) => `Malformed path segment: ${segment}`,
+  'not-json': () => 'JSON bodies must be sent as application/json',
+  'bad-json': () => 'Request body is not valid JSON',
   'body-too-large': ({ limit }) => `Request body too large (max ${limit} bytes)`,
   'cross-site': () => 'Cross-site request refused',
   'sign-in-required': () => 'Sign in required',
@@ -234,7 +257,13 @@ export const ENGLISH_ERRORS: ErrorTable = {
   'claude-unavailable': ({ detail }) => `Could not start the claude CLI: ${detail} (set WIKI_CLAUDE_BIN to point at it)`,
   'job-timeout': ({ seconds }) => `Job timed out (${seconds} s) and was terminated`,
   'client-disconnected': () => 'Client disconnected',
-  'job-error': ({ detail }) => `The AI job failed: ${detail}`,
+  'job-error': ({ detail }) => `The AI job failed${detail ? `: ${detail}` : ''}`,
+  'job-output-overflow': ({ megabytes }) =>
+    `claude wrote an output line over ${megabytes} MB without ending it — the job was terminated`,
+  'job-exited': ({ exitCode, detail, ignoredLines }) =>
+    `claude exited unexpectedly (code ${exitCode})${detail ? `: ${detail}` : ''}${
+      ignoredLines > 0 ? ` (${ignoredLines} non-JSON protocol line(s) ignored)` : ''
+    }`,
   'job-deleted-note': ({ file }) => `The job deleted the note's own file (${file})`,
   'job-no-baseline': ({ file }) => `The note file (${file}) has no baseline to edit a block of`,
   'job-outside-block': ({ file, start, end }) =>
@@ -269,6 +298,10 @@ export const ENGLISH_ERRORS: ErrorTable = {
     'The share gateway does not know link or public shares yet — update the gateway, or share with a password',
   'snapshot-unstable': () => 'The site keeps changing while the snapshot builds — retry when edits pause',
   'snapshot-too-large': ({ size, limit }) => `The snapshot bundle is ${size} MiB, above the ${limit} MiB limit`,
+  'build-missing': ({ path }) => `astro binary not found (${path}) — install the site's dependencies`,
+  'build-start': ({ detail }) => `Could not start the astro build: ${detail}`,
+  'build-timeout': ({ minutes }) => `The astro build timed out (${minutes} min) and was terminated`,
+  'build-failed': ({ exitCode, detail }) => `The astro build failed (code ${exitCode})${detail ? `: …${detail}` : ''}`,
 
   'syndication-off': () => 'Syndication is not configured (inkbrush.config.ts → syndication)',
   'peer-unknown': ({ peer }) => `No such syndication peer: ${peer}`,
@@ -283,7 +316,9 @@ export const ENGLISH_ERRORS: ErrorTable = {
   'playground-unavailable': () => 'Not available in the playground',
 };
 
-/** the English line of a failure */
-export function englishOf(f: WikiFailure): string {
-  return wordFailure(ENGLISH_ERRORS, f);
+/** the English line of a failure; `unchanged` adds that the edit job it
+ *  ended wrote nothing (a page words that from the event's `unchanged`) */
+export function englishOf(f: WikiFailure, { unchanged = false }: { unchanged?: boolean } = {}): string {
+  const line = wordFailure(ENGLISH_ERRORS, f);
+  return unchanged ? `${line} — nothing was changed` : line;
 }

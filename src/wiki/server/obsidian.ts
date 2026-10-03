@@ -24,6 +24,9 @@
  *    interpolation context (lib/markdown-escape.ts): frontmatter values via
  *    the yaml serializer, labels and prose backslash-escaped, link URLs
  *    percent-encoded.
+ *  - The words the importer adds — brand, subtitle, the Source line, the
+ *    link label, the missing-attachment marker — are in the language of the
+ *    default locale, the one `inbox/<slug>` belongs to.
  *  - `inbox.ignore` (config) skips files by vault-relative path or basename
  *    prefix.
  *
@@ -244,6 +247,32 @@ export interface ConvertResult {
   warnings: string[];
 }
 
+/** the words an imported note is framed with, in each language a default
+ *  locale can have; a language without its own words takes the English */
+const FRAME_WORDS = {
+  brand: { zh: '收件箱', en: 'Inbox', de: 'Inbox' },
+  subtitle: { zh: 'Obsidian 同步', en: 'Obsidian sync', de: 'Obsidian-Sync' },
+  source: { zh: '来源：', en: 'Source: ', de: 'Quelle: ' },
+  link: { zh: '原文链接', en: 'Original link', de: 'Originallink' },
+  missing: { zh: '缺少附件：', en: 'missing attachment: ', de: 'fehlender Anhang: ' },
+} as const;
+
+type FrameLanguage = keyof (typeof FRAME_WORDS)['brand'];
+
+/** the frame words of the language the inbox notes are written in — the
+ *  default locale's, since `inbox/<slug>` carries no locale prefix */
+function frameWords(): { [K in keyof typeof FRAME_WORDS]: string } {
+  const code = wikiConfig().content.locales.find((l) => l.prefix === '')!.code.split('-')[0]!.toLowerCase();
+  const lang: FrameLanguage = Object.hasOwn(FRAME_WORDS.brand, code) ? (code as FrameLanguage) : 'en';
+  return {
+    brand: FRAME_WORDS.brand[lang],
+    subtitle: FRAME_WORDS.subtitle[lang],
+    source: FRAME_WORDS.source[lang],
+    link: FRAME_WORDS.link[lang],
+    missing: FRAME_WORDS.missing[lang],
+  };
+}
+
 /**
  * Convert one vault note. Assets are copied into `stageDir` (which must
  * exist) under their final names; the note source is returned, not
@@ -255,6 +284,7 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
   const title = basename(sourcePath).replace(/\.md$/, '');
   const slug = opts.slug ?? slugFor(sourcePath, fm);
   const warnings: string[] = [];
+  const words = frameWords();
 
   /** obsidian keeps embeds in `<note dir>/_assets/<note name>/`; a name
    *  only ever resolves to a file inside one of these roots */
@@ -315,7 +345,7 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
       // the surrounding spaces matter: two adjacent embeds would fuse into
       // `]**[`, and CommonMark's rule-of-three refuses to pair those markers,
       // leaking literal asterisks into the prose.
-      return ` *[missing attachment: ${escapeMarkdownText(file!)}]* `;
+      return ` *[${words.missing}${escapeMarkdownText(file!)}]* `;
     }
     return `![${escapeMarkdownText(alt ?? '')}](./${encodeURIComponent(copyAsset(found))})`;
   });
@@ -362,17 +392,17 @@ export function convertObsidianNote(sourcePath: string, opts: { stageDir: string
     const label = escapeMarkdownText([fm.source, fm.author].filter(Boolean).join(' · '));
     sourceBits.push(fm.url ? `[${label}](${escapeLinkUrl(fm.url)})` : label);
   } else if (fm.url) {
-    sourceBits.push(`[Original link](${escapeLinkUrl(fm.url)})`);
+    sourceBits.push(`[${words.link}](${escapeLinkUrl(fm.url)})`);
   }
   if (fm.saved) sourceBits.push(escapeMarkdownText(fm.saved.slice(0, 10)));
-  const attribution = sourceBits.length > 0 ? `> Source: ${sourceBits.join(' · ')}\n\n` : '';
+  const attribution = sourceBits.length > 0 ? `> ${words.source}${sourceBits.join(' · ')}\n\n` : '';
 
   const description = deriveDescription(markdown, title);
   const frontmatter = yamlFrontmatter({
     title,
     description,
-    brand: 'Inbox',
-    subtitle: `Obsidian sync · ${noteDate(sourcePath, fm)}`,
+    brand: words.brand,
+    subtitle: `${words.subtitle} · ${noteDate(sourcePath, fm)}`,
   });
 
   return {

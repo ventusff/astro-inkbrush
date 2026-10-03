@@ -192,14 +192,14 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
         // the semantic result; the promise settles at close, when the child
         // can no longer write into the workspace
         const id = line.session_id ?? sessionId;
-        if (line.is_error) record({ ok: false, failure: failure('job-error', { detail: line.result || 'the job reported an error' }), sessionId: id });
+        if (line.is_error) record({ ok: false, failure: failure('job-error', { detail: line.result ?? '' }), sessionId: id });
         else record({ ok: true, summary: line.result ?? '', sessionId: id });
       }
     };
 
     let buffer = '';
     /** stdout lines that are not JSON — a nonzero count is surfaced in the
-     *  server log and on a job-error failure's detail */
+     *  server log and on a job-exited failure */
     let malformedLines = 0;
     let overflowed = false;
     child.stdout!.on('data', (chunk: Buffer) => {
@@ -210,9 +210,7 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
         buffer = '';
         terminate({
           ok: false,
-          failure: failure('job-error', {
-            detail: `claude produced an oversized output line (over ${MAX_STDOUT_BUFFER / (1024 * 1024)} MB of unterminated stream-json) — job terminated`,
-          }),
+          failure: failure('job-output-overflow', { megabytes: MAX_STDOUT_BUFFER / (1024 * 1024) }),
           sessionId,
         });
         return;
@@ -248,18 +246,12 @@ export function runClaudeJob(opts: ClaudeJobOptions): Promise<ClaudeJobResult> {
       if (malformedLines > 0) {
         console.warn(`[wiki claude] ${malformedLines} non-JSON line(s) on the stream-json stdout were ignored`);
       }
-      const result: ClaudeJobResult = outcome ?? {
-        ok: false,
-        failure: failure('job-error', {
-          detail: `claude exited unexpectedly (code ${code})${stderrTail ? `: ${stderrTail.slice(-400)}` : ''}`,
-        }),
-        sessionId,
-      };
-      const ignored = ` (${malformedLines} non-JSON protocol line(s) ignored)`;
       finish(
-        !result.ok && result.failure.code === 'job-error' && malformedLines > 0
-          ? { ...result, failure: failure('job-error', { detail: result.failure.params.detail + ignored }) }
-          : result,
+        outcome ?? {
+          ok: false,
+          failure: failure('job-exited', { exitCode: code, detail: stderrTail.slice(-400).trim(), ignoredLines: malformedLines }),
+          sessionId,
+        },
       );
     });
   });

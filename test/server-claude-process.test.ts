@@ -11,12 +11,6 @@ function failureOf(result: ClaudeJobResult): WikiFailure | null {
   return result.ok ? null : result.failure;
 }
 
-/** a job-error failure's tool line */
-function detailOf(result: ClaudeJobResult): string {
-  const f = failureOf(result);
-  return f?.code === 'job-error' ? f.params.detail : '';
-}
-
 /** a fake claude bin printing `lines` (stream-json), then running `tail` */
 function fakeBin(dir: string, body: string): string {
   const bin = join(dir, 'fake-claude');
@@ -89,7 +83,7 @@ test('a bin that cannot be spawned reports a start failure', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('an oversized unterminated output line kills the job with a clear message', async () => {
+test('an oversized unterminated output line kills the job with its own failure', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'inkbrush-claude-'));
   // 9 MB without a newline — over the 8 MB stdout line-buffer bound
   const bin = fakeBin(
@@ -97,8 +91,7 @@ test('an oversized unterminated output line kills the job with a clear message',
     `process.stdout.write('x'.repeat(9 * 1024 * 1024));\nsetInterval(() => {}, 1000);`,
   );
   const result = await runClaudeJob(jobOpts(bin, dir, { timeoutMs: 30_000, killGraceMs: 500 }));
-  assert.equal(result.ok, false);
-  assert.match(detailOf(result), /oversized output line/);
+  assert.deepEqual(failureOf(result), { code: 'job-output-overflow', params: { megabytes: 8 } });
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -109,9 +102,7 @@ test('non-JSON protocol lines are counted and surfaced on a failure', async () =
     `console.log('not json at all');\nconsole.log('{broken');\nprocess.exit(3);`,
   );
   const result = await runClaudeJob(jobOpts(bin, dir));
-  assert.equal(result.ok, false);
-  assert.match(detailOf(result), /exited unexpectedly \(code 3\)/);
-  assert.match(detailOf(result), /2 non-JSON protocol line\(s\) ignored/);
+  assert.deepEqual(failureOf(result), { code: 'job-exited', params: { exitCode: 3, detail: '', ignoredLines: 2 } });
   rmSync(dir, { recursive: true, force: true });
 });
 

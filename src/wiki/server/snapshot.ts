@@ -50,7 +50,7 @@ import { POLLUTION_MARKERS } from '../../lib/pollution-markers.ts';
 import type { ShareProgress } from '../shared/types.ts';
 import { childEnv } from './child-env.ts';
 import { onDuty } from './duty.ts';
-import { refuse } from './index.ts';
+import { type HttpError, refuse } from './index.ts';
 import { containedPath } from './paths.ts';
 import { writeFileAtomic } from './store.ts';
 
@@ -149,13 +149,13 @@ function runAstroBuild(
 ): Promise<void> {
   return new Promise((resolvePromise, rejectPromise) => {
     if (signal?.aborted) {
-      rejectPromise(new Error('snapshot build canceled — the client disconnected'));
+      rejectPromise(refuse(499, 'client-disconnected'));
       return;
     }
     // the project's own astro binary — never a network-resolving npx
     const astroBin = join(root, 'node_modules', '.bin', 'astro');
     if (!existsSync(astroBin)) {
-      rejectPromise(new Error(`astro binary not found (${astroBin}) — install the site's dependencies`));
+      rejectPromise(refuse(500, 'build-missing', { path: astroBin }));
       return;
     }
     const child = spawn(astroBin, ['build', '--outDir', outDirRel], {
@@ -175,19 +175,19 @@ function runAstroBuild(
       onProgress({ stage: 'building', seconds: Math.round((Date.now() - started) / 1000) });
     }, 10_000);
     // timeout / cancellation: SIGTERM, then SIGKILL after a grace window
-    let killReason: string | null = null;
+    let killReason: HttpError | null = null;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
-    const killChild = (reason: string): void => {
+    const killChild = (reason: HttpError): void => {
       if (killReason) return;
       killReason = reason;
       child.kill('SIGTERM');
       killTimer = setTimeout(() => child.kill('SIGKILL'), BUILD_KILL_GRACE_MS);
     };
     const timeout = setTimeout(() => {
-      killChild(`astro build timed out (${BUILD_TIMEOUT_MS / 60000} min) and was terminated`);
+      killChild(refuse(504, 'build-timeout', { minutes: BUILD_TIMEOUT_MS / 60000 }));
     }, BUILD_TIMEOUT_MS);
     const onAbort = (): void => {
-      killChild('snapshot build canceled — the client disconnected');
+      killChild(refuse(499, 'client-disconnected'));
     };
     signal?.addEventListener('abort', onAbort);
     const cleanup = (): void => {
@@ -198,13 +198,13 @@ function runAstroBuild(
     };
     child.on('error', (err) => {
       cleanup();
-      rejectPromise(new Error(`failed to start astro build: ${err.message}`));
+      rejectPromise(refuse(500, 'build-start', { detail: err.message }));
     });
     child.on('close', (code) => {
       cleanup();
-      if (killReason) rejectPromise(new Error(killReason));
+      if (killReason) rejectPromise(killReason);
       else if (code === 0) resolvePromise();
-      else rejectPromise(new Error(`astro build failed (code ${code})${tail ? `: …${tail.slice(-600)}` : ''}`));
+      else rejectPromise(refuse(500, 'build-failed', { exitCode: code, detail: tail.slice(-600).trim() }));
     });
   });
 }

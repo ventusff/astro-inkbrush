@@ -65,10 +65,8 @@ function saturationError(email: string): WikiFailure | null {
 
 /** a stream's error event; an edit job's failure (`unchanged`) wrote nothing */
 function errorEvent(f: WikiFailure, unchanged = false): ClaudeStreamEvent {
-  const message = englishOf(f);
-  return unchanged
-    ? { kind: 'error', message: `${message} — nothing was changed`, unchanged: true, ...f }
-    : { kind: 'error', message, ...f };
+  const message = englishOf(f, { unchanged });
+  return unchanged ? { kind: 'error', message, unchanged: true, ...f } : { kind: 'error', message, ...f };
 }
 
 /**
