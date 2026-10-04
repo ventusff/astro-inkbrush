@@ -82,6 +82,19 @@ answers false; a check that throws counts as false. Request-triggered work
 (a manual import, a share, a publish) runs wherever the request lands.
 Without the option every process is on duty — the single-instance case.
 
+A site that keeps its large media outside the repository names the store:
+
+```ts
+inkbrush({ markdown, media: { origin: 'http://media-origin.example:8480' } })
+```
+
+The store is content-addressed: a page cites a file as `/media/<sha256>.<ext>`,
+the name being the SHA-256 of its bytes, and the deployment serves those
+addresses in front of the site. The static build therefore holds none of
+them, and a share fetches the ones its page cites from `origin` into the
+snapshot, checking each against its name; an address the store lacks fails
+the share, naming it.
+
 The integration only runs under `astro dev`; in any other command it logs a
 warning and does nothing. In WIKI mode it also turns off Astro's dev toolbar
 (editors don't need island-audit instrumentation) while keeping the error
@@ -525,7 +538,8 @@ static snapshot. First, **who can read**:
    change — so a share request finds it ready and spends only the seconds
    of packing and uploading. The server then extracts the route's
    `index.html` plus its complete asset closure (HTML attributes → CSS
-   `url()`/`@import` → the JS import graph), rewrites references to be
+   `url()`/`@import` → the JS import graph; media-store addresses come from
+   the store named by `inkbrush({ media })`), rewrites references to be
    `./`-relative, injects `noindex` unless the share is public, and PUTs a
    tar.gz to the gateway. Share ids are 10-character base58 — no `0/O/I/l`,
    readable aloud.

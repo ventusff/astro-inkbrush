@@ -49,7 +49,7 @@ import { findUser as findIdentityUser, identityConfig } from './identity.ts';
 import type { Ctx, RouteRegistrar } from './index.ts';
 import { fail, failureBody, failureOf, type HttpError, json, ndjsonStream, readBody, refuse } from './index.ts';
 import { followDue, snapshotFingerprint, startShareFollower } from './share-follow.ts';
-import { noteUrl } from './site.ts';
+import { mediaOrigin, noteUrl } from './site.ts';
 import { buildSnapshot, latestMtime } from './snapshot.ts';
 import { noteDir, noteMeta } from './source.ts';
 import { projectRoot, readJson, wikiDataDir, withLock, writeJson } from './store.ts';
@@ -274,7 +274,7 @@ async function packSnapshot(
   progress: (progress: ShareProgress) => void,
   signal: AbortSignal,
 ): Promise<Bundle> {
-  const snapshot = await buildSnapshot(projectRoot(), route, progress, signal, { indexable: visibility === 'public' });
+  const snapshot = await buildSnapshot(projectRoot(), route, progress, signal, { indexable: visibility === 'public', mediaOrigin: mediaOrigin() });
   const fingerprint = snapshotFingerprint(snapshot);
   const tgzPath = `${snapshot.dir}.tgz`;
   progress({ stage: 'packing', count: snapshot.files.length + 1 });

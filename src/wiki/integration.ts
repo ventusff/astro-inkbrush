@@ -36,6 +36,11 @@ export interface InkbrushOptions {
    *  at once — a rolling deploy — answers true in exactly one of them.
    *  Omitted = always. */
   onDuty?: () => boolean;
+  /** the site's media store: `origin` answers `/media/<sha256>.<ext>`, the
+   *  name being the SHA-256 of the file's bytes. Pages cite those addresses
+   *  and the deployment serves them in front of the site; a share fetches
+   *  the ones its page cites from here, so the shared page carries them. */
+  media?: { origin: string };
 }
 
 /**
@@ -85,7 +90,7 @@ export const CLIENT_DEPENDENCIES = [
 export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
   let root = process.cwd();
   let srcDir = '';
-  const serverOptions = { markdown: options.markdown, onDuty: options.onDuty };
+  const serverOptions = { markdown: options.markdown, onDuty: options.onDuty, media: options.media };
   return {
     name: 'inkbrush',
     hooks: {
@@ -149,7 +154,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
         // double-start across HMR reloads.
         try {
           const mod = (await server.ssrLoadModule(serverEntry)) as {
-            initWiki: (root: string, o: { markdown?: SiteMarkdownHooks | undefined; onDuty?: (() => boolean) | undefined }) => void;
+            initWiki: (root: string, o: typeof serverOptions) => void;
           };
           mod.initWiki(root, serverOptions);
         } catch (err) {

@@ -59,7 +59,7 @@ import {
 import { buildSaml, displayNameFromProfile, googleSamlState, samlEmailAllowed } from './saml.ts';
 import { shareState } from './share.ts';
 import { syndicationPeers } from './syndication.ts';
-import { setSiteHooks, type SiteMarkdownHooks } from './site.ts';
+import { setMediaOrigin, setSiteHooks, type SiteMarkdownHooks } from './site.ts';
 import { setProjectRoot } from './store.ts';
 
 export interface ApiOptions {
@@ -68,6 +68,8 @@ export interface ApiOptions {
   markdown?: SiteMarkdownHooks | undefined;
   /** whether this process runs the background tasks, from `inkbrush({ onDuty })` */
   onDuty?: (() => boolean) | undefined;
+  /** the site's media store, from `inkbrush({ media })` */
+  media?: { origin: string } | undefined;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -481,6 +483,7 @@ export type RouteRegistrar = typeof on;
 export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): void {
   setProjectRoot(root);
   setSiteHooks(opts.markdown);
+  setMediaOrigin(opts.media?.origin);
   setDutyCheck(opts.onDuty);
   wikiConfig();
   ensureRegistry();
@@ -547,6 +550,7 @@ export async function handleApi(
 ): Promise<void> {
   setProjectRoot(opts.root);
   setSiteHooks(opts.markdown);
+  setMediaOrigin(opts.media?.origin);
   const url = new URL(req.url ?? '/', 'http://local');
   const path = url.pathname.replace(/^\/api\/wiki/, '') || '/';
   try {

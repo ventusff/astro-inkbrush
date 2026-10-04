@@ -29,7 +29,7 @@
  * or mixed build.
  */
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -1003,6 +1003,37 @@ export interface SnapshotOptions {
   /** leave the page indexable: no robots meta is injected (a public share);
    *  by default the page asks search engines to stay away */
   indexable?: boolean | undefined;
+  /** the origin of the site's media store: the store addresses the page
+   *  cites are fetched from it into the snapshot */
+  mediaOrigin?: string | undefined;
+}
+
+/** a media-store address inside the site: `media/<sha256>.<ext>`, the name
+ *  being the SHA-256 of the file's bytes */
+const STORE_ADDRESS = /^media\/([0-9a-f]{64})\.[a-z0-9]{1,8}$/;
+
+/**
+ * The bytes of a store address, from the store's origin. The site's build
+ * never holds them: the deployment serves the store in front of the site. A
+ * file that is not the bytes its name says is refused.
+ */
+async function fetchStored(origin: string, address: string, sha256: string, signal?: AbortSignal): Promise<Buffer> {
+  const url = `${origin}/${address}`;
+  let response: Response;
+  try {
+    response = await fetch(url, signal ? { signal } : {});
+  } catch (err) {
+    signal?.throwIfAborted();
+    throw new Error(`snapshot failed: the media store did not answer for '/${address}' (${url}: ${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (!response.ok) {
+    throw new Error(`snapshot failed: the media store has no '/${address}' (${url} answered ${response.status})`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (createHash('sha256').update(bytes).digest('hex') !== sha256) {
+    throw new Error(`snapshot failed: what the media store returned for '/${address}' is not the file its name says`);
+  }
+  return bytes;
 }
 
 /**
@@ -1101,7 +1132,8 @@ export async function buildSnapshot(
     // walk the closure: html refs → css url()/`@import` → js import graph.
     // A required ref (see isRequiredRef) that resolves inside the site must
     // exist as a file, or the snapshot fails naming the reference; page
-    // links and other navigational refs are skipped silently.
+    // links and other navigational refs are skipped silently. A media-store
+    // address is not part of the build: its file comes from the store.
     const files: string[] = [];
     const visited = new Set<string>();
     const pageName = relative(outDir, htmlPath).split(sep).join('/');
@@ -1121,6 +1153,15 @@ export async function buildSnapshot(
         stat = lstatSync(abs);
       } catch {
         stat = null;
+      }
+      const stored = options.mediaOrigin && !stat ? STORE_ADDRESS.exec(relative(outDir, abs).split(sep).join('/')) : null;
+      if (stored) {
+        visited.add(abs);
+        const dest = join(snapDir, stored[0]);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, await fetchStored(options.mediaOrigin!, stored[0], stored[1]!, signal));
+        files.push(stored[0]);
+        continue;
       }
       if (!stat?.isFile()) {
         // directories = other routes; symlinks are never packed

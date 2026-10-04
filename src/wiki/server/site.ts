@@ -53,6 +53,17 @@ export function siteHooks(): SiteMarkdownHooks {
   return hooks;
 }
 
+let mediaStore: string | undefined;
+
+/** the origin of the site's media store, from `inkbrush({ media })` */
+export function setMediaOrigin(origin: string | undefined): void {
+  mediaStore = origin?.replace(/\/+$/, '');
+}
+
+export function mediaOrigin(): string | undefined {
+  return mediaStore;
+}
+
 export function noteUrl(id: string): string {
   return hooks.urlFor ? hooks.urlFor(id) : `/${id}/`;
 }
