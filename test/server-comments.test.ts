@@ -17,7 +17,7 @@ const stored: StoredComment = {
 };
 
 test('the API view carries exactly the contract fields and never the email', () => {
-  const view = commentView(stored, null);
+  const view = commentView(stored, () => false);
   assert.deepEqual(Object.keys(view).sort(), ['author', 'canDelete', 'html', 'id', 'markdown', 'ts']);
   assert.deepEqual(view.author, { name: 'Ada', provider: 'google' });
   assert.ok(!('email' in view.author));
@@ -26,7 +26,6 @@ test('the API view carries exactly the contract fields and never the email', () 
 });
 
 test('canDelete is true exactly for the stored author', () => {
-  assert.equal(commentView(stored, 'ada@example.com').canDelete, true);
-  assert.equal(commentView(stored, 'someone@else.com').canDelete, false);
-  assert.equal(commentView(stored, null).canDelete, false);
+  assert.equal(commentView(stored, (email) => email === 'ada@example.com').canDelete, true);
+  assert.equal(commentView(stored, (email) => email === 'someone@else.com').canDelete, false);
 });

@@ -19,12 +19,14 @@ export interface StoredComment {
   ts: number;
 }
 
-/** the API response shape: no email, `canDelete` = the requester authored it */
-export function commentView(record: StoredComment, requesterEmail: string | null): WikiComment {
+/** the API response shape: no email, `canDelete` = the requester authored it
+ *  (`isRequester` tells whether an author's address is the requester's — one
+ *  person may have written under several of their addresses) */
+export function commentView(record: StoredComment, isRequester: (authorEmail: string) => boolean): WikiComment {
   return {
     id: record.id,
     author: { name: record.author.name, provider: record.author.provider },
-    canDelete: requesterEmail !== null && record.author.email === requesterEmail,
+    canDelete: isRequester(record.author.email),
     markdown: record.markdown,
     html: record.html,
     ts: record.ts,

@@ -45,7 +45,7 @@ import type {
   ShareVisibilityRequest,
 } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
-import { findUser as findIdentityUser, identityConfig } from './identity-store.ts';
+import { findUser as findIdentityUser, identityConfig, sameMember } from './identity-store.ts';
 import type { Ctx, RouteRegistrar } from './index.ts';
 import { fail, failureBody, failureOf, type HttpError, json, ndjsonStream, readBody, refuse } from './index.ts';
 import { followDue, snapshotFingerprint, startShareFollower } from './share-follow.ts';
@@ -162,10 +162,10 @@ function noteChangedAt(note: string): number | null {
   return latestMtime(dir);
 }
 
-/** the requester may manage this share: they created it, or they hold the
- *  admin role while the identity registry is on */
+/** the requester may manage this share: they created it (from any of their
+ *  addresses), or they hold the admin role while the identity registry is on */
 function canManage(record: ShareRecord, email: string): boolean {
-  if (record.createdBy === email) return true;
+  if (record.createdBy !== undefined && sameMember(record.createdBy, email)) return true;
   const identity = identityConfig();
   return identity !== null && findIdentityUser(email)?.role === identity.adminRole;
 }

@@ -107,6 +107,9 @@ test('a first sign-in registers under a clean name; another address of a member 
     assert.equal((await store.renameUser('home@x.org', 'Admin Two')).email, 'admin@b.c');
     assert.equal(store.findUser('admin@b.c')?.name, 'Admin Two');
     await store.renameUser('admin@b.c', 'Admin');
+    assert.equal(store.sameMember('HOME@x.org', 'admin@b.c'), true);
+    assert.equal(store.sameMember('new@b.c', 'admin@b.c'), false);
+    assert.equal(store.sameMember('stranger@x.org', 'stranger@x.org'), true);
     assert.equal((await store.addUserIfAbsent('new@b.c', 'Evil <x>')).name, 'new');
     assert.equal((await store.addUserIfAbsent('long@b.c', 'y'.repeat(80))).name, 'long');
     assert.equal(store.listUsers().length, 3);

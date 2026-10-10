@@ -116,6 +116,15 @@ const owns = (u: IdentityUser, email: string): boolean => {
   return u.email === lower || (u.aliases ?? []).includes(lower);
 };
 
+/** whether two addresses are one person: the same address, or both a
+ *  member's (own or other) — so a record kept under another account of
+ *  theirs stays theirs to manage */
+export function sameMember(a: string, b: string): boolean {
+  if (a.trim().toLowerCase() === b.trim().toLowerCase()) return true;
+  const one = findUser(a);
+  return one !== null && one.email === findUser(b)?.email;
+}
+
 /** the member an address belongs to — their own or one of their other addresses (another
  *  account of theirs signs in as them) */
 export function findUser(email: string): IdentityUser | null {

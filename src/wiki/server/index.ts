@@ -345,8 +345,7 @@ on('GET', '/auth/google/callback', async ({ req, res, query }) => {
 });
 
 /** first SSO login registers the user (identity.autoRegister); a member —
- *  by their own address or another of theirs — signs in as themself, under
- *  their own address and the registry's name */
+ *  by their own address or another of theirs — signs in as themself */
 async function provision(user: WikiUser): Promise<void> {
   const identity = identityConfig();
   if (!identity) return;
@@ -362,8 +361,8 @@ async function provision(user: WikiUser): Promise<void> {
     record = findIdentityUser(user.email);
     if (!record) throw new SignInError('not_member', `${user.email} is not a member of this site`);
   }
-  // another address of a member signs the member in: the session carries their own address and name
-  user.email = record.email;
+  // the session keeps the address that signed in; every request resolves it against the registry
+  // as it is then (named), so another address of a member acts as the member only while it is theirs
   if (record.name.trim()) user.name = record.name;
 }
 

@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { commentView, type StoredComment } from './comment-view.ts';
+import { sameMember } from './identity-store.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, json, readBody } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -42,7 +43,8 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
   on('GET', '/comments/*id', ({ res, params, user }) => {
     const id = params['id']!;
     if (!noteFile(id)) return fail(res, 404, 'note-not-found');
-    json(res, 200, { comments: loadComments(id).map((c) => commentView(c, user?.email ?? null)) });
+    const mine = (email: string): boolean => user !== null && sameMember(email, user.email);
+    json(res, 200, { comments: loadComments(id).map((c) => commentView(c, mine)) });
   });
 
   on(
@@ -68,7 +70,7 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
         ts: Date.now(),
       };
       appendNdjson(commentsFile(id), comment);
-      json(res, 200, { comment: commentView(comment, user!.email) });
+      json(res, 200, { comment: commentView(comment, () => true) });
     },
     { auth: true },
   );
@@ -82,7 +84,7 @@ export function registerCommentRoutes(on: RouteRegistrar): void {
       if (!cid) return fail(res, 400, 'bad-request', { detail: 'missing cid' });
       const target = loadComments(id).find((c) => c.id === cid);
       if (!target) return fail(res, 404, 'comment-not-found');
-      if (target.author.email !== user!.email) return fail(res, 403, 'comment-not-yours');
+      if (!sameMember(target.author.email, user!.email)) return fail(res, 403, 'comment-not-yours');
       appendNdjson(commentsFile(id), { id: cid, deleted: true, by: user!.email, ts: Date.now() });
       json(res, 200, { ok: true });
     },
