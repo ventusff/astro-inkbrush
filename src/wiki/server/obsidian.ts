@@ -521,7 +521,10 @@ export async function importNote(sourcePath: string, opts?: { force?: boolean })
   const noteRelDir = relative(projectRoot(), noteDir);
   // the commit is awaited on the same git path manual saves use; a failure
   // names the uncommitted files
-  const git = await autocommit(noteRelDir, `wiki: inbox/${staged.slug} Obsidian import`, 'inbox-sync');
+  const git = await autocommit(noteRelDir, `wiki: inbox/${staged.slug} Obsidian import`, {
+    name: 'inbox-sync',
+    email: 'inbox-sync@wiki.local',
+  });
   if (git === 'failed') {
     console.error(`[wiki inbox] git commit FAILED for ${noteRelDir} — the import is on disk but not committed`);
   }

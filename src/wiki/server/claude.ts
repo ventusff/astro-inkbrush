@@ -300,7 +300,7 @@ async function runEditJob(opts: {
     const git = await autocommit(
       changes.map((c) => c.rel),
       opts.commitMessage,
-      opts.user.name,
+      opts.user,
     );
     stream.write({
       kind: 'result',

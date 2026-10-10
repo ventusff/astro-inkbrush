@@ -49,11 +49,11 @@ test('with skipCi the autocommit message carries [skip ci] as a trailing line of
   setConfigInput({ autocommit: true, skipCi: true, content: { dir: 'src/content/notes' } });
   try {
     const { autocommit } = await import('../src/wiki/server/source.ts');
-    assert.equal(await autocommit('src/content/notes/a.md', 'wiki: a L1-1 manual edit', 'Tester'), 'committed');
+    assert.equal(await autocommit('src/content/notes/a.md', 'wiki: a L1-1 manual edit', { name: 'Tester', email: 'tester@corp.test' }), 'committed');
   } finally {
     setConfigInput(null);
     setProjectRoot(cwd);
   }
   assert.equal(git('log', '-1', '--format=%B').trimEnd(), 'wiki: a L1-1 manual edit\n\n[skip ci]');
-  assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'Tester <wiki@local>');
+  assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'Tester <tester@corp.test>');
 });

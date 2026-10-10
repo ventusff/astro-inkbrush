@@ -613,7 +613,7 @@ export async function setOverrides(unit: string, peer: SyndicationPeer, fields: 
     () => {
       if (before !== after) journalRevision({ ts: Date.now(), user: user.email, note: unit, lines, via: 'manual', before, after });
     },
-    () => autocommit(located.rel, `wiki: ${unit} syndication overrides for ${peer.id}`, user.name),
+    () => autocommit(located.rel, `wiki: ${unit} syndication overrides for ${peer.id}`, user),
   );
 }
 

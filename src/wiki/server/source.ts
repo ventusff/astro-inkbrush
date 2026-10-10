@@ -254,14 +254,16 @@ let gitChain: Promise<unknown> = Promise.resolve();
 /**
  * Per-save git commit (+ optional async push) of the given project-relative
  * files or directories, executed from the content repo's own top level (so
- * paths outside content.dir but inside the repo commit too). Returns the
- * outcome; 'failed' also covers a path that lies outside the repo and
- * therefore cannot be committed.
+ * paths outside content.dir but inside the repo commit too), authored by the
+ * signed-in person who made the change — their name and email, so the
+ * repo's history (and every byline derived from it) names the real person.
+ * Returns the outcome; 'failed' also covers a path that lies outside the
+ * repo and therefore cannot be committed.
  */
 export function autocommit(
   relPaths: string | string[],
   message: string,
-  user: string,
+  author: { name: string; email: string },
 ): Promise<AutocommitResult> {
   const cfg = wikiConfig();
   if (!cfg.autocommit) return Promise.resolve('off');
@@ -293,7 +295,7 @@ export function autocommit(
       // `[skip ci]` as its own trailing line: GitHub Actions and dokploy look for
       // the marker anywhere in the message, and the subject line stays readable.
       const text = cfg.skipCi ? `${message}\n\n[skip ci]` : message;
-      await execFileP('git', ['commit', '-m', text, '--author', `${user} <wiki@local>`, '--', ...rels], {
+      await execFileP('git', ['commit', '-m', text, '--author', `${author.name} <${author.email}>`, '--', ...rels], {
         cwd: repoRoot,
       });
     } catch (err) {
@@ -379,7 +381,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
             after: source,
           }),
         // committed inside the same lock: what git stages is this save's bytes
-        () => autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!.name),
+        () => autocommit(located.rel, `wiki: ${id} L${start}-${end} manual edit`, user!),
       );
       json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },
@@ -492,7 +494,7 @@ export function registerSourceRoutes(on: RouteRegistrar): void {
             after: rec.before,
           }),
         // committed inside the same lock: what git stages is this revert's bytes
-        () => autocommit(located.rel, `wiki: ${id} revert ${rec.via} revision ${rec.id}`, user!.name),
+        () => autocommit(located.rel, `wiki: ${id} revert ${rec.via} revision ${rec.id}`, user!),
       );
       json(res, 200, git === 'failed' ? { ok: true, git: 'failed' } : { ok: true });
     },
