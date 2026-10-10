@@ -34,7 +34,7 @@ test('skipCi is off by default, on from the config, and the env flag outranks th
   assert.equal(resolvedSkipCi({}, '1'), true);
 });
 
-test('with skipCi the autocommit message carries [skip ci] as a trailing line of its own', async () => {
+test('with skipCi the autocommit message carries [skip ci] as a trailing line of its own; the author is the person, cleaned for git', async () => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), 'inkbrush-skip-ci-')));
   const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
@@ -50,10 +50,18 @@ test('with skipCi the autocommit message carries [skip ci] as a trailing line of
   try {
     const { autocommit } = await import('../src/wiki/server/source.ts');
     assert.equal(await autocommit('src/content/notes/a.md', 'wiki: a L1-1 manual edit', { name: 'Tester', email: 'tester@corp.test' }), 'committed');
+    assert.equal(git('log', '-1', '--format=%B').trimEnd(), 'wiki: a L1-1 manual edit\n\n[skip ci]');
+    assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'Tester <tester@corp.test>');
+
+    writeFileSync(join(notes, 'a.md'), '# b\n');
+    assert.equal(await autocommit('src/content/notes/a.md', 'wiki: a L1-1 manual edit', { name: 'Odd <x>\nName', email: 'odd@corp.test' }), 'committed');
+    assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'Odd x Name <odd@corp.test>');
+
+    writeFileSync(join(notes, 'a.md'), '# c\n');
+    assert.equal(await autocommit('src/content/notes/a.md', 'wiki: a L1-1 manual edit', { name: ' ', email: 'blank.name@corp.test' }), 'committed');
+    assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'blank.name <blank.name@corp.test>');
   } finally {
     setConfigInput(null);
     setProjectRoot(cwd);
   }
-  assert.equal(git('log', '-1', '--format=%B').trimEnd(), 'wiki: a L1-1 manual edit\n\n[skip ci]');
-  assert.equal(git('log', '-1', '--format=%an <%ae>').trim(), 'Tester <tester@corp.test>');
 });

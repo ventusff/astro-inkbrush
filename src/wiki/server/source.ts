@@ -247,6 +247,14 @@ export async function writeNote(
 
 export type AutocommitResult = 'off' | 'clean' | 'committed' | 'failed';
 
+/** `Name <email>` for git: a name carries no angle brackets or line breaks (git would read
+ *  them as the address), and an empty one falls back to the address's local part */
+function authorIdent({ name, email }: { name: string; email: string }): string {
+  const clean = (v: string) => v.replace(/[<>\r\n]/g, ' ').replace(/\s+/g, ' ').trim();
+  const address = clean(email);
+  return `${clean(name) || address.split('@')[0] || address} <${address}>`;
+}
+
 // git operations run one at a time behind this queue, so concurrent saves
 // cannot interleave their add/status/commit sequences
 let gitChain: Promise<unknown> = Promise.resolve();
@@ -295,7 +303,7 @@ export function autocommit(
       // `[skip ci]` as its own trailing line: GitHub Actions and dokploy look for
       // the marker anywhere in the message, and the subject line stays readable.
       const text = cfg.skipCi ? `${message}\n\n[skip ci]` : message;
-      await execFileP('git', ['commit', '-m', text, '--author', `${author.name} <${author.email}>`, '--', ...rels], {
+      await execFileP('git', ['commit', '-m', text, '--author', authorIdent(author), '--', ...rels], {
         cwd: repoRoot,
       });
     } catch (err) {
