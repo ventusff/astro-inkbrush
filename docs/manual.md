@@ -14,6 +14,7 @@ the three-touch site integration, start with the [README](../README.md).
 - [Sign-in providers & sessions](#sign-in-providers--sessions)
 - [Identity registry & members](#identity-registry--members)
 - [Sharing & the gateway contract](#sharing--the-gateway-contract)
+- [Mentions](#mentions)
 - [Wikilinks](#wikilinks)
 - [API reference](#api-reference-apiwiki)
 - [Architecture & state on disk](#architecture--state-on-disk)
@@ -109,8 +110,9 @@ CodeMirror editor over that block's MDX source, with a live server-rendered
 preview (350 ms debounce; JSX component blocks skip the preview and say so),
 `[[` autocompletion over the note's own language — its pages by id, title,
 brand and alias, spelled as a link in that language is written; another
-language opens once its prefix is typed (`[[de/`) — ⌘/Ctrl+Enter to save,
-Esc to cancel. Two gates protect every save:
+language opens once its prefix is typed (`[[de/`) — and `@` autocompletion
+over the site's members (with the identity registry on; see
+[Mentions](#mentions)) — ⌘/Ctrl+Enter to save, Esc to cancel. Two gates protect every save:
 
 - **Optimistic lock** — the block's content hash travels with the edit; if
   someone else changed it meanwhile the save is refused (409) and you're
@@ -251,8 +253,9 @@ CI, never through a connection between the two servers. See
 ### The account chip
 
 Shows the signed-in user (and role, when the identity registry is on),
-offers whichever sign-in providers are enabled, and hosts the admin Members
-panel. Mounts into `[data-inkbrush-slot="account"]` when your chrome
+offers whichever sign-in providers are enabled, lets a member rename
+themself (the pencil beside their name), and opens the admins' Members
+dialog. Mounts into `[data-inkbrush-slot="account"]` when your chrome
 provides it, else floats fixed top-right (`--wiki-chip-top` /
 `--wiki-chip-right` to nudge it). The block handle's viewport clamping
 respects `[data-inkbrush-sticky]` (falling back to a `.site-nav` element)
@@ -485,8 +488,16 @@ characters never do, and off-site origins must be in `trustedOrigins`.
 ## Identity registry & members
 
 `identity: { dir }` enables a file-based registry: `<dir>/users.json`,
-plain JSON `[{ email, name, role }]`, shareable on disk with other apps on
-the same machine. The role vocabulary, the default role for first-time SSO
+plain JSON `[{ email, name, role, aliases? }]`, shareable on disk with other
+apps on the same machine. The registry's `name` is how a member is named
+everywhere — the account chip, comments, revision history, the author of
+their site saves' commits — from their next request on; `aliases` are the
+other addresses their git commits carry (a personal address, an old
+laptop's), so a site that credits notes from git history
+(`astro-inkbrush/people`'s `peopleIndex(...).identify`) counts those
+commits as theirs. A member's **handle** is their email's local part
+(`jane.doe@team.com` → `jane.doe`; where two members share one across
+domains, each adds its domain's first label) — what `@` mentions write. The role vocabulary, the default role for first-time SSO
 sign-ins, and the admin role name are all configurable (`roles` /
 `defaultRole` / `adminRole`). While the registry is on, **every signed-in
 route requires current membership** — a session whose user was removed
@@ -499,9 +510,14 @@ from the list is refused (403) on its next request.
   domain join with `defaultRole`; `false` turns the registry into an
   allow-list that only admins extend — unknown users are sent back with
   `?login_error=not_member`.
-- Admins manage members from the account popover's **Members** panel; the
-  server validates the vocabulary and enforces that at least one admin
-  always remains.
+- Admins manage members in the **Members** dialog (account popover →
+  Members): rename in place, add or remove commit addresses, change roles,
+  add and remove members (removal asks twice; an admin cannot remove
+  themself there). The server validates the vocabulary, the names (one
+  line, at most 60 characters, no `<` `>`), that no address belongs to two
+  members, and that at least one admin always remains.
+- Every member renames themself from the account popover
+  (`PUT /identity/me`), validated the same way.
 - Writes are atomic (tmp + rename); a corrupt file refuses to degrade into
   an empty registry.
 
@@ -978,6 +994,29 @@ can stage under any accepted name (see `--origins` above).
   `main` is exactly the commit the checks ran on, and a submission
   replaced during the run is neither judged by its findings nor deleted.
 
+## Mentions
+
+`@handle` names a member of the identity registry: `@jane.doe` renders as
+a link to the member's page showing their current name
+(`<a class="mention" data-mention="jane.doe">Jane Doe</a>`), in notes and
+in the editor preview. The `@` must not follow an ASCII letter, digit or
+one of `_ . / \ @ -` (so `jane@team.com`, `pkg/@scope` and paths stay
+text); any other character before it is fine, a CJK one included. The
+handle ends at its last letter or digit, so trailing punctuation stays
+text; a handle followed by another `@` is part of an address. A `\@`
+stays literal, code and links are never entered, and an `@word` that is
+no member's handle stays as written. The source keeps the handle, never
+the name, so a renamed member is renamed in every note, and translations
+carry `@handle` verbatim (the translation contract says so).
+
+The grammar and remark transform are `astro-inkbrush/mentions`
+(`remarkMentions({ resolve })`, `mentionedHandles(source)` for indexes;
+browser-safe). Resolution is the site's: `resolve(handle)` returns
+`{ name, url }` or undefined — `astro-inkstone`'s `sitePluginSets({
+mentions: { resolve } })` mounts it. The editor completes `@` from
+`GET /identity/people`: each member's initial, name and handle, ranked
+handle or name-word prefix first; selecting writes `@handle`.
+
 ## Wikilinks
 
 `[[target]]`, `[[target|label]]`, `[[target#anchor]]` — available in notes
@@ -1030,7 +1069,9 @@ the caller's registry role equals `adminRole`; module off ⇒ these routes
 | `POST /comments/<id>` | signed-in | New comment (413 over 10,000 chars) |
 | `DELETE /comments/<id>?cid=` | signed-in | Own comments only (403 otherwise) |
 | `GET /identity/users` | admin | Members + role vocabulary |
-| `PUT /identity/users` | admin | Full-list overwrite (validated; last admin protected) |
+| `PUT /identity/users` | admin | Full-list overwrite (validated: names, roles, one owner per address; last admin protected) |
+| `GET /identity/people` | signed-in | Every member's `{handle, name}` — what `@` completes |
+| `PUT /identity/me` | signed-in | `{name}`: the caller renames themself |
 | `POST /share` | signed-in | Create share — `{note, visibility?, password?, alias?, expiresDays?}` (no visibility = password); NDJSON `progress…` → `result`; 409 when the note already has an active share |
 | `POST /share/<id>/visibility` | signed-in | Change who can read — `{visibility, password?, alias?}`, the rules of creation; NDJSON `progress…` → `result`; creator or admin (403 otherwise); 409 while a publish is running |
 | `GET /share?note=<id>` | signed-in | Active shares for a note (the note parameter is required); each record carries `canRevoke` for the requester, `stale`/`noteChangedAt` against the published version, and the response the deployment's `followIdleMinutes` |

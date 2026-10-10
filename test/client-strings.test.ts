@@ -83,7 +83,7 @@ test('a German or English table carries no Chinese, a Chinese one is not the Eng
     // the entries that are names, terms or sample addresses read the same
     // in every language
     const same = texts(STRINGS[locale]).filter(([path, text]) => en.get(path) === text && /[a-z]{4}/i.test(text));
-    const allowed = /^(auth\.(provider\.\w|emailPlaceholder)|identity\.(emailPlaceholder|colName|namePlaceholder)|share\.link|sync\.copy\.revision)/;
+    const allowed = /^(auth\.(provider\.\w|emailPlaceholder)|identity\.(emailPlaceholder|aliasPlaceholder|colName|namePlaceholder)|share\.link|sync\.copy\.revision)/;
     for (const [path, text] of same) {
       assert.match(path, allowed, `${locale} ${path} is still English: ${text}`);
     }

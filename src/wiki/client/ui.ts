@@ -102,13 +102,27 @@ export function icon(
  */
 let toastRegions: { status: HTMLElement; alert: HTMLElement } | null = null;
 
+let toastStack: HTMLElement | null = null;
+
 function regionFor(kind: 'ok' | 'err'): HTMLElement {
   if (!toastRegions) {
     const status = h('div', { class: 'wiki-toast-region', role: 'status', 'aria-live': 'polite' });
     const alert = h('div', { class: 'wiki-toast-region', role: 'alert' });
-    document.body.append(h('div', { class: 'wiki-toasts' }, status, alert));
+    // a manual popover: it lives in the top layer, above whatever is open
+    toastStack = h('div', { class: 'wiki-toasts', popover: 'manual' }, status, alert);
     toastRegions = { status, alert };
   }
+  const stack = toastStack!;
+  // inside an open modal dialog — outside it everything is inert, and an
+  // inert live region is not announced
+  const home = document.querySelector('dialog:modal') ?? document.body;
+  if (stack.parentElement !== home) {
+    if (stack.matches(':popover-open')) stack.hidePopover();
+    home.append(stack);
+  }
+  // re-entering the top layer puts the stack above whatever opened since
+  if (stack.matches(':popover-open')) stack.hidePopover();
+  stack.showPopover();
   return kind === 'err' ? toastRegions.alert : toastRegions.status;
 }
 

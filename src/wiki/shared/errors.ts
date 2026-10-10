@@ -54,6 +54,10 @@ export interface WikiErrorParams {
   'members-duplicate': { email: string };
   'members-role': { role: string; roles: string[] };
   'members-admin': { role: string };
+  'members-name': { email: string; max: number };
+  'members-alias': { email: string; alias: string };
+  'members-alias-taken': { alias: string; owner: string };
+  'members-stale': {};
 
   /* —— notes, blocks and revisions —— */
   'note-not-found': {};
@@ -225,6 +229,10 @@ export const ENGLISH_ERRORS: ErrorTable = {
   'members-duplicate': ({ email }) => `Duplicate email: ${email}`,
   'members-role': ({ role, roles }) => `Unknown role '${role}' (allowed: ${roles.join(', ')})`,
   'members-admin': ({ role }) => `At least one '${role}' must remain`,
+  'members-name': ({ email, max }) => `The name of ${email} must be 1–${max} characters on one line, without < or >`,
+  'members-alias': ({ email, alias }) => `Other address '${alias}' of ${email} is not an email address`,
+  'members-alias-taken': ({ alias, owner }) => `${alias} already belongs to ${owner}`,
+  'members-stale': () => 'The members list changed meanwhile — it has been reloaded; make the change again',
 
   'note-not-found': () => 'Note not found',
   'note-ambiguous': ({ id }) => `Note '${id}' has both index.md and index.mdx — remove one of them`,

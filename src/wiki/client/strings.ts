@@ -121,19 +121,41 @@ export interface Strings {
     noProviders: string;
     role: (role: string | null | undefined) => string;
     members: string;
+    rename: string;
+    nameField: string;
+    renamedSelf: (name: string) => string;
   };
   identity: {
     title: string;
+    count: (n: number) => string;
+    lede: string;
+    searchPlaceholder: string;
+    close: string;
+    noMatch: (query: string) => string;
+    nameLabel: (email: string) => string;
+    renamed: (name: string) => string;
+    you: string;
+    roleLabel: (name: string) => string;
+    aliasesLabel: string;
+    aliasHint: string;
+    aliasPlaceholder: string;
+    addAlias: string;
+    addAliasLabel: (name: string) => string;
+    removeAlias: (alias: string) => string;
+    aliasAdded: (alias: string) => string;
+    addTitle: string;
     colEmail: string;
     colName: string;
     colRole: string;
-    colActions: string;
     namePlaceholder: string;
     emailPlaceholder: string;
     add: string;
+    added: (name: string) => string;
     remove: string;
-    removeLabel: (email: string) => string;
-    confirmRemove: (email: string) => string;
+    removeLabel: (name: string) => string;
+    confirmRemove: (name: string) => string;
+    confirmRemoveShort: string;
+    removed: (name: string) => string;
     saved: string;
     saveFailed: string;
     loadFailed: string;
@@ -412,6 +434,7 @@ const EN_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Google sign-in failed.',
   wrong_domain: 'Your account is not in an allowed email domain.',
   not_member: 'Your account is not a member of this site.',
+  member_conflict: 'This address is listed as another member’s commit address. Ask an admin to sort it out in Members.',
 };
 
 const en: Strings = {
@@ -464,24 +487,46 @@ const en: Strings = {
     noProviders: 'No sign-in method enabled (configure inkbrush.config.ts → auth)',
     role: (role) => `Role: ${role ?? '—'}`,
     members: 'Members',
+    rename: 'Change your name',
+    nameField: 'Your name',
+    renamedSelf: (name) => `You are now ${name}`,
   },
   identity: {
     title: 'Members',
+    count: (n) => (n === 1 ? '1 person' : `${n} people`),
+    lede: 'A name shows in bylines, mentions, comments and the revision history. Commit addresses make the commits that carry them count as that person’s.',
+    searchPlaceholder: 'Find by name or address',
+    close: 'Close',
+    noMatch: (q) => `Nobody matches “${q}”.`,
+    nameLabel: (email) => `Name of ${email}`,
+    renamed: (name) => `Renamed to ${name}`,
+    you: 'You',
+    roleLabel: (name) => `Role of ${name}`,
+    aliasesLabel: 'Commit addresses',
+    aliasHint: 'Other addresses this person’s git commits carry, such as a personal address',
+    aliasPlaceholder: 'name@example.com',
+    addAlias: 'Add address',
+    addAliasLabel: (name) => `Add a commit address for ${name}`,
+    removeAlias: (alias) => `Remove ${alias}`,
+    aliasAdded: (alias) => `Added ${alias}`,
+    addTitle: 'Add a member',
     colEmail: 'Email',
     colName: 'Name',
     colRole: 'Role',
-    colActions: 'Actions',
     namePlaceholder: 'Name',
     emailPlaceholder: 'name@team.com',
     add: 'Add',
+    added: (name) => `Added ${name}`,
     remove: 'Remove',
-    removeLabel: (email) => `Remove ${email}`,
-    confirmRemove: (email) => `Remove ${email}?`,
-    saved: 'Members saved',
+    removeLabel: (name) => `Remove ${name}`,
+    confirmRemove: (name) => `Click again to remove ${name}`,
+    confirmRemoveShort: 'Remove?',
+    removed: (name) => `Removed ${name}`,
+    saved: 'Saved',
     saveFailed: 'Save failed',
     loadFailed: 'Failed to load members',
-    emailRequired: 'Valid email required',
-    adminNote: (role) => `At least one '${role}' is always kept (server-enforced)`,
+    emailRequired: 'Enter an email address',
+    adminNote: (role) => `At least one “${role}” always stays.`,
   },
   blocks: {
     toolbar: 'Block tools',
@@ -897,6 +942,10 @@ const ZH_ERRORS: ErrorTable = {
   'members-duplicate': ({ email }) => `邮箱重复：${email}`,
   'members-role': ({ role, roles }) => `未知角色「${role}」（可选：${roles.join('、')}）`,
   'members-admin': ({ role }) => `至少要保留一名「${role}」`,
+  'members-name': ({ email, max }) => `${email} 的名字要写在一行里，1 到 ${max} 个字，不能含 < 或 >`,
+  'members-alias': ({ email, alias }) => `${email} 的其他邮箱「${alias}」不是邮箱地址`,
+  'members-alias-taken': ({ alias, owner }) => `${alias} 已经属于 ${owner}`,
+  'members-stale': () => '成员表刚被别人改过，已经刷新，请再改一次',
 
   'note-not-found': () => '找不到这篇笔记',
   'note-ambiguous': ({ id }) => `笔记「${id}」同时有 index.md 和 index.mdx，请删掉其中一个`,
@@ -1008,6 +1057,7 @@ const ZH_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Google 登录失败。',
   wrong_domain: '你的账号不在允许的邮箱域名内。',
   not_member: '你的账号不是本站成员。',
+  member_conflict: '这个邮箱登记在另一位成员的提交邮箱里，请管理员在「成员」里处理。',
 };
 
 const zh: Strings = {
@@ -1058,24 +1108,46 @@ const zh: Strings = {
     noProviders: '未启用任何登录方式（配置 inkbrush.config.ts → auth）',
     role: (role) => `角色：${role ?? '—'}`,
     members: '成员管理',
+    rename: '修改你的名字',
+    nameField: '你的名字',
+    renamedSelf: (name) => `名字已改为 ${name}`,
   },
   identity: {
-    title: '成员管理',
+    title: '成员',
+    count: (n) => `${n} 人`,
+    lede: '名字会显示在笔记署名、@提及、评论和修订记录里。提交邮箱：git 提交带着这些邮箱时，算作这个人的提交。',
+    searchPlaceholder: '按名字或邮箱查找',
+    close: '关闭',
+    noMatch: (q) => `没有人对得上「${q}」。`,
+    nameLabel: (email) => `${email} 的名字`,
+    renamed: (name) => `已改名为 ${name}`,
+    you: '你',
+    roleLabel: (name) => `${name} 的角色`,
+    aliasesLabel: '提交邮箱',
+    aliasHint: '这个人的 git 提交用过的其他邮箱，比如个人邮箱',
+    aliasPlaceholder: 'name@example.com',
+    addAlias: '添加邮箱',
+    addAliasLabel: (name) => `给 ${name} 添加提交邮箱`,
+    removeAlias: (alias) => `移除 ${alias}`,
+    aliasAdded: (alias) => `已添加 ${alias}`,
+    addTitle: '添加成员',
     colEmail: '邮箱',
-    colName: '姓名',
+    colName: '名字',
     colRole: '角色',
-    colActions: '操作',
-    namePlaceholder: '姓名',
+    namePlaceholder: '名字',
     emailPlaceholder: 'name@team.com',
     add: '添加',
+    added: (name) => `已添加 ${name}`,
     remove: '移除',
-    removeLabel: (email) => `移除 ${email}`,
-    confirmRemove: (email) => `移除 ${email}？`,
-    saved: '成员表已保存',
+    removeLabel: (name) => `移除 ${name}`,
+    confirmRemove: (name) => `再点一次，移除 ${name}`,
+    confirmRemoveShort: '确认移除？',
+    removed: (name) => `已移除 ${name}`,
+    saved: '已保存',
     saveFailed: '保存失败',
     loadFailed: '成员列表加载失败',
-    emailRequired: '需要有效邮箱',
-    adminNote: (role) => `服务端强制至少保留一名「${role}」`,
+    emailRequired: '请填写邮箱地址',
+    adminNote: (role) => `至少保留一名「${role}」。`,
   },
   blocks: {
     toolbar: '块工具',
@@ -1468,6 +1540,7 @@ const DE_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Die Google-Anmeldung ist fehlgeschlagen.',
   wrong_domain: 'Dein Konto gehört zu keiner zugelassenen E-Mail-Domain.',
   not_member: 'Dein Konto ist kein Mitglied dieser Website.',
+  member_conflict: 'Diese Adresse ist als Commit-Adresse eines anderen Mitglieds eingetragen. Bitte eine Admin-Person bitten, das unter „Mitglieder“ zu klären.',
 };
 
 const DE_SHARE_ACTION: Record<ShareAction, string> = {
@@ -1506,6 +1579,10 @@ const DE_ERRORS: ErrorTable = {
   'members-duplicate': ({ email }) => `E-Mail-Adresse doppelt: ${email}`,
   'members-role': ({ role, roles }) => `Unbekannte Rolle „${role}“ (erlaubt: ${roles.join(', ')})`,
   'members-admin': ({ role }) => `Mindestens ein „${role}“ muss bleiben`,
+  'members-name': ({ email, max }) => `Der Name von ${email} muss in einer Zeile stehen, 1–${max} Zeichen, ohne < oder >`,
+  'members-alias': ({ email, alias }) => `Weitere Adresse „${alias}“ von ${email} ist keine E-Mail-Adresse`,
+  'members-alias-taken': ({ alias, owner }) => `${alias} gehört bereits zu ${owner}`,
+  'members-stale': () => 'Die Mitgliederliste wurde inzwischen geändert und neu geladen – bitte die Änderung noch einmal machen',
 
   'note-not-found': () => 'Notiz nicht gefunden',
   'note-ambiguous': ({ id }) => `Die Notiz „${id}“ hat sowohl index.md als auch index.mdx – entferne eine davon`,
@@ -1652,24 +1729,46 @@ const de: Strings = {
     noProviders: 'Keine Anmeldemethode aktiviert (in inkbrush.config.ts → auth einrichten)',
     role: (role) => `Rolle: ${role ?? '—'}`,
     members: 'Mitglieder',
+    rename: 'Namen ändern',
+    nameField: 'Dein Name',
+    renamedSelf: (name) => `Du heißt jetzt ${name}`,
   },
   identity: {
     title: 'Mitglieder',
+    count: (n) => (n === 1 ? '1 Person' : `${n} Personen`),
+    lede: 'Der Name erscheint in Autorenzeilen, Erwähnungen, Kommentaren und im Änderungsverlauf. Commit-Adressen: Git-Commits mit diesen Adressen zählen als Commits dieser Person.',
+    searchPlaceholder: 'Nach Name oder Adresse suchen',
+    close: 'Schließen',
+    noMatch: (q) => `Niemand passt zu „${q}“.`,
+    nameLabel: (email) => `Name von ${email}`,
+    renamed: (name) => `Umbenannt in ${name}`,
+    you: 'Du',
+    roleLabel: (name) => `Rolle von ${name}`,
+    aliasesLabel: 'Commit-Adressen',
+    aliasHint: 'Weitere Adressen in den Git-Commits dieser Person, etwa eine private Adresse',
+    aliasPlaceholder: 'name@example.com',
+    addAlias: 'Adresse hinzufügen',
+    addAliasLabel: (name) => `Commit-Adresse für ${name} hinzufügen`,
+    removeAlias: (alias) => `${alias} entfernen`,
+    aliasAdded: (alias) => `${alias} hinzugefügt`,
+    addTitle: 'Mitglied hinzufügen',
     colEmail: 'E-Mail',
     colName: 'Name',
     colRole: 'Rolle',
-    colActions: 'Aktionen',
     namePlaceholder: 'Name',
     emailPlaceholder: 'name@team.com',
     add: 'Hinzufügen',
+    added: (name) => `${name} hinzugefügt`,
     remove: 'Entfernen',
-    removeLabel: (email) => `${email} entfernen`,
-    confirmRemove: (email) => `${email} entfernen?`,
-    saved: 'Mitgliederliste gespeichert',
+    removeLabel: (name) => `${name} entfernen`,
+    confirmRemove: (name) => `Noch einmal klicken, um ${name} zu entfernen`,
+    confirmRemoveShort: 'Entfernen?',
+    removed: (name) => `${name} entfernt`,
+    saved: 'Gespeichert',
     saveFailed: 'Speichern fehlgeschlagen',
-    loadFailed: 'Die Mitgliederliste konnte nicht geladen werden',
-    emailRequired: 'Eine gültige E-Mail-Adresse ist nötig',
-    adminNote: (role) => `Mindestens ein „${role}“ bleibt immer erhalten (vom Server erzwungen)`,
+    loadFailed: 'Mitglieder konnten nicht geladen werden',
+    emailRequired: 'Bitte eine E-Mail-Adresse eingeben',
+    adminNote: (role) => `Mindestens ein „${role}“ bleibt immer.`,
   },
   blocks: {
     toolbar: 'Block-Werkzeuge',

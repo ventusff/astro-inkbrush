@@ -12,6 +12,7 @@ Invariants (check each one):
 - Math keeps its structure and LaTeX notation ($…$ and $$…$$) untouched, BUT every piece of natural-language text inside a formula must be 中文 — \text{…}/\mathrm{…}/\operatorname{…}, words in subscripts, \underbrace/\overbrace annotations, \textbf/\textit. No source-language characters may survive inside any formula.
 - Code blocks keep their logic untouched, BUT comments (including end-of-line ones), natural-language words in pseudocode and user-visible string literals are translated into 中文; where the original had bilingual comments, keep only the 中文 half. No source-language characters may survive inside any code block (except examples that deliberately showcase such data).
 - Image paths unchanged; captions translated.
+- A mention of a person — `@` followed by their handle, such as `@jane.doe` — is kept verbatim: the handle is an identifier, the page shows the person's name.
 - JSX component tags and their prop structure stay unchanged; reader-facing copy props (title, kicker, caption slots, …) are translated, machine props (id, demo, canvas, …) are not.
 - Reference entries: paper titles, authors and venues stay in their original language; descriptive text is translated.
 - Every frontmatter copy field (title, description and the like) is rewritten in 中文; structural fields are preserved verbatim.

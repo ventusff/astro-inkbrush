@@ -33,7 +33,9 @@ export type LoginErrorCode =
   /** the account's email is outside the allowed domains */
   | 'wrong_domain'
   /** the account is not registered on this site */
-  | 'not_member';
+  | 'not_member'
+  /** the account's address is recorded as another member's commit address, so it cannot join on its own */
+  | 'member_conflict';
 
 /** provider availability as the client sees it (google & googleSaml alike):
  *  'off' = disabled in inkbrush.config.ts (button not rendered) · 'ready' =
@@ -44,8 +46,13 @@ export type GoogleAuthState = 'off' | 'ready' | 'unconfigured';
 /** identity registry entry — plain users.json format, shareable across sibling apps */
 export interface IdentityUser {
   email: string;
+  /** how the member is named everywhere: bylines, mentions, comments, history, commits */
   name: string;
   role: string;
+  /** what follows `@` in a mention of them; given once (lib/people.ts) and kept */
+  handle?: string;
+  /** other addresses the member's git commits carry (a personal address, an old laptop's), so their commits are theirs */
+  aliases?: string[];
 }
 
 /** GET /api/wiki/me */
@@ -82,10 +89,24 @@ export interface MeResponse {
  *  { users } as a full overwrite */
 export interface IdentityUsersResponse {
   users: IdentityUser[];
+  /** the registry's version: a PUT that names an older one is refused (409), so one admin never overwrites another's change */
+  revision: string;
   /** configured role vocabulary (for the role dropdown) */
   roles: string[];
   defaultRole: string;
   adminRole: string;
+}
+
+/** one member as every signed-in member sees them: for `@` mentions and bylines */
+export interface PersonView {
+  /** what follows `@` in a mention: the email's local part */
+  handle: string;
+  name: string;
+}
+
+/** GET /api/wiki/identity/people (members) */
+export interface PeopleResponse {
+  people: PersonView[];
 }
 
 /** locale code from the deployment's locale table (default: 'zh' | 'en' | 'de') */

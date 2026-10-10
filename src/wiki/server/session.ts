@@ -20,11 +20,13 @@ import type { IncomingMessage } from 'node:http';
 
 import type { WikiUser } from '../shared/types.ts';
 import { sessionUser } from './auth.ts';
+import { named } from './identity-store.ts';
 
 export type { WikiUser };
 
-/** validate the session cookie and return the identity; no cookie / bad
- *  signature / expired all yield null */
-export function currentUser(req: IncomingMessage): Promise<WikiUser | null> {
-  return sessionUser(req);
+/** validate the session cookie and return the identity — under the
+ *  identity registry's name for the user when the registry is on; no
+ *  cookie / bad signature / expired all yield null */
+export async function currentUser(req: IncomingMessage): Promise<WikiUser | null> {
+  return named(await sessionUser(req));
 }

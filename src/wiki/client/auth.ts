@@ -14,8 +14,9 @@
  */
 import type { GoogleAuthState, MeResponse, SyndicationPeerInfo, WikiUser } from '../shared/types';
 import { api } from './api';
+import { PEOPLE_CHANGED } from './people-events';
 import { errorText, S } from './strings';
-import { dismissPopover, h, popover, toast, uid } from './ui';
+import { dismissPopover, h, icon, popover, toast, uid } from './ui';
 
 let me: MeResponse = { user: null, providers: { dev: false, google: 'off', googleSaml: 'off' }, share: 'off' };
 const listeners = new Set<(user: WikiUser | null) => void>();
@@ -170,7 +171,56 @@ function signedOutPanel(rerender: () => void): HTMLElement {
   );
 }
 
-function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement): HTMLElement {
+/** the member's own name, renamed in place where the identity module is on:
+ *  the pencil opens a field, Enter or leaving it saves, Escape keeps the name */
+function nameLine(user: WikiUser, rerender: () => void): HTMLElement {
+  const line = h('div', { class: 'wiki-auth-name' }, user.name);
+  if (me.siteRole === undefined) return line;
+  const edit = h('button', { type: 'button', class: 'wiki-auth-rename', 'aria-label': S.auth.rename, title: S.auth.rename }, icon('pencil'));
+  edit.addEventListener('click', () => {
+    const field = h('input', { class: 'wiki-auth-name-field', value: user.name, maxlength: 60, 'aria-label': S.auth.nameField });
+    let done = false;
+    const finish = async (keep: boolean): Promise<void> => {
+      if (done) return;
+      done = true;
+      const name = field.value.trim();
+      if (keep || name === '' || name === user.name) {
+        wrap.replaceWith(nameLine(user, rerender));
+        return;
+      }
+      field.disabled = true;
+      try {
+        const res = await api.put<{ name: string }>('/identity/me', { name });
+        if (me.user) me.user = { ...me.user, name: res.name };
+        notify();
+        window.dispatchEvent(new Event(PEOPLE_CHANGED));
+        toast(S.auth.renamedSelf(res.name));
+      } catch (err) {
+        toast(errorText(err, S.identity.saveFailed), 'err');
+      }
+      rerender();
+      wrap.replaceWith(nameLine(me.user ?? user, rerender));
+    };
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void finish(false);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        void finish(true);
+      }
+    });
+    field.addEventListener('blur', () => void finish(false));
+    wrap.replaceChildren(field);
+    field.focus();
+    field.select();
+  });
+  const wrap = h('div', { class: 'wiki-auth-name-row' }, line, edit);
+  return wrap;
+}
+
+function signedInPanel(user: WikiUser, rerender: () => void): HTMLElement {
   return h(
     'div',
     { class: 'wiki-auth-panel' },
@@ -178,7 +228,7 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
       'div',
       { class: 'wiki-auth-id' },
       avatar(user),
-      h('div', {}, h('div', { class: 'wiki-auth-name' }, user.name), h('div', { class: 'wiki-auth-email' }, user.email)),
+      h('div', {}, nameLine(user, rerender), h('div', { class: 'wiki-auth-email' }, user.email)),
     ),
     h('div', { class: 'wiki-auth-provider' }, S.auth.provider[user.provider]),
     // identity module on → show the registry role (unregistered = —)
@@ -192,8 +242,9 @@ function signedInPanel(user: WikiUser, rerender: () => void, anchor: HTMLElement
             type: 'button',
             class: 'wiki-btn',
             onclick: async () => {
-              const { openMembersPanel } = await import('./identity');
-              await openMembersPanel(anchor);
+              dismissPopover();
+              const { openMembersDialog } = await import('./identity');
+              await openMembersDialog(user.email);
             },
           },
           S.auth.members,
@@ -257,7 +308,7 @@ export async function mountAuthChip(): Promise<void> {
   render();
   chip.addEventListener('click', () => {
     const rerender = (): void => render();
-    popover(chip, me.user ? signedInPanel(me.user, rerender, chip) : signedOutPanel(rerender), {
+    popover(chip, me.user ? signedInPanel(me.user, rerender) : signedOutPanel(rerender), {
       label: me.user ? S.auth.accountPanel : S.auth.panelTitle,
     });
   });

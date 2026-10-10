@@ -143,6 +143,16 @@
 .wiki-handle button:focus-visible,
 .wiki-ai-quick button:focus-visible,
 .wiki-members-remove:focus-visible,
+.wiki-members-close:focus-visible,
+.wiki-members-search:focus-visible,
+.wiki-members-alias-x:focus-visible,
+.wiki-members-alias-add:focus-visible,
+.wiki-members-alias-input:focus-visible,
+.wiki-members-role:focus-visible,
+.wiki-members-name:focus-visible,
+.wiki-members-add input:focus-visible,
+.wiki-auth-rename:focus-visible,
+.wiki-auth-name-field:focus-visible,
 .wiki-comment-del:focus-visible,
 .wiki-comment-signin button:focus-visible,
 .wiki-history-diff summary:focus-visible,
@@ -413,90 +423,398 @@
   align-self: flex-start;
 }
 
-/* ---------------- members panel (identity module) ---------------- */
+/* ---------------- members dialog (identity module) ----------------
+   A modal <dialog>: a header with the count, search and close; one row per
+   member (initial disc · name edited in place over handle and email over
+   the commit-address chips · role and remove); the add form at the foot.
+   The disc is the only color: accent for admins, the second accent for
+   everyone else. Controls that read as text until touched (the name) show
+   a hairline on hover and a field on focus. */
 
-.wiki-popover:has(.wiki-members) {
-  min-width: min(400px, calc(100vw - 2rem));
-  max-width: min(480px, calc(100vw - 2rem));
-}
 .wiki-members {
+  /* a modal dialog sits in the top layer, centered; the host's resets
+     (margins, heading rules) never reach inside it */
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(760px, calc(100vw - 32px));
+  height: fit-content;
+  max-height: min(84vh, 860px);
+  padding: 0;
+  border: 1px solid var(--wiki-line);
+  border-radius: 14px;
+  background: var(--wiki-surface);
+  color: var(--wiki-on-surface);
+  box-shadow: var(--wiki-shadow);
+  font: 400 13px/1.45 var(--wiki-font);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-.wiki-members-table {
-  width: 100%;
-  border-collapse: collapse;
-  font: 400 12.5px/1.4 var(--wiki-font);
-}
-.wiki-members-table th {
-  font: 600 10.5px/1 var(--wiki-font);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--wiki-faint);
-  text-align: left;
-  padding: 0 8px 6px 0;
-  border-bottom: 1px solid var(--wiki-line);
-}
-.wiki-members-table td {
-  padding: 5px 8px 5px 0;
-  border-bottom: 1px solid var(--wiki-line);
-  vertical-align: middle;
-}
-.wiki-members-email,
-.wiki-members-name {
-  max-width: 150px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.wiki-members-email {
+.wiki-members:not([open]) {
+  display: none;
+}
+.wiki-members::backdrop {
+  background: color-mix(in srgb, var(--wiki-on-surface) 22%, transparent);
+  backdrop-filter: blur(2px);
+}
+.wiki-members-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px 6px 24px;
+}
+.wiki-members-head h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: 650 19px/1.2 var(--wiki-font);
+  color: var(--wiki-on-surface);
+  counter-increment: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1;
+}
+.wiki-members-count {
+  font: 500 12.5px/1 var(--wiki-font);
+  color: var(--wiki-faint);
+}
+.wiki-members-search {
+  width: min(240px, 40vw);
+  padding: 7px 11px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 8px;
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
+  font: 400 13px/1.3 var(--wiki-font);
+}
+.wiki-members-search:focus {
+  border-color: var(--wiki-accent);
+}
+.wiki-members-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--wiki-muted);
+  cursor: pointer;
+}
+.wiki-members-close:hover {
+  background: color-mix(in srgb, var(--wiki-on-surface) 6%, transparent);
+  color: var(--wiki-on-surface);
+}
+.wiki-members-head h2::before,
+.wiki-members-head h2::after {
+  content: none;
+}
+.wiki-members-lede {
+  margin: 0;
+  padding: 0 24px 14px;
+  max-width: 64ch;
+  font: 400 12.5px/1.55 var(--wiki-font);
   color: var(--wiki-muted);
 }
-select.wiki-members-role {
-  width: auto;
-  padding: 3px 6px;
-  font-size: 12px;
+.wiki-members-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--wiki-line);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
-.wiki-members-remove {
+.wiki-members-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: start;
+  padding: 14px 24px;
+}
+.wiki-members-row + .wiki-members-row {
+  border-top: 1px solid color-mix(in srgb, var(--wiki-line) 70%, transparent);
+}
+.wiki-members-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 650 15px/1 var(--wiki-font);
+  color: var(--wiki-ai);
+  background: color-mix(in srgb, var(--wiki-ai) 14%, transparent);
+}
+.wiki-members-mark.admin {
+  color: var(--wiki-accent);
+  background: color-mix(in srgb, var(--wiki-accent) 14%, transparent);
+}
+.wiki-members-who {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+input.wiki-members-name {
+  width: 100%;
+  max-width: 28ch;
+  margin: -3px 0 0 -7px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wiki-on-surface);
+  font: 600 15px/1.35 var(--wiki-font);
+  text-overflow: ellipsis;
+}
+input.wiki-members-name:hover {
+  border-color: var(--wiki-line);
+}
+input.wiki-members-name:focus {
+  border-color: var(--wiki-accent);
+  background: var(--wiki-field);
+}
+.wiki-members-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font: 400 12px/1.5 var(--wiki-mono);
+  color: var(--wiki-faint);
+  overflow-wrap: anywhere;
+}
+.wiki-members-handle {
+  color: var(--wiki-muted);
+}
+.wiki-members-aliases {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 6px;
+}
+.wiki-members-aliases-label {
+  flex: 0 0 auto;
+  font: 500 11.5px/1.9 var(--wiki-font);
+  color: var(--wiki-faint);
+  cursor: help;
+}
+.wiki-members-aliases > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.wiki-members-alias {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 1px 2px 1px 8px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 999px;
+  font: 400 11.5px/1.6 var(--wiki-mono);
+  color: var(--wiki-muted);
+  overflow-wrap: anywhere;
+}
+.wiki-members-alias-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   border: 0;
+  border-radius: 50%;
   background: none;
   color: var(--wiki-faint);
-  font: 500 11px/1 var(--wiki-font);
   cursor: pointer;
-  /* >=24px hit target; the negative block margin keeps the row height */
-  min-width: 24px;
-  min-height: 24px;
-  padding: 6px 4px;
-  margin: -6px 0;
+}
+.wiki-members-alias-x svg {
+  width: 11px;
+  height: 11px;
+}
+.wiki-members-alias-x:hover {
+  color: var(--wiki-danger);
+  background: color-mix(in srgb, var(--wiki-danger) 10%, transparent);
+}
+.wiki-members-alias-add {
+  border: 1px dashed var(--wiki-line);
+  border-radius: 999px;
+  background: none;
+  padding: 1px 10px;
+  font: 500 11.5px/1.6 var(--wiki-font);
+  color: var(--wiki-muted);
+  cursor: pointer;
+}
+.wiki-members-alias-add:hover {
+  border-color: var(--wiki-accent);
+  color: var(--wiki-accent);
+}
+.wiki-members-alias-input {
+  width: 26ch;
+  max-width: 100%;
+  padding: 2px 10px;
+  border: 1px solid var(--wiki-accent);
+  border-radius: 999px;
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
+  font: 400 11.5px/1.6 var(--wiki-mono);
+}
+.wiki-members-alias-add[hidden],
+.wiki-members-alias-input[hidden] {
+  display: none;
+}
+.wiki-members-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+select.wiki-members-role {
+  padding: 5px 8px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 7px;
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
+  font: 500 12.5px/1.2 var(--wiki-font);
+  cursor: pointer;
+}
+.wiki-members-remove {
+  min-width: 64px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--wiki-faint);
+  font: 500 12px/1.2 var(--wiki-font);
+  cursor: pointer;
   white-space: nowrap;
 }
 .wiki-members-remove:hover {
-  color: var(--wiki-accent);
+  color: var(--wiki-danger);
+}
+.wiki-members-remove.armed {
+  color: var(--wiki-on-accent);
+  background: var(--wiki-danger);
+}
+.wiki-members-self {
+  min-width: 64px;
+  text-align: center;
+  font: 500 12px/1 var(--wiki-font);
+  color: var(--wiki-faint);
+}
+.wiki-members-empty {
+  padding: 28px 24px;
+  color: var(--wiki-muted);
+}
+.wiki-members-foot {
+  border-top: 1px solid var(--wiki-line);
+  padding: 14px 24px 16px;
+  background: color-mix(in srgb, var(--wiki-on-surface) 2.5%, var(--wiki-surface));
 }
 .wiki-members-add {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
 }
-.wiki-members-add .wiki-input {
-  flex: 1;
+.wiki-members-add-label {
+  font: 600 13px/1 var(--wiki-font);
+  margin-right: 4px;
+}
+.wiki-members-add input {
+  flex: 1 1 160px;
   min-width: 0;
-  padding: 5px 8px;
-  font-size: 12.5px;
+  padding: 7px 10px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 7px;
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
+  font: 400 13px/1.3 var(--wiki-font);
 }
-.wiki-members-add select.wiki-input {
-  flex: 0 0 auto;
-  width: auto;
+.wiki-members-add input:focus {
+  border-color: var(--wiki-accent);
 }
 .wiki-members-add .wiki-btn {
   width: auto;
-  padding: 6px 12px;
-  white-space: nowrap;
+  padding: 7px 16px;
 }
 .wiki-members-note {
-  font: 400 11px/1.4 var(--wiki-font);
+  margin: 8px 0 0;
+  font: 400 11.5px/1.4 var(--wiki-font);
   color: var(--wiki-faint);
+}
+.wiki-members[aria-busy='true'] .wiki-members-count::after {
+  content: ' …';
+}
+@media (max-width: 560px) {
+  .wiki-members-head {
+    flex-wrap: wrap;
+    padding: 16px 16px 6px;
+  }
+  .wiki-members-search {
+    order: 3;
+    width: 100%;
+  }
+  .wiki-members-lede {
+    padding: 0 16px 12px;
+  }
+  .wiki-members-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    padding: 12px 16px;
+  }
+  .wiki-members-mark {
+    width: 32px;
+    height: 32px;
+  }
+  .wiki-members-actions {
+    grid-column: 2;
+  }
+  .wiki-members-foot {
+    padding: 12px 16px 14px;
+  }
+}
+
+/* the account popover's own name, renamed in place */
+.wiki-auth-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wiki-auth-rename {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--wiki-faint);
+  cursor: pointer;
+}
+.wiki-auth-rename svg {
+  width: 12px;
+  height: 12px;
+}
+.wiki-auth-rename:hover {
+  color: var(--wiki-accent);
+  background: color-mix(in srgb, var(--wiki-accent) 10%, transparent);
+}
+.wiki-auth-name-field {
+  width: 100%;
+  padding: 2px 6px;
+  margin-left: -7px;
+  border: 1px solid var(--wiki-accent);
+  border-radius: 6px;
+  background: var(--wiki-field);
+  color: var(--wiki-on-surface);
+  font: 600 13px/1.4 var(--wiki-font);
 }
 
 /* ---------------- toasts ---------------- */
@@ -504,9 +822,15 @@ select.wiki-members-role {
 /* a fixed stack holding the two persistent live regions */
 .wiki-toasts {
   position: fixed;
-  bottom: 28px;
-  left: 50%;
+  inset: auto auto 28px 50%;
   transform: translateX(-50%);
+  /* a popover: the user-agent box (centered, framed, painted) is undone */
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
   z-index: 1400;
   display: flex;
   flex-direction: column;
@@ -1686,6 +2010,33 @@ a.wiki-sync-row-title:hover {
   font-size: 11px;
   color: var(--wiki-faint);
   white-space: nowrap;
+}
+.wiki-editor-cm .cm-tooltip-autocomplete > ul > li.wiki-completion-person {
+  align-items: center;
+  font-family: var(--wiki-font);
+}
+.wiki-completion-person .cm-completionLabel {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.wiki-completion-person .cm-completionDetail {
+  font-family: var(--wiki-mono);
+}
+.wiki-mention-mark {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 650 10.5px/1 var(--wiki-font);
+  color: var(--wiki-ai);
+  background: color-mix(in srgb, var(--wiki-ai) 14%, transparent);
+}
+li[aria-selected] > .wiki-mention-mark {
+  color: var(--wiki-accent);
+  background: color-mix(in srgb, var(--wiki-accent) 18%, transparent);
 }
 .wiki-editor-cm .cm-tooltip.cm-completionInfo {
   background: var(--wiki-glass);

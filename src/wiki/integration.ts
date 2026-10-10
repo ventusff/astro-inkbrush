@@ -82,6 +82,7 @@ export const CLIENT_DEPENDENCIES = [
   '@codemirror/commands',
   '@codemirror/lang-markdown',
   '@codemirror/lang-yaml',
+  '@codemirror/language',
   '@codemirror/view',
   'decode-named-character-reference',
   'yaml',

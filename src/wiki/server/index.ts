@@ -55,7 +55,9 @@ import {
   ensureRegistry,
   findUser as findIdentityUser,
   identityConfig,
-} from './identity.ts';
+  IdentityValidationError,
+  named,
+} from './identity-store.ts';
 import { buildSaml, displayNameFromProfile, googleSamlState, samlEmailAllowed } from './saml.ts';
 import { shareState } from './share.ts';
 import { syndicationPeers } from './syndication.ts';
@@ -348,7 +350,13 @@ async function provision(user: WikiUser): Promise<void> {
   const identity = identityConfig();
   if (!identity) return;
   if (identity.autoRegister) {
-    const record = await addIdentityUserIfAbsent(user.email, user.name);
+    let record;
+    try {
+      record = await addIdentityUserIfAbsent(user.email, user.name);
+    } catch (err) {
+      if (!(err instanceof IdentityValidationError)) throw err;
+      throw new SignInError('member_conflict', `${user.email} cannot be registered: ${err.message}`);
+    }
     if (record.name.trim()) user.name = record.name;
   } else {
     const record = findIdentityUser(user.email);
@@ -419,8 +427,8 @@ on('POST', '/auth/saml/callback', async ({ req, res }) => {
     const user: WikiUser = { name, email, provider: 'google-saml' };
     try {
       await provision(user);
-    } catch {
-      return errorRedirect('not_member');
+    } catch (err) {
+      return errorRedirect(err instanceof SignInError ? err.code : 'not_member');
     }
     res.setHeader('set-cookie', await createSessionCookie(user, req));
     redirect(res, 303, safeReturnUrl(relayState));
@@ -567,8 +575,8 @@ export async function handleApi(
     ) {
       return fail(res, 403, 'cross-site');
     }
-    const user = await sessionUser(req);
     const identity = identityConfig();
+    const user = named(await sessionUser(req));
     if (matched.route.auth === 'admin') {
       if (!identity) return fail(res, 404, 'bad-request', { detail: `no route: ${req.method} ${path}` });
       if (!user) return fail(res, 401, 'sign-in-required');

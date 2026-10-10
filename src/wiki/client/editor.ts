@@ -15,7 +15,7 @@ import { yaml } from '@codemirror/lang-yaml';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 
 import type { BlockSource } from '../shared/types';
-import { wikilinkCompletion } from './autocomplete';
+import { noteCompletion } from './autocomplete';
 import { api, ApiError } from './api';
 import type { BlockRef } from './blocks';
 import type { PageContext } from './index';
@@ -201,7 +201,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
         ...defaultKeymap,
         ...historyKeymap,
       ]),
-      ...(block.frontmatter ? [yaml()] : [markdown(), wikilinkCompletion(ctx)]),
+      ...(block.frontmatter ? [yaml()] : [markdown(), noteCompletion(ctx)]),
       EditorView.lineWrapping,
       cmTheme,
       EditorView.contentAttributes.of({ 'aria-label': title }),
