@@ -2,8 +2,9 @@
  * Members dialog (identity module, admin only) — lazy-loaded from the
  * account popover. One row per member: their initial, their name (edited in
  * place: Enter or leaving the field saves, Escape puts it back), their handle
- * and email, the other addresses their commits carry (chips; adding one makes
- * those commits theirs), their role and a two-step remove. A search field
+ * and email, their other addresses (chips — another account of theirs signs
+ * in as them, commits under one are theirs), their role and a two-step
+ * remove. A search field
  * narrows the rows by name, handle or address; the add form sits at the foot.
  *
  * The registry is one file, so every change PUTs the whole list, naming the

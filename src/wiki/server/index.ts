@@ -344,25 +344,27 @@ on('GET', '/auth/google/callback', async ({ req, res, query }) => {
   }
 });
 
-/** first SSO login registers the user (identity.autoRegister); the
- *  registry's name for a known user wins over the provider's */
+/** first SSO login registers the user (identity.autoRegister); a member —
+ *  by their own address or another of theirs — signs in as themself, under
+ *  their own address and the registry's name */
 async function provision(user: WikiUser): Promise<void> {
   const identity = identityConfig();
   if (!identity) return;
+  let record;
   if (identity.autoRegister) {
-    let record;
     try {
       record = await addIdentityUserIfAbsent(user.email, user.name);
     } catch (err) {
       if (!(err instanceof IdentityValidationError)) throw err;
-      throw new SignInError('member_conflict', `${user.email} cannot be registered: ${err.message}`);
+      throw new SignInError('not_member', `${user.email} cannot be registered: ${err.message}`);
     }
-    if (record.name.trim()) user.name = record.name;
   } else {
-    const record = findIdentityUser(user.email);
+    record = findIdentityUser(user.email);
     if (!record) throw new SignInError('not_member', `${user.email} is not a member of this site`);
-    if (record.name.trim()) user.name = record.name;
   }
+  // another address of a member signs the member in: the session carries their own address and name
+  user.email = record.email;
+  if (record.name.trim()) user.name = record.name;
 }
 
 /* —— Google Workspace SAML SSO (SP-initiated; see ./saml.ts) —— */

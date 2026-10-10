@@ -33,9 +33,7 @@ export type LoginErrorCode =
   /** the account's email is outside the allowed domains */
   | 'wrong_domain'
   /** the account is not registered on this site */
-  | 'not_member'
-  /** the account's address is recorded as another member's commit address, so it cannot join on its own */
-  | 'member_conflict';
+  | 'not_member';
 
 /** provider availability as the client sees it (google & googleSaml alike):
  *  'off' = disabled in inkbrush.config.ts (button not rendered) · 'ready' =
@@ -51,7 +49,7 @@ export interface IdentityUser {
   role: string;
   /** what follows `@` in a mention of them; given once (lib/people.ts) and kept */
   handle?: string;
-  /** other addresses the member's git commits carry (a personal address, an old laptop's), so their commits are theirs */
+  /** the member's other addresses — another account of theirs, the address on their git commits: signing in with one is signing in as them, and commits under one are theirs */
   aliases?: string[];
 }
 

@@ -434,7 +434,6 @@ const EN_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Google sign-in failed.',
   wrong_domain: 'Your account is not in an allowed email domain.',
   not_member: 'Your account is not a member of this site.',
-  member_conflict: 'This address is listed as another member’s commit address. Ask an admin to sort it out in Members.',
 };
 
 const en: Strings = {
@@ -494,7 +493,7 @@ const en: Strings = {
   identity: {
     title: 'Members',
     count: (n) => (n === 1 ? '1 person' : `${n} people`),
-    lede: 'A name shows in bylines, mentions, comments and the revision history. Commit addresses make the commits that carry them count as that person’s.',
+    lede: 'A name shows in bylines, mentions, comments and the revision history. Other addresses belong to the same person: signing in with one is signing in as them, and commits under one are theirs.',
     searchPlaceholder: 'Find by name or address',
     close: 'Close',
     noMatch: (q) => `Nobody matches “${q}”.`,
@@ -502,11 +501,11 @@ const en: Strings = {
     renamed: (name) => `Renamed to ${name}`,
     you: 'You',
     roleLabel: (name) => `Role of ${name}`,
-    aliasesLabel: 'Commit addresses',
-    aliasHint: 'Other addresses this person’s git commits carry, such as a personal address',
+    aliasesLabel: 'Other addresses',
+    aliasHint: 'This person’s other accounts and the addresses on their git commits, such as a personal address',
     aliasPlaceholder: 'name@example.com',
     addAlias: 'Add address',
-    addAliasLabel: (name) => `Add a commit address for ${name}`,
+    addAliasLabel: (name) => `Add another address for ${name}`,
     removeAlias: (alias) => `Remove ${alias}`,
     aliasAdded: (alias) => `Added ${alias}`,
     addTitle: 'Add a member',
@@ -1057,7 +1056,6 @@ const ZH_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Google 登录失败。',
   wrong_domain: '你的账号不在允许的邮箱域名内。',
   not_member: '你的账号不是本站成员。',
-  member_conflict: '这个邮箱登记在另一位成员的提交邮箱里，请管理员在「成员」里处理。',
 };
 
 const zh: Strings = {
@@ -1115,7 +1113,7 @@ const zh: Strings = {
   identity: {
     title: '成员',
     count: (n) => `${n} 人`,
-    lede: '名字会显示在笔记署名、@提及、评论和修订记录里。提交邮箱：git 提交带着这些邮箱时，算作这个人的提交。',
+    lede: '名字会显示在笔记署名、@提及、评论和修订记录里。其他邮箱属于同一个人：用它们登录就是本人登录，git 提交带着它们也算本人的提交。',
     searchPlaceholder: '按名字或邮箱查找',
     close: '关闭',
     noMatch: (q) => `没有人对得上「${q}」。`,
@@ -1123,11 +1121,11 @@ const zh: Strings = {
     renamed: (name) => `已改名为 ${name}`,
     you: '你',
     roleLabel: (name) => `${name} 的角色`,
-    aliasesLabel: '提交邮箱',
-    aliasHint: '这个人的 git 提交用过的其他邮箱，比如个人邮箱',
+    aliasesLabel: '其他邮箱',
+    aliasHint: '这个人的其他账号，以及 git 提交用过的邮箱，比如个人邮箱',
     aliasPlaceholder: 'name@example.com',
     addAlias: '添加邮箱',
-    addAliasLabel: (name) => `给 ${name} 添加提交邮箱`,
+    addAliasLabel: (name) => `给 ${name} 添加其他邮箱`,
     removeAlias: (alias) => `移除 ${alias}`,
     aliasAdded: (alias) => `已添加 ${alias}`,
     addTitle: '添加成员',
@@ -1540,7 +1538,6 @@ const DE_LOGIN_ERRORS: Record<LoginErrorCode, string> = {
   google_error: 'Die Google-Anmeldung ist fehlgeschlagen.',
   wrong_domain: 'Dein Konto gehört zu keiner zugelassenen E-Mail-Domain.',
   not_member: 'Dein Konto ist kein Mitglied dieser Website.',
-  member_conflict: 'Diese Adresse ist als Commit-Adresse eines anderen Mitglieds eingetragen. Bitte eine Admin-Person bitten, das unter „Mitglieder“ zu klären.',
 };
 
 const DE_SHARE_ACTION: Record<ShareAction, string> = {
@@ -1736,7 +1733,7 @@ const de: Strings = {
   identity: {
     title: 'Mitglieder',
     count: (n) => (n === 1 ? '1 Person' : `${n} Personen`),
-    lede: 'Der Name erscheint in Autorenzeilen, Erwähnungen, Kommentaren und im Änderungsverlauf. Commit-Adressen: Git-Commits mit diesen Adressen zählen als Commits dieser Person.',
+    lede: 'Der Name erscheint in Autorenzeilen, Erwähnungen, Kommentaren und im Änderungsverlauf. Weitere Adressen gehören derselben Person: Wer sich damit anmeldet, ist diese Person, und Git-Commits mit diesen Adressen zählen als ihre.',
     searchPlaceholder: 'Nach Name oder Adresse suchen',
     close: 'Schließen',
     noMatch: (q) => `Niemand passt zu „${q}“.`,
@@ -1744,11 +1741,11 @@ const de: Strings = {
     renamed: (name) => `Umbenannt in ${name}`,
     you: 'Du',
     roleLabel: (name) => `Rolle von ${name}`,
-    aliasesLabel: 'Commit-Adressen',
-    aliasHint: 'Weitere Adressen in den Git-Commits dieser Person, etwa eine private Adresse',
+    aliasesLabel: 'Weitere Adressen',
+    aliasHint: 'Weitere Konten dieser Person und die Adressen in ihren Git-Commits, etwa eine private Adresse',
     aliasPlaceholder: 'name@example.com',
     addAlias: 'Adresse hinzufügen',
-    addAliasLabel: (name) => `Commit-Adresse für ${name} hinzufügen`,
+    addAliasLabel: (name) => `Weitere Adresse für ${name} hinzufügen`,
     removeAlias: (alias) => `${alias} entfernen`,
     aliasAdded: (alias) => `${alias} hinzugefügt`,
     addTitle: 'Mitglied hinzufügen',

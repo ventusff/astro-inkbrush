@@ -13,8 +13,8 @@
  * added (`jane.doe.lab`), and a number when that is taken too.
  *
  * `identify` maps a trace of a person to the member: an email (the
- * member's own or one of their `aliases` — other addresses their commits
- * carry), else a handle; a name counts only where no real address speaks for
+ * member's own or one of their `aliases` — their other accounts and commit
+ * addresses), else a handle; a name counts only where no real address speaks for
  * the person — a frontmatter author, or a commit under a placeholder address
  * such as `wiki@local` — so an unknown address never borrows a member's name.
  */
@@ -31,7 +31,7 @@ export interface Person {
   handle: string;
   name: string;
   email: string;
-  /** other addresses this member's git commits carry */
+  /** the member's other addresses: other accounts of theirs, the addresses on their commits */
   aliases: string[];
 }
 
@@ -83,7 +83,7 @@ export interface PeopleIndex {
   byHandle(handle: string): Person | undefined;
   /** the member whose own address this is */
   member(email: string): Person | undefined;
-  /** the member whose own address or commit address this is */
+  /** the member whose own address or other address this is */
   byEmail(email: string): Person | undefined;
   /** the member behind a trace of a person (see the module comment); undefined for a stranger */
   identify(who: { email?: string | undefined; name?: string | undefined; handle?: string | undefined }): Person | undefined;

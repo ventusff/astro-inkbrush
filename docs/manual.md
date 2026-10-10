@@ -488,16 +488,19 @@ characters never do, and off-site origins must be in `trustedOrigins`.
 ## Identity registry & members
 
 `identity: { dir }` enables a file-based registry: `<dir>/users.json`,
-plain JSON `[{ email, name, role, aliases? }]`, shareable on disk with other
-apps on the same machine. The registry's `name` is how a member is named
-everywhere — the account chip, comments, revision history, the author of
-their site saves' commits — from their next request on; `aliases` are the
-other addresses their git commits carry (a personal address, an old
-laptop's), so a site that credits notes from git history
-(`astro-inkbrush/people`'s `peopleIndex(...).identify`) counts those
-commits as theirs. A member's **handle** is their email's local part
-(`jane.doe@team.com` → `jane.doe`; where two members share one across
-domains, each adds its domain's first label) — what `@` mentions write. The role vocabulary, the default role for first-time SSO
+plain JSON `[{ email, name, role, handle?, aliases? }]`, shareable on disk
+with other apps on the same machine. The registry's `name` is how a member
+is named everywhere — the account chip, comments, revision history, the
+author of their site saves' commits — from their next request on.
+`aliases` are the member's other addresses — another account of theirs,
+the address on their git commits: signing in with one signs the member in,
+under their own address, name and role, and a site that credits notes
+from git history (`astro-inkbrush/people`'s `peopleIndex(...).identify`)
+counts commits under one as theirs. A member's **handle** — what `@`
+mentions write — is given once and kept on the record: their email's
+local part reduced to the mention grammar (`jane.doe@team.com` →
+`jane.doe`; when an earlier member holds it, the domain's first label is
+added). The role vocabulary, the default role for first-time SSO
 sign-ins, and the admin role name are all configurable (`roles` /
 `defaultRole` / `adminRole`). While the registry is on, **every signed-in
 route requires current membership** — a session whose user was removed
@@ -511,7 +514,7 @@ from the list is refused (403) on its next request.
   allow-list that only admins extend — unknown users are sent back with
   `?login_error=not_member`.
 - Admins manage members in the **Members** dialog (account popover →
-  Members): rename in place, add or remove commit addresses, change roles,
+  Members): rename in place, add or remove other addresses, change roles,
   add and remove members (removal asks twice; an admin cannot remove
   themself there). The server validates the vocabulary, the names (one
   line, at most 60 characters, no `<` `>`), that no address belongs to two

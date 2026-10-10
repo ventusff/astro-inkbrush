@@ -88,7 +88,7 @@ test('names are one clean line; other addresses are emails, deduplicated, and be
   );
 });
 
-test('a first sign-in registers under a clean name, and never writes a record the registry would reject', async () => {
+test('a first sign-in registers under a clean name; another address of a member signs in as that member', async () => {
   const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -100,8 +100,13 @@ test('a first sign-in registers under a clean name, and never writes a record th
   setConfigInput({ identity: { dir } });
   try {
     const before = readFileSync(file, 'utf8');
-    await assert.rejects(store.addUserIfAbsent('home@x.org', 'Someone'), store.IdentityValidationError);
+    assert.equal((await store.addUserIfAbsent('Home@x.org', 'Someone')).email, 'admin@b.c');
     assert.equal(readFileSync(file, 'utf8'), before);
+    assert.equal(store.findUser('home@x.org')?.email, 'admin@b.c');
+    assert.deepEqual(store.named({ name: 'Someone', email: 'home@x.org', provider: 'google-saml' }), { name: 'Admin', email: 'admin@b.c', provider: 'google-saml' });
+    assert.equal((await store.renameUser('home@x.org', 'Admin Two')).email, 'admin@b.c');
+    assert.equal(store.findUser('admin@b.c')?.name, 'Admin Two');
+    await store.renameUser('admin@b.c', 'Admin');
     assert.equal((await store.addUserIfAbsent('new@b.c', 'Evil <x>')).name, 'new');
     assert.equal((await store.addUserIfAbsent('long@b.c', 'y'.repeat(80))).name, 'long');
     assert.equal(store.listUsers().length, 3);

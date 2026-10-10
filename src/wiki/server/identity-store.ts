@@ -110,11 +110,18 @@ export function listUsers(): IdentityUser[] {
   return conf ? readUsers(conf) : [];
 }
 
+/** whether `email` is this member's: their own address or one of their other addresses */
+const owns = (u: IdentityUser, email: string): boolean => {
+  const lower = email.trim().toLowerCase();
+  return u.email === lower || (u.aliases ?? []).includes(lower);
+};
+
+/** the member an address belongs to — their own or one of their other addresses (another
+ *  account of theirs signs in as them) */
 export function findUser(email: string): IdentityUser | null {
   const conf = identityConfig();
   if (!conf) return null;
-  const lower = email.toLowerCase();
-  return readUsers(conf).find((u) => u.email.toLowerCase() === lower) ?? null;
+  return readUsers(conf).find((u) => owns(u, email)) ?? null;
 }
 
 /** normalize + validate an untrusted users list against the configured
@@ -162,11 +169,10 @@ export function renameUser(email: string, name: unknown): Promise<IdentityUser> 
   if (!conf) throw new Error('identity module is off');
   return withLock(usersFile(conf), () => {
     const users = readUsers(conf);
-    const lower = email.toLowerCase();
-    const index = users.findIndex((u) => u.email.toLowerCase() === lower);
+    const index = users.findIndex((u) => owns(u, email));
     if (index === -1) throw new IdentityValidationError(failure('not-member'));
     const clean = cleanName(name);
-    if (clean === null) throw new IdentityValidationError(failure('members-name', { email: lower, max: NAME_MAX }));
+    if (clean === null) throw new IdentityValidationError(failure('members-name', { email: users[index]!.email, max: NAME_MAX }));
     const next = users.map((u, i) => (i === index ? { ...u, name: clean } : u));
     writeUsers(conf, validateUsers(conf, next));
     return next[index]!;
@@ -175,8 +181,8 @@ export function renameUser(email: string, name: unknown): Promise<IdentityUser> 
 
 /** first SSO login: an unknown user is registered with defaultRole, under
  *  the provider's name when it is a valid one (else the email prefix); a
- *  known one is returned unchanged. A registration the registry's rules
- *  refuse — the address already is another member's commit address — throws
+ *  member — by their own address or another of theirs — is returned
+ *  unchanged. A registration the registry's rules refuse throws
  *  IdentityValidationError and writes nothing, so a sign-in can never leave
  *  a record behind that the next read would reject */
 export function addUserIfAbsent(email: string, name: string): Promise<IdentityUser> {
@@ -184,8 +190,8 @@ export function addUserIfAbsent(email: string, name: string): Promise<IdentityUs
   if (!conf) throw new Error('identity module is off');
   return withLock(usersFile(conf), () => {
     const users = readUsers(conf);
-    const lower = email.toLowerCase();
-    const found = users.find((u) => u.email.toLowerCase() === lower);
+    const lower = email.trim().toLowerCase();
+    const found = users.find((u) => owns(u, lower));
     if (found) return found;
     const next = validateUsers(conf, [...users, { email: lower, name: cleanName(name) ?? '', role: conf.defaultRole }]);
     writeUsers(conf, next);
@@ -193,11 +199,13 @@ export function addUserIfAbsent(email: string, name: string): Promise<IdentityUs
   });
 }
 
-/** a signed-in user as the site shows them: under the registry's name for
- *  them, so renaming a member shows at once everywhere — bylines, comments,
- *  history, commits — without waiting for their next sign-in */
+/** a signed-in user as the site knows them: the member their address
+ *  belongs to, under the member's own address and name — so another
+ *  account of theirs acts as them (comments, history, shares, commits), and
+ *  a rename shows at once everywhere without waiting for a new sign-in */
 export function named(user: WikiUser | null): WikiUser | null {
   if (!user || !identityConfig()) return user;
-  const name = findUser(user.email)?.name;
-  return name && name !== user.name ? { ...user, name } : user;
+  const record = findUser(user.email);
+  if (!record) return user;
+  return record.email === user.email && record.name === user.name ? user : { ...user, email: record.email, name: record.name };
 }
