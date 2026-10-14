@@ -300,8 +300,14 @@ function escapedAt(text: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
-/** the wikilinks the page pipeline would render from `source`, with their source offsets */
+/**
+ * The wikilinks the page pipeline would render from `source`, with their
+ * source offsets. Masking only blanks characters, so a source without a `[[`
+ * holds no wikilink and is answered without parsing it: a backlink index over
+ * a whole corpus parses only the notes that can link.
+ */
 export function extractWikilinks(source: string, options: MaskOptions = {}): ExtractedWikilink[] {
+  if (!source.includes('[[')) return [];
   const { masked, cuts } = proseOf(source, options);
   const out: ExtractedWikilink[] = [];
   WIKILINK_RE.lastIndex = 0;
