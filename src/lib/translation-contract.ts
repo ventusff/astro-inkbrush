@@ -22,6 +22,7 @@ export const HARD_RULES: readonly string[] = [
   'A line directly under a paragraph must not start with `+` or `*` — a continuation left behind by wrapping turns into a bullet list and is refused.',
   'Every formula must render under strict KaTeX; a broken macro, and any HTML entity inside math (&lt; &gt; &amp;), is refused — write \\lt \\gt \\le \\ge and \\&.',
   'In MDX, a JSX attribute value containing double quotes uses single-quote delimiters; a straight double quote inside a double-quoted attribute breaks the compile.',
+  'Every fenced code block keeps the language the source names (```bash, ```text …); a repository under translation sync refuses a fence without one.',
 ];
 
 /** conventions the checks do not mechanically catch; follow them anyway */

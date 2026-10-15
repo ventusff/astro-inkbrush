@@ -235,3 +235,15 @@ test('multiple findings are all reported, sorted by position', async () => {
 test('code blocks and inline code are outside the guard entirely', async () => {
   assert.equal(await guardMd('```\n*raw* {0,1} $$x$$\n```\n\nand `*inline*` too'), null);
 });
+
+/* ---------------- namedFences ---------------- */
+
+test('namedFences: a fenced code block without a language is a finding; a named fence, an indented block and the option off are not', async () => {
+  const report = await guardMd('Run it:\n\n```\nnpm ci\n```', { namedFences: true });
+  assert.match(report ?? '', /names no language/);
+  assert.match(report ?? '', /```bash/);
+  assert.equal(await guardMd('Run it:\n\n```bash\nnpm ci\n```', { namedFences: true }), null);
+  assert.equal(await guardMd('Run it:\n\n~~~text\nplain\n~~~', { namedFences: true }), null);
+  assert.equal(await guardMd('Run it:\n\n    npm ci', { namedFences: true }), null);
+  assert.equal(await guardMd('Run it:\n\n```\nnpm ci\n```'), null);
+});

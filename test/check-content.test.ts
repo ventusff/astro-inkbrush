@@ -180,3 +180,18 @@ test('the report — per-file findings and the summary line — goes to stdout; 
   assert.match(usage.stderr, /requires a value/);
   assert.equal(usage.stdout, '');
 });
+
+test('a repo that declares translation sync (i18n.config.json at its root) needs every code fence to name its language', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'check-content-fences-'));
+  try {
+    mkdirSync(join(repo, '.git'));
+    mkdirSync(join(repo, 'src/docs/setup'), { recursive: true });
+    writeFileSync(join(repo, 'src/docs/setup/index.md'), '# Setup\n\n```\nnpm ci\n```\n');
+    assert.deepEqual((await checkContent(join(repo, 'src/docs'))).findings, []);
+    writeFileSync(join(repo, 'i18n.config.json'), '{}');
+    const f = byFile((await checkContent(join(repo, 'src/docs'))).findings);
+    assert.match(f.get('setup/index.md')![0]!, /names no language/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

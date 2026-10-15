@@ -20,6 +20,7 @@ Files beside the note that you may also read and change when the request concern
   4. A line directly under a paragraph must not start with `+` or `*` — a continuation left behind by wrapping turns into a bullet list and is refused.
   5. Every formula must render under strict KaTeX; a broken macro, and any HTML entity inside math (&lt; &gt; &amp;), is refused — write \lt \gt \le \ge and \&.
   6. In MDX, a JSX attribute value containing double quotes uses single-quote delimiters; a straight double quote inside a double-quoted attribute breaks the compile.
+  7. Every fenced code block keeps the language the source names (```bash, ```text …); a repository under translation sync refuses a fence without one.
   House style — follow these:
   1. After wrapping a long sentence, a continuation line must not start with `-` or `1.` either (it reads as a list).
   2. `<` followed by a letter or digit in prose is written &lt;; inside $…$ math it stays as it is.

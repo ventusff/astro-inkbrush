@@ -67,6 +67,14 @@ export interface ContentGuardOptions {
    * the double-numbered "5.1 1. Pillars".
    */
   autoNumberedHeadings?: boolean | undefined;
+  /**
+   * Every fenced code block names its language (default off). A content repo
+   * whose pages are translated by the sync service needs it: the service keeps
+   * a fence as code or hands it over as text by its language, and a fence
+   * without one is kept as code — `text` is what marks a diagram or a block
+   * of prose as words to translate.
+   */
+  namedFences?: boolean | undefined;
 }
 
 interface Point {
@@ -86,6 +94,7 @@ interface MdNode {
   type: string;
   depth?: number | undefined;
   name?: string | null | undefined;
+  lang?: string | null | undefined;
   value?: string | undefined;
   attributes?: { type: string; name?: string; value?: unknown }[] | undefined;
   children?: MdNode[] | undefined;
@@ -356,6 +365,19 @@ export function remarkContentGuard(options: ContentGuardOptions = {}) {
         const first = node.children?.find((c) => c.type === 'text');
         if (first && MANUAL_NUMBER.test(first.value ?? '')) {
           found(first.position?.start.offset, here, 2, 'the heading carries a hand-written number, which will stack with the build-time auto-number', 'Delete the hand-written number and let the build number it');
+        }
+      }
+
+      if (options.namedFences && node.type === 'code' && !node.lang && node.position) {
+        const raw = source.slice(node.position.start.offset!, node.position.end.offset!);
+        if (/^ {0,3}(?:`{3,}|~{3,})/.test(raw)) {
+          found(
+            node.position.start.offset,
+            here,
+            3,
+            'this code fence names no language — it is kept as code in every translation, and nothing says what it holds',
+            'Name it: ```bash for commands, ```console for a terminal session, ```log for program output, ```text for diagrams and words to translate, or the language of the code',
+          );
         }
       }
 

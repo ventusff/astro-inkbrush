@@ -17,6 +17,10 @@
  * same goes for rehype plugins. Astro's default smartypants pass (quotes
  * and dashes) is not applied.
  *
+ * In a repository that declares translation sync (`i18n.config.json` at its
+ * top) every fenced code block must name its language: the sync service keeps
+ * a fence as code or translates it as text by that name.
+ *
  * After the pipeline, the file's block map — the source line stamps the
  * in-place editor reads and writes blocks by — is verified: stamps must be
  * well-formed, disjoint and cover every block (src/lib/wiki-blocks-check.ts).
@@ -68,7 +72,7 @@
  * file's findings and the summary line — is written to stdout; usage
  * errors and whatever the plugins print go to stderr.
  */
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -225,10 +229,10 @@ function rehypeBlockStamps() {
 /** the site's pipeline up to the point where a finding can surface: dialect
  *  → guard → (--math) → site remark plugins → remark-rehype → site rehype
  *  plugins → block stamps and their check */
-export function buildPipeline({ math = false, site } = {}) {
+export function buildPipeline({ math = false, site, namedFences = false } = {}) {
   const remarkPlugins = [
     ...markdownSyntax(),
-    remarkContentGuard,
+    [remarkContentGuard, { namedFences }],
     ...(math ? [remarkMath] : []),
     ...(site?.remarkPlugins ?? []),
   ];
@@ -277,6 +281,19 @@ export async function checkSource(source, { path, pipeline, frontmatter }) {
 }
 
 /**
+ * The repository holding <root> declares translation sync: `i18n.config.json`
+ * at its top (the nearest directory up from <root> that holds `.git`). Its
+ * pages are then translated by the sync service, which keeps or translates a
+ * code fence by the language the fence names — so every fence must name one.
+ */
+export function declaresTranslation(root) {
+  for (let dir = resolve(root); ; dir = resolve(dir, '..')) {
+    if (existsSync(join(dir, '.git'))) return existsSync(join(dir, 'i18n.config.json'));
+    if (resolve(dir, '..') === dir) return false;
+  }
+}
+
+/**
  * Check every matching file under `root`. Returns per-file findings (files
  * without findings are omitted) and the number of files checked.
  * @param {string} root
@@ -289,7 +306,7 @@ export async function checkContent(
   { globs = ['**/index.{md,mdx}'], skip = [], math = false, site, frontmatter } = {},
 ) {
   const absRoot = resolve(root);
-  const pipeline = buildPipeline({ math, site });
+  const pipeline = buildPipeline({ math, site, namedFences: declaresTranslation(absRoot) });
   const findings = [];
   let checked = 0;
   for (const file of [...contentFiles(absRoot, globs, skip)].sort()) {
