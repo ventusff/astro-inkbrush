@@ -195,3 +195,16 @@ test('a repo that declares translation sync (i18n.config.json at its root) needs
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('a checkout without .git still finds the translation-sync declaration at its top', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'check-content-fences-nogit-'));
+  try {
+    mkdirSync(join(repo, 'src/docs/setup'), { recursive: true });
+    writeFileSync(join(repo, 'i18n.config.json'), '{}');
+    writeFileSync(join(repo, 'src/docs/setup/index.md'), '# Setup\n\n```\nnpm ci\n```\n');
+    const f = byFile((await checkContent(join(repo, 'src/docs'))).findings);
+    assert.match(f.get('setup/index.md')?.[0] ?? '', /names no language/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

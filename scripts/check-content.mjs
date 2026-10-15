@@ -282,14 +282,16 @@ export async function checkSource(source, { path, pipeline, frontmatter }) {
 
 /**
  * The repository holding <root> declares translation sync: `i18n.config.json`
- * at its top (the nearest directory up from <root> that holds `.git`). Its
- * pages are then translated by the sync service, which keeps or translates a
- * code fence by the language the fence names — so every fence must name one.
+ * in <root> or a directory above it, up to the repository top (the nearest
+ * directory holding `.git`; a checkout without one is searched up to the
+ * filesystem root). Its pages are then translated by the sync service, which
+ * keeps or translates a code fence by the language the fence names — so every
+ * fence must name one.
  */
 export function declaresTranslation(root) {
   for (let dir = resolve(root); ; dir = resolve(dir, '..')) {
-    if (existsSync(join(dir, '.git'))) return existsSync(join(dir, 'i18n.config.json'));
-    if (resolve(dir, '..') === dir) return false;
+    if (existsSync(join(dir, 'i18n.config.json'))) return true;
+    if (existsSync(join(dir, '.git')) || resolve(dir, '..') === dir) return false;
   }
 }
 
