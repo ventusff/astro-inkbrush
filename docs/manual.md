@@ -1124,7 +1124,8 @@ src/lib/        pipeline-agnostic libraries: markdown-syntax (the dialect),
                 rules and the git plumbing both sides of syndication run)
 src/wiki/shared/  cross-boundary types + locales.ts (the locale registry +
                   resolveLocales)
-scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs — standalone check CLIs;
+scripts/        check-content.mjs / check-language.mjs / check-wikilinks.mjs / check-dist.mjs —
+                standalone check CLIs;
                 syndication-gate.mjs — the receiving wiki's gate, run by its CI
 ```
 

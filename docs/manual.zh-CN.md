@@ -911,7 +911,8 @@ src/lib/        与管线无关的库:markdown-syntax(方言)、markdown(处理�
                 syndication-bundle / -transform / -state / -git(单元、摘要、
                 副本、提交规则,以及同步两边共用的 git 底层操作)
 src/wiki/shared/  跨界类型 + locales.ts(语言注册表 + resolveLocales)
-scripts/        check-content.mjs / check-wikilinks.mjs / check-dist.mjs——独立检查 CLI;
+scripts/        check-content.mjs / check-language.mjs / check-wikilinks.mjs / check-dist.mjs——
+                独立检查 CLI;
                 syndication-gate.mjs——接收方的把关脚本,由其 CI 运行
 ```
 

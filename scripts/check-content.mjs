@@ -19,7 +19,14 @@
  *
  * In a repository that declares translation sync (`i18n.config.json` at its
  * top) every fenced code block must name its language: the sync service keeps
- * a fence as code or translates it as text by that name.
+ * a fence as code or translates it as text by that name. A page in its own
+ * source language (src/lib/translation-declaration.ts) must also keep its
+ * code free of Chinese: the service copies that code into every other
+ * language as written
+ * (src/lib/code-language.ts). How each place counts is set once for every
+ * site in CODE_LANGUAGE_SEVERITY: an error is a finding, a warning is listed
+ * after the findings and does not fail the run. scripts/check-language.mjs
+ * runs this check alone.
  *
  * After the pipeline, the file's block map — the source line stamps the
  * in-place editor reads and writes blocks by — is verified: stamps must be
@@ -72,11 +79,12 @@
  * file's findings and the summary line — is written to stdout; usage
  * errors and whatever the plugins print go to stderr.
  */
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { compile } from '@mdx-js/mdx';
+import { VFile } from 'vfile';
 import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
@@ -92,6 +100,10 @@ const { frontmatterProblems, loadFrontmatterSchema } = await import(
 );
 const { rehypeWikiBlocks } = await import(pathToFileURL(join(engineRoot, 'src/lib/rehype-wiki-blocks.ts')).href);
 const { blockStampProblems } = await import(pathToFileURL(join(engineRoot, 'src/lib/wiki-blocks-check.ts')).href);
+const { CODE_LANGUAGE_ADVICE, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
+const { findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
+  pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
+);
 
 /* ---------------- site config ---------------- */
 
@@ -227,11 +239,13 @@ function rehypeBlockStamps() {
 }
 
 /** the site's pipeline up to the point where a finding can surface: dialect
- *  → guard → (--math) → site remark plugins → remark-rehype → site rehype
- *  plugins → block stamps and their check */
-export function buildPipeline({ math = false, site, namedFences = false } = {}) {
+ *  → (codeLanguage: the code-language reading of the fresh tree) → guard →
+ *  (--math) → site remark plugins → remark-rehype → site rehype plugins →
+ *  block stamps and their check */
+export function buildPipeline({ math = false, site, namedFences = false, codeLanguage = false } = {}) {
   const remarkPlugins = [
     ...markdownSyntax(),
+    ...(codeLanguage ? [remarkCodeLanguage] : []),
     [remarkContentGuard, { namedFences }],
     ...(math ? [remarkMath] : []),
     ...(site?.remarkPlugins ?? []),
@@ -241,16 +255,34 @@ export function buildPipeline({ math = false, site, namedFences = false } = {}) 
   return { remarkPlugins, rehypePlugins, remarkRehypeOptions };
 }
 
-export async function checkSource(source, { path, pipeline, frontmatter }) {
+/** a code-language finding as one report line: `line:column  message: text` */
+export const codeLanguageLine = (f) => `${f.line}:${f.column}  ${f.message}: ${f.text}`;
+
+/** the closing note of a report that lists code-language lines: why, and what to write for each place listed */
+export function codeLanguageAdvice(places) {
+  const lines = [...places].map((p) => `  - ${CODE_LANGUAGE_ADVICE[p]}`);
+  return `\nChinese in a page's code: the translation sync service copies a page's code into every language as written, so English and German readers see it as written. Instead, in\n${lines.join('\n')}`;
+}
+
+/**
+ * One file's findings, and the warnings of the code-language check when
+ * `sourcePage` says the file is a page of the source language (the pipeline
+ * must mount that check, `buildPipeline({ codeLanguage: true })`); `places`
+ * holds the code-language places reported.
+ */
+export async function checkFile(source, { path, pipeline, frontmatter, sourcePage = false }) {
   const problems = checkFrontmatter(source);
+  const warnings = [];
+  const places = new Set();
   const fm = splitFrontmatter(source);
   // a block that does not parse is reported as such; its mapping is empty
   // and not worth a second finding
   if (frontmatter && !fm.error) problems.push(...(await frontmatterProblems(frontmatter, fm.data)));
   const body = fm.body;
+  let file;
   try {
     if (path.endsWith('.mdx')) {
-      await compile(
+      file = await compile(
         { value: body, path },
         {
           remarkPlugins: pipeline.remarkPlugins,
@@ -264,20 +296,25 @@ export async function checkSource(source, { path, pipeline, frontmatter }) {
         .use(pipeline.remarkPlugins)
         .use(remarkRehype, pipeline.remarkRehypeOptions)
         .use(pipeline.rehypePlugins);
-      const fileLike = {
-        value: body,
-        path,
-        fail(reason) {
-          throw new Error(reason);
-        },
-      };
-      await processor.run(processor.parse(body), fileLike);
+      file = new VFile({ value: body, path });
+      await processor.run(processor.parse(file), file);
     }
   } catch (err) {
     const place = err.line !== undefined ? `${err.line}:${err.column ?? 1}  ` : '';
     problems.push(`${place}${err.reason ?? err.message}`);
   }
-  return problems;
+  if (sourcePage) {
+    for (const f of file?.data.codeLanguage ?? []) {
+      (f.severity === 'error' ? problems : warnings).push(codeLanguageLine(f));
+      places.add(f.place);
+    }
+  }
+  return { problems, warnings, places };
+}
+
+/** One file's findings (see checkFile). */
+export async function checkSource(source, options) {
+  return (await checkFile(source, options)).problems;
 }
 
 /**
@@ -286,18 +323,28 @@ export async function checkSource(source, { path, pipeline, frontmatter }) {
  * directory holding `.git`; a checkout without one is searched up to the
  * filesystem root). Its pages are then translated by the sync service, which
  * keeps or translates a code fence by the language the fence names — so every
- * fence must name one.
+ * fence must name one — and copies a page's code into every language.
  */
 export function declaresTranslation(root) {
-  for (let dir = resolve(root); ; dir = resolve(dir, '..')) {
-    if (existsSync(join(dir, 'i18n.config.json'))) return true;
-    if (existsSync(join(dir, '.git')) || resolve(dir, '..') === dir) return false;
-  }
+  return findTranslationDeclaration(root) !== null;
 }
 
 /**
- * Check every matching file under `root`. Returns per-file findings (files
- * without findings are omitted) and the number of files checked.
+ * The translation declaration over <root>: `sourcePage(file)` is true for the
+ * absolute path of a page in its own source language. Without a declaration
+ * nothing is a source page.
+ */
+export function translationOf(root) {
+  const path = findTranslationDeclaration(root);
+  if (path === null) return { declared: false, sourcePage: () => false };
+  const declaration = readTranslationDeclaration(path);
+  return { declared: true, sourcePage: (file) => isSourcePage(declaration, file) };
+}
+
+/**
+ * Check every matching file under `root`. Returns per-file findings and
+ * code-language warnings (files without any are omitted) and the number of
+ * files checked.
  * @param {string} root
  * @param {{ globs?: string[], skip?: string[], math?: boolean, allowEmpty?: boolean,
  *           site?: { remarkPlugins: unknown[], rehypePlugins: unknown[], remarkRehype?: unknown },
@@ -308,16 +355,21 @@ export async function checkContent(
   { globs = ['**/index.{md,mdx}'], skip = [], math = false, site, frontmatter } = {},
 ) {
   const absRoot = resolve(root);
-  const pipeline = buildPipeline({ math, site, namedFences: declaresTranslation(absRoot) });
+  const translation = translationOf(absRoot);
+  const pipeline = buildPipeline({ math, site, namedFences: translation.declared, codeLanguage: translation.declared });
   const findings = [];
+  const warnings = [];
+  const codeLanguagePlaces = new Set();
   let checked = 0;
   for (const file of [...contentFiles(absRoot, globs, skip)].sort()) {
     checked += 1;
     const path = relative(absRoot, file).replaceAll('\\', '/');
-    const problems = await checkSource(readFileSync(file, 'utf8'), { path, pipeline, frontmatter });
-    if (problems.length > 0) findings.push({ file: path, problems });
+    const result = await checkFile(readFileSync(file, 'utf8'), { path, pipeline, frontmatter, sourcePage: translation.sourcePage(file) });
+    if (result.problems.length > 0) findings.push({ file: path, problems: result.problems });
+    if (result.warnings.length > 0) warnings.push({ file: path, warnings: result.warnings });
+    for (const place of result.places) codeLanguagePlaces.add(place);
   }
-  return { checked, findings };
+  return { checked, findings, warnings, codeLanguage: translation.declared, codeLanguagePlaces };
 }
 
 /* ---------------- CLI ---------------- */
@@ -409,14 +461,22 @@ export async function main(argv) {
     }
   }
 
-  const { checked, findings } = await checkContent(root, {
-    globs: globs.length > 0 ? globs : undefined,
-    skip: many('skip'),
-    math,
-    site,
-    frontmatter,
-  });
-  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''} + block stamps`;
+  let result;
+  try {
+    result = await checkContent(root, {
+      globs: globs.length > 0 ? globs : undefined,
+      skip: many('skip'),
+      math,
+      site,
+      frontmatter,
+    });
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    console.error(`cannot read the translation declaration over ${root}: ${err.message}`);
+    return 2;
+  }
+  const { checked, findings, warnings, codeLanguage, codeLanguagePlaces } = result;
+  const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''} + block stamps${codeLanguage ? ' + code language' : ''}`;
   // the report is the tool's output and goes to stdout — a CI captures it
   // as the findings; what the plugins themselves print (KaTeX warnings)
   // stays on stderr with the usage errors
@@ -424,6 +484,16 @@ export async function main(argv) {
     console.log(`\n✗ ${file}`);
     for (const p of problems) console.log(`  ${p.split('\n').join('\n  ')}`);
   }
+  for (const { file, warnings: notes } of warnings) {
+    console.log(`\n⚠ ${file}`);
+    for (const n of notes) console.log(`  ${n}`);
+  }
+  if (warnings.length > 0) {
+    const count = warnings.reduce((sum, w) => sum + w.warnings.length, 0);
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    console.log(`\n${plural(count, 'warning')} in ${plural(warnings.length, 'file')} (listed, not failing the run).`);
+  }
+  if (codeLanguagePlaces.size > 0) console.log(codeLanguageAdvice(codeLanguagePlaces));
   if (findings.length > 0) {
     console.log(`\n${findings.length}/${checked} files have problems (${scope}).`);
     return 1;

@@ -208,3 +208,58 @@ test('a checkout without .git still finds the translation-sync declaration at it
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+/** a repository whose pages the sync service translates: zh at the root, en under en/ */
+function translatedRepo(pages: Record<string, string>): string {
+  const repo = mkdtempSync(join(tmpdir(), 'check-content-code-language-'));
+  mkdirSync(join(repo, '.git'));
+  writeFileSync(
+    join(repo, 'i18n.config.json'),
+    JSON.stringify({ locales: ['zh', 'en', 'de'], units: [{ kind: 'pages', root: 'src/docs', file: '{id}/index.mdx', layout: 'prefix' }] }),
+  );
+  for (const [path, text] of Object.entries(pages)) {
+    mkdirSync(join(repo, 'src/docs', path, '..'), { recursive: true });
+    writeFileSync(join(repo, 'src/docs', path), text);
+  }
+  return repo;
+}
+
+const CODE_IN_CHINESE = "export const NAMES = { a: '甲' };\n\n看 `runs/<运行>/`。\n\n```sh\nls <目录>\n```\n";
+
+test('a source-language page keeps its code free of Chinese: code is a finding, inline code a warning; the copies are not read', async () => {
+  const repo = translatedRepo({ 'run/index.mdx': CODE_IN_CHINESE, 'en/run/index.mdx': CODE_IN_CHINESE, 'clean/index.mdx': '正文。\n\n```text\n文字\n```\n' });
+  try {
+    const { findings, warnings, codeLanguagePlaces } = await checkContent(join(repo, 'src/docs'));
+    assert.deepEqual(findings.map((f) => f.file), ['run/index.mdx']);
+    assert.equal(findings[0]!.problems.length, 2);
+    assert.match(findings[0]!.problems[0]!, /^1:\d+ {2}Chinese in the page's script: export const NAMES = \{ a: '甲' \};$/);
+    assert.match(findings[0]!.problems[1]!, /^6:5 {2}Chinese in a sh code block outside its comments: ls <目录>$/);
+    assert.deepEqual(warnings, [{ file: 'run/index.mdx', warnings: ['3:10  Chinese in inline code: 看 `runs/<运行>/`。'] }]);
+    assert.deepEqual([...codeLanguagePlaces].sort(), ['code-block', 'inline-code', 'script']);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('warnings alone pass the run; the report lists them and says what to write instead', async () => {
+  const repo = translatedRepo({ 'run/index.mdx': '看 `runs/<运行>/`。\n' });
+  try {
+    const out: string[] = [];
+    const log = console.log;
+    console.log = (...args: unknown[]) => void out.push(args.join(' '));
+    let code: number;
+    try {
+      code = await main([join(repo, 'src/docs')]);
+    } finally {
+      console.log = log;
+    }
+    const report = out.join('\n');
+    assert.equal(code, 0);
+    assert.match(report, /⚠ run\/index\.mdx\n {2}1:10 {2}Chinese in inline code: 看 `runs\/<运行>\/`。/);
+    assert.match(report, /1 warning in 1 file \(listed, not failing the run\)/);
+    assert.match(report, /inline code: a placeholder is an English word/);
+    assert.match(report, /✓ 1 files pass \(.* \+ code language\)/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});

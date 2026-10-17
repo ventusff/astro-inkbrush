@@ -81,7 +81,15 @@ npm test
   the dialect and the guard only, and say so. Given `--frontmatter`,
   check-content also holds every file's frontmatter to the site's schema
   (a Standard Schema export, or a `({ z }) => schema` factory called with
-  Astro's zod).
+  Astro's zod). Under an `i18n.config.json` (the translation sync service's
+  declaration, read by `src/lib/translation-declaration.ts`) check-content
+  also requires named code fences and reads every source-language page for
+  Chinese in the code the service copies into every language
+  (`src/lib/code-language.ts`; `src/lib/code-comments.ts` reads code-block
+  comments the way the service does, and the readable key and attribute
+  lists match the service's). `CODE_LANGUAGE_SEVERITY` there is the one
+  switch for how each place counts in every site; `scripts/check-language.mjs`
+  runs that check alone.
 - `<meta name="inkbrush-note" content="<note id>">`: a note page declares
   its identity; the client never parses URLs. Optional
   `inkbrush-note-url` template for locale jumps.

@@ -98,7 +98,11 @@ yourself in the browser on the
 - 🩺 **Check CLIs** — `check-content.mjs` (compile every source file with
   the dialect, the guard and — given `--config` — your site's plugins;
   given `--frontmatter`, hold every file's frontmatter to your
-  content-collection schema before the build does),
+  content-collection schema before the build does; in a repository whose
+  pages a translation service translates from an `i18n.config.json`, every
+  code fence names its language and a source page's code holds no Chinese,
+  since the service copies code into every language as written),
+  `check-language.mjs` (that last check alone, with its warnings),
   `check-wikilinks.mjs` (dead or ambiguous `[[wikilinks]]`, dubious
   anchors — with the library's own parser and resolution rules) and
   `check-dist.mjs` (broken links, dangling anchors, locale doubling, nested
