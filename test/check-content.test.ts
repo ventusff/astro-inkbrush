@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { checkContent, checkFrontmatter, globToRe, loadSiteConfig, main } from '../scripts/check-content.mjs';
+import { codeLanguageSeverity } from '../src/lib/code-language.ts';
 
 const CONTENT = fileURLToPath(new URL('./fixtures/content', import.meta.url));
 const SITE_CONFIG = fileURLToPath(new URL('./fixtures/site-config.ts', import.meta.url));
@@ -226,10 +227,14 @@ function translatedRepo(pages: Record<string, string>): string {
 
 const CODE_IN_CHINESE = "export const NAMES = { a: '甲' };\n\n看 `runs/<运行>/`。\n\n```sh\nls <目录>\n```\n";
 
-test('a source-language page keeps its code free of Chinese: code is a finding, inline code a warning; the copies are not read', async () => {
+test('a source-language page\'s code is read for Chinese: warnings by default, findings where the site raises them; the copies are not read', async () => {
   const repo = translatedRepo({ 'run/index.mdx': CODE_IN_CHINESE, 'en/run/index.mdx': CODE_IN_CHINESE, 'clean/index.mdx': '正文。\n\n```text\n文字\n```\n' });
   try {
-    const { findings, warnings, codeLanguagePlaces } = await checkContent(join(repo, 'src/docs'));
+    const quiet = await checkContent(join(repo, 'src/docs'));
+    assert.deepEqual(quiet.findings, []);
+    assert.deepEqual(quiet.warnings.map((w) => [w.file, w.warnings.length]), [['run/index.mdx', 3]]);
+    const raised = { remarkPlugins: [], rehypePlugins: [], codeLanguage: codeLanguageSeverity({ script: 'error', 'code-block': 'error' }) };
+    const { findings, warnings, codeLanguagePlaces } = await checkContent(join(repo, 'src/docs'), { site: raised });
     assert.deepEqual(findings.map((f) => f.file), ['run/index.mdx']);
     assert.equal(findings[0]!.problems.length, 2);
     assert.match(findings[0]!.problems[0]!, /^1:\d+ {2}Chinese in the page's script: export const NAMES = \{ a: '甲' \};$/);

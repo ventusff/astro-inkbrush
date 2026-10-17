@@ -20,8 +20,11 @@
  * reader-facing key or attribute, or in the site's text catalogs; a
  * placeholder in code is an English word the prose explains (`<run-id>`).
  *
- * CODE_LANGUAGE_SEVERITY says how each place counts: an error fails the
- * content check, a warning is listed and passes.
+ * Every place reports as a warning — listed, never failing the content check —
+ * unless the site raises it: its page-pipeline module (the `--config` of
+ * check-content and check-language) exports `codeLanguage`, `'error'` for
+ * every place or an object naming places (`{ script: 'error' }`), read by
+ * codeLanguageSeverity().
  */
 import { decodeNamedCharacterReference } from 'decode-named-character-reference';
 
@@ -32,17 +35,42 @@ export type CodePlace = 'script' | 'attribute' | 'code-block' | 'inline-code';
 
 export type Severity = 'error' | 'warning';
 
-/**
- * How each place counts in every site's content check. Inline code reports as
- * a warning; setting it to 'error' fails the content check of every site that
- * has Chinese in inline code.
- */
+const PLACES: readonly CodePlace[] = ['script', 'attribute', 'code-block', 'inline-code'];
+
+/** How each place counts in a site that sets nothing: a warning, listed and passing. */
 export const CODE_LANGUAGE_SEVERITY: Readonly<Record<CodePlace, Severity>> = {
-  script: 'error',
-  attribute: 'error',
-  'code-block': 'error',
+  script: 'warning',
+  attribute: 'warning',
+  'code-block': 'warning',
   'inline-code': 'warning',
 };
+
+/**
+ * A site's `codeLanguage` setting as a severity per place: absent is the
+ * default, `'error'` or `'warning'` sets every place, an object sets the
+ * places it names (`{ script: 'error', attribute: 'error' }`). Anything else
+ * throws, naming what is accepted.
+ */
+export function codeLanguageSeverity(setting: unknown): Record<CodePlace, Severity> {
+  const out = { ...CODE_LANGUAGE_SEVERITY };
+  const isSeverity = (v: unknown): v is Severity => v === 'error' || v === 'warning';
+  if (setting === undefined) return out;
+  if (isSeverity(setting)) {
+    for (const p of PLACES) out[p] = setting;
+    return out;
+  }
+  const proto = setting !== null && typeof setting === 'object' ? Object.getPrototypeOf(setting) : undefined;
+  if (proto === Object.prototype || proto === null) {
+    for (const [place, value] of Object.entries(setting as object)) {
+      if (!PLACES.includes(place as CodePlace) || !isSeverity(value)) {
+        throw new Error(`codeLanguage.${place} = ${JSON.stringify(value)}: the places are ${PLACES.join(', ')}, each 'error' or 'warning'`);
+      }
+      out[place as CodePlace] = value;
+    }
+    return out;
+  }
+  throw new Error(`codeLanguage = ${JSON.stringify(setting)}: 'error', 'warning', or an object of places (${PLACES.join(', ')}) set to 'error' or 'warning'`);
+}
 
 export interface CodeLanguageFinding {
   place: CodePlace;
@@ -387,8 +415,11 @@ function copiedOf(node: MdNode, source: string): Copied[] {
   return [];
 }
 
-/** Every place in a parsed page where Chinese sits in code the sync service copies, in document order. */
-export function codeLanguageFindings(tree: MdNode, source: string): CodeLanguageFinding[] {
+/**
+ * Every place in a parsed page where Chinese sits in code the sync service
+ * copies, in document order, each with its place's severity.
+ */
+export function codeLanguageFindings(tree: MdNode, source: string, severity: Readonly<Record<CodePlace, Severity>> = CODE_LANGUAGE_SEVERITY): CodeLanguageFinding[] {
   const lineStarts = [0];
   for (let i = source.indexOf('\n'); i >= 0; i = source.indexOf('\n', i + 1)) lineStarts.push(i + 1);
   const lineOf = (offset: number): number => {
@@ -415,7 +446,7 @@ export function codeLanguageFindings(tree: MdNode, source: string): CodeLanguage
       seen.add(key);
       const lineEnd = source.indexOf('\n', lineStarts[line]!);
       const text = source.slice(lineStarts[line], lineEnd < 0 ? source.length : lineEnd).trim().slice(0, 100);
-      out.push({ place: c.place, severity: CODE_LANGUAGE_SEVERITY[c.place], line: line + 1, column: offset - lineStarts[line]! + 1, name: c.name, text, message: message(c.place, c.name) });
+      out.push({ place: c.place, severity: severity[c.place], line: line + 1, column: offset - lineStarts[line]! + 1, name: c.name, text, message: message(c.place, c.name) });
     }
   };
   const walk = (node: MdNode): void => {
@@ -427,9 +458,9 @@ export function codeLanguageFindings(tree: MdNode, source: string): CodeLanguage
 }
 
 /** a remark plugin recording codeLanguageFindings() on the file as `file.data.codeLanguage` */
-export function remarkCodeLanguage() {
+export function remarkCodeLanguage(options: { severity?: Readonly<Record<CodePlace, Severity>> | undefined } = {}) {
   return (tree: MdNode, file: { value: unknown; data: Record<string, unknown> }): void => {
-    file.data['codeLanguage'] = codeLanguageFindings(tree, String(file.value));
+    file.data['codeLanguage'] = codeLanguageFindings(tree, String(file.value), options.severity);
   };
 }
 

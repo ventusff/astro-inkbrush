@@ -13,7 +13,7 @@ import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
 import { codeComments } from '../src/lib/code-comments.ts';
-import { CODE_LANGUAGE_SEVERITY, codeLanguageFindings, type CodeLanguageFinding } from '../src/lib/code-language.ts';
+import { CODE_LANGUAGE_SEVERITY, codeLanguageFindings, codeLanguageSeverity, type CodeLanguageFinding } from '../src/lib/code-language.ts';
 import { markdownSyntax } from '../src/lib/markdown-syntax.ts';
 
 const parse = (source: string, mdx = true) =>
@@ -102,13 +102,22 @@ test('inline code and code: placeholders and code outside comments; a fence with
   assert.deepEqual(places('```js\n/* 第一行\n第二行 */\nconst s = "中文";\n```', false), ['code-block@4:12']);
 });
 
-test('each finding carries its place\'s severity, message and source line', () => {
-  const [inline, block] = find('`<作业号>`\n\n```sh\necho 好\n```', false);
-  assert.equal(inline?.severity, CODE_LANGUAGE_SEVERITY['inline-code']);
+test('each finding carries its place\'s severity, message and source line: warnings unless the site raises them', () => {
+  const page = '`<作业号>`\n\n```sh\necho 好\n```';
+  const [inline, block] = find(page, false);
   assert.equal(inline?.severity, 'warning');
-  assert.equal(block?.severity, 'error');
+  assert.equal(block?.severity, 'warning');
   assert.match(block?.message ?? '', /a sh code block outside its comments/);
   assert.equal(block?.text, 'echo 好');
+  const raised = codeLanguageFindings(parse(page, false) as never, page, codeLanguageSeverity({ 'code-block': 'error' }));
+  assert.deepEqual(raised.map((f) => f.severity), ['warning', 'error']);
+  assert.deepEqual(Object.values(codeLanguageSeverity('error')), ['error', 'error', 'error', 'error']);
+  assert.deepEqual(codeLanguageSeverity(undefined), CODE_LANGUAGE_SEVERITY);
+  assert.throws(() => codeLanguageSeverity({ scripts: 'error' }), /the places are script, attribute, code-block, inline-code/);
+  assert.throws(() => codeLanguageSeverity('fatal'), /'error', 'warning', or an object/);
+  assert.throws(() => codeLanguageSeverity(new Map([['script', 'error']])), /'error', 'warning', or an object/);
+  assert.throws(() => codeLanguageSeverity(['error']), /'error', 'warning', or an object/);
+  assert.deepEqual(codeLanguageSeverity(Object.assign(Object.create(null), { script: 'error' })).script, 'error');
 });
 
 test('a finding is reported at its own line and column, once per line', () => {

@@ -102,7 +102,8 @@ yourself in the browser on the
   pages a translation service translates from an `i18n.config.json`, every
   code fence names its language and a source page's code holds no Chinese,
   since the service copies code into every language as written),
-  `check-language.mjs` (that last check alone, with its warnings),
+  `check-language.mjs` (that last check alone; its findings are warnings
+  until the `--config` module exports `codeLanguage: 'error'`),
   `check-wikilinks.mjs` (dead or ambiguous `[[wikilinks]]`, dubious
   anchors — with the library's own parser and resolution rules) and
   `check-dist.mjs` (broken links, dangling anchors, locale doubling, nested

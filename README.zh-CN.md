@@ -78,7 +78,7 @@ frontmatter 原地编辑,守门拒绝一次坏的保存——见
   时你站点的插件真编译每个源文件;传入 `--frontmatter` 时,每个文件的
   frontmatter 还要在构建之前先过你的内容集合 schema;仓里有 `i18n.config.json`、
   页面由译文服务翻译时,每个代码块都要写明语言,原文页的代码里也不能有中文——
-  服务把代码原样抄进每一种语言)、`check-language.mjs`(单跑最后这一项,连同警告)、`check-wikilinks.mjs`(死链或多义的
+  服务把代码原样抄进每一种语言)、`check-language.mjs`(单跑最后这一项;这一项默认只报警告,`--config` 模块导出 `codeLanguage: 'error'` 才算错误)、`check-wikilinks.mjs`(死链或多义的
   `[[双链]]`、可疑锚点——解析器与解析规则直接取自库本体)与 `check-dist.mjs`
   (构建产物的死链、悬空锚点、语言段重复、`<a>` 嵌套、KaTeX 报错残留,以及
   任何 CMS 注入痕迹)。

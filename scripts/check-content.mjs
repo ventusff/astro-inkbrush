@@ -23,10 +23,10 @@
  * source language (src/lib/translation-declaration.ts) must also keep its
  * code free of Chinese: the service copies that code into every other
  * language as written
- * (src/lib/code-language.ts). How each place counts is set once for every
- * site in CODE_LANGUAGE_SEVERITY: an error is a finding, a warning is listed
- * after the findings and does not fail the run. scripts/check-language.mjs
- * runs this check alone.
+ * (src/lib/code-language.ts). Its findings are warnings, listed after the
+ * findings without failing the run, unless the `--config` module's
+ * `codeLanguage` export raises places to errors, which are findings.
+ * scripts/check-language.mjs runs this check alone.
  *
  * After the pipeline, the file's block map — the source line stamps the
  * in-place editor reads and writes blocks by — is verified: stamps must be
@@ -57,7 +57,10 @@
  *                      — the same lists the site hands to markdownProcessor.
  *                      Mounted after the dialect and the guard; rehype
  *                      plugins after remark-rehype. Loaded with Node's
- *                      native TypeScript support.
+ *                      native TypeScript support. Its `codeLanguage`
+ *                      export ('error', or places such as
+ *                      { script: 'error' }) turns those code-language
+ *                      warnings into findings.
  *   --math             mount remark-math (required for math sites without
  *                      --config: formula braces otherwise read as JSX
  *                      expressions in MDX). Not needed when --config already
@@ -100,7 +103,7 @@ const { frontmatterProblems, loadFrontmatterSchema } = await import(
 );
 const { rehypeWikiBlocks } = await import(pathToFileURL(join(engineRoot, 'src/lib/rehype-wiki-blocks.ts')).href);
 const { blockStampProblems } = await import(pathToFileURL(join(engineRoot, 'src/lib/wiki-blocks-check.ts')).href);
-const { CODE_LANGUAGE_ADVICE, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
+const { CODE_LANGUAGE_ADVICE, codeLanguageSeverity, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
 const { findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
 );
@@ -109,8 +112,10 @@ const { findTranslationDeclaration, isSourcePage, readTranslationDeclaration } =
 
 /**
  * Load the site's plugin module: `{ remarkPlugins?, rehypePlugins?,
- * remarkRehype? }` as named exports or as the default export. Absent lists
- * are empty; a non-array list is an error.
+ * remarkRehype?, codeLanguage? }` as named exports or as the default export.
+ * Absent lists are empty; a non-array list is an error. `codeLanguage` raises
+ * places of the code-language check to errors (src/lib/code-language.ts,
+ * codeLanguageSeverity); an unknown value is an error.
  */
 export async function loadSiteConfig(path) {
   const mod = await import(pathToFileURL(resolve(path)).href);
@@ -120,10 +125,17 @@ export async function loadSiteConfig(path) {
     if (!Array.isArray(value)) throw new Error(`${path}: export "${name}" must be an array of plugins`);
     return value;
   };
+  let codeLanguage;
+  try {
+    codeLanguage = codeLanguageSeverity(cfg.codeLanguage);
+  } catch (err) {
+    throw new Error(`${path}: export ${err.message}`);
+  }
   return {
     remarkPlugins: list('remarkPlugins'),
     rehypePlugins: list('rehypePlugins'),
     remarkRehype: cfg.remarkRehype && typeof cfg.remarkRehype === 'object' ? cfg.remarkRehype : {},
+    codeLanguage,
   };
 }
 
@@ -241,11 +253,13 @@ function rehypeBlockStamps() {
 /** the site's pipeline up to the point where a finding can surface: dialect
  *  → (codeLanguage: the code-language reading of the fresh tree) → guard →
  *  (--math) → site remark plugins → remark-rehype → site rehype plugins →
- *  block stamps and their check */
+ *  block stamps and their check
+ * @param {{ math?: boolean, namedFences?: boolean, codeLanguage?: boolean,
+ *           site?: { remarkPlugins: unknown[], rehypePlugins: unknown[], remarkRehype?: unknown, codeLanguage?: Record<string, 'error' | 'warning'> } }} [options] */
 export function buildPipeline({ math = false, site, namedFences = false, codeLanguage = false } = {}) {
   const remarkPlugins = [
     ...markdownSyntax(),
-    ...(codeLanguage ? [remarkCodeLanguage] : []),
+    ...(codeLanguage ? [[remarkCodeLanguage, { severity: site?.codeLanguage }]] : []),
     [remarkContentGuard, { namedFences }],
     ...(math ? [remarkMath] : []),
     ...(site?.remarkPlugins ?? []),
@@ -384,7 +398,9 @@ const USAGE = `usage: check-content.mjs [<root>] [--glob <pattern>]... [--skip <
   --config <path>    JS/TS module exporting { remarkPlugins, rehypePlugins,
                      remarkRehype } — the lists the site hands to
                      markdownProcessor; mounted after the dialect and the
-                     guard, rehype plugins after remark-rehype
+                     guard, rehype plugins after remark-rehype; its
+                     codeLanguage export ('error', or { script: 'error' } …)
+                     turns code-language warnings into findings
   --math             mount remark-math (required for math sites without
                      --config; not needed when --config lists remark-math)
   --frontmatter <path>

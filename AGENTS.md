@@ -87,8 +87,9 @@ npm test
   Chinese in the code the service copies into every language
   (`src/lib/code-language.ts`; `src/lib/code-comments.ts` reads code-block
   comments the way the service does, and the readable key and attribute
-  lists match the service's). `CODE_LANGUAGE_SEVERITY` there is the one
-  switch for how each place counts in every site; `scripts/check-language.mjs`
+  lists match the service's). Its findings are warnings unless the
+  `--config` module exports `codeLanguage` (`'error'`, or places such as
+  `{ script: 'error' }`) to make them fail the check; `scripts/check-language.mjs`
   runs that check alone.
 - `<meta name="inkbrush-note" content="<note id>">`: a note page declares
   its identity; the client never parses URLs. Optional

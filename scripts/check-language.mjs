@@ -13,8 +13,10 @@
  * in that code (src/lib/code-language.ts): the other languages' copies follow
  * these pages, so they are not read.
  *
- * Each place counts as CODE_LANGUAGE_SEVERITY says: errors fail the run,
- * warnings are listed and pass. check-content runs the same check among its
+ * Every finding is a warning, listed and passing, unless the site's
+ * `--config` module raises its place to an error with a `codeLanguage`
+ * export (codeLanguageSeverity in src/lib/code-language.ts); errors fail the
+ * run. check-content runs the same check among its
  * own; this CLI runs it alone, in a second or two, and lists the warnings
  * first-hand.
  *
@@ -66,7 +68,12 @@ function parser({ mdx, math, site }) {
  * The code-language findings of every page under `root` in its own source
  * language: `{ declaration, checked, files: [{ file, errors, warnings }], places }`,
  * `declaration` null when no translation is declared over the root, `places`
- * the kinds of place reported.
+ * the kinds of place reported. `site` is a loaded --config module
+ * (check-content's loadSiteConfig): its remark plugins' syntax and its
+ * code-language severity.
+ * @param {string} root
+ * @param {{ globs?: string[], skip?: string[], math?: boolean,
+ *           site?: { remarkPlugins: unknown[], codeLanguage?: Record<string, 'error' | 'warning'> } }} [options]
  */
 export async function checkLanguage(root, { globs = ['**/index.{md,mdx}'], skip = [], math = false, site } = {}) {
   const absRoot = resolve(root);
@@ -84,7 +91,7 @@ export async function checkLanguage(root, { globs = ['**/index.{md,mdx}'], skip 
     const { body } = splitFrontmatter(readFileSync(file, 'utf8'));
     let findings;
     try {
-      findings = codeLanguageFindings(parsers[file.endsWith('.mdx') ? 'mdx' : 'md'].parse(body), body);
+      findings = codeLanguageFindings(parsers[file.endsWith('.mdx') ? 'mdx' : 'md'].parse(body), body, site?.codeLanguage);
     } catch (err) {
       files.push({ file: rel, errors: [`the page does not parse (npm run content:check says where): ${err.reason ?? err.message}`], warnings: [] });
       continue;
@@ -104,14 +111,18 @@ const USAGE = `usage: check-language.mjs [<root>] [--glob <pattern>]... [--skip 
                      **/index.{md,mdx})
   --skip <dir>       a directory, relative to <root>, not to scan (repeatable)
   --config <path>    the site's plugin module (as for check-content): its
-                     remark plugins' syntax is how a page is read
+                     remark plugins' syntax is how a page is read, and its
+                     codeLanguage export ('error', or places such as
+                     { script: 'error' }) turns those places' findings into
+                     errors
   --math             read $…$ as math without --config
   --help             print this usage
 
 Every page under <root> in its own source language (by the i18n.config.json
 over <root> and its i18n.lock) is read for Chinese in the code the translation
-sync service copies from it into every other language: the script, attributes of components and raw HTML other than the
-reader-facing ones, inline code, code blocks outside their comments.
+sync service copies from it into every other language: the script, attributes
+of components and raw HTML other than the reader-facing ones, inline code, code
+blocks outside their comments. A finding is a warning unless --config raises it.
 Exit code: 0 no errors (warnings are listed and pass), 1 errors, 2 usage error.`;
 
 export async function main(argv) {
