@@ -48,7 +48,7 @@ test('prose, reader-facing keys and attributes, text blocks and comments are tra
     'x = 1  # 一',
     '```',
     '',
-    '## 小节 `{#section toc="小节"}`',
+    '## 小节 `{#小节 toc="小节"}`',
   ].join('\n');
   assert.deepEqual(places(page), []);
 });
@@ -125,6 +125,7 @@ test('a finding is reported at its own line and column, once per line', () => {
   assert.deepEqual(places('<A b="甲" c={"乙"} />'), ['attribute@1:7', 'attribute@1:14']);
   assert.deepEqual(places(['- 一项', '', '  ```sh', '  echo ok', '  echo 甲', '  ```'].join('\n'), false), ['code-block@5:8']);
   assert.deepEqual(places('## 小节 `{#s toc="小节" data-x="甲"}`', false), ['inline-code@1:29']);
+  assert.deepEqual(places('写成 `{#小节}`。\n\n## 小节 `{#小节}` 之后', false), ['inline-code@1:7', 'inline-code@3:10']);
 });
 
 test('raw HTML in Markdown: attributes the service copies, script and style, an unclosed comment; text and comments are translated', () => {

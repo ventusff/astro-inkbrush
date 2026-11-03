@@ -359,8 +359,12 @@ function htmlCopied(text: string, from: number, to: number): Copied[] {
   return out;
 }
 
-/** the copied stretches of one node of the page, from its source */
-function copiedOf(node: MdNode, source: string): Copied[] {
+/**
+ * The copied stretches of one node of the page, from its source. `endsHeading`:
+ * the node is the last child of a heading, where inline code `{#id …}` is the
+ * heading's anchor.
+ */
+function copiedOf(node: MdNode, source: string, endsHeading: boolean): Copied[] {
   const a = node.position?.start.offset;
   const b = node.position?.end.offset;
   if (a === undefined || b === undefined) return [];
@@ -389,11 +393,14 @@ function copiedOf(node: MdNode, source: string): Copied[] {
         return less(s, e, program ? translatedLiterals(program, 'expression', name) : [], 'attribute', name);
       });
     case 'inlineCode': {
-      // a heading anchor `{#id toc="…"}`: the service translates its readable attribute values
+      // an attribute block `{#id toc="…"}`: the service translates its readable attribute values; ending a heading it is
+      // the heading's anchor, whose id names the heading in every language and is shown to no reader, so it is no finding
       const src = source.slice(a, b);
-      const anchor = /^(`+)\s*\{#[^\s}]*/.exec(src);
-      const list = anchor && /\}\s*`+$/.test(src) ? attributeList(source, a + anchor[0].length, b, '}') : null;
-      const holes = (list?.attributes ?? []).filter((x) => x.quoted && READABLE_ATTRIBUTES.has(x.name)).map((x) => [x.start, x.end] as [number, number]);
+      const block = /^(`+)\s*\{#[^\s}]*/.exec(src);
+      const list = block && /\}\s*`+$/.test(src) ? attributeList(source, a + block[0].length, b, '}') : null;
+      if (!block || !list) return less(a, b, [], 'inline-code');
+      const holes = list.attributes.filter((x) => x.quoted && READABLE_ATTRIBUTES.has(x.name)).map((x) => [x.start, x.end] as [number, number]);
+      if (endsHeading) holes.push([a + block[0].indexOf('{#') + 2, a + block[0].length]);
       return less(a, b, holes, 'inline-code');
     }
     case 'code': {
@@ -449,11 +456,12 @@ export function codeLanguageFindings(tree: MdNode, source: string, severity: Rea
       out.push({ place: c.place, severity: severity[c.place], line: line + 1, column: offset - lineStarts[line]! + 1, name: c.name, text, message: message(c.place, c.name) });
     }
   };
-  const walk = (node: MdNode): void => {
-    for (const c of copiedOf(node, source)) report(c);
-    for (const child of node.children ?? []) walk(child);
+  const walk = (node: MdNode, endsHeading: boolean): void => {
+    for (const c of copiedOf(node, source, endsHeading)) report(c);
+    const children = node.children ?? [];
+    children.forEach((child, i) => walk(child, node.type === 'heading' && i === children.length - 1));
   };
-  walk(tree);
+  walk(tree, false);
   return out.sort((x, y) => x.line - y.line || x.column - y.column);
 }
 
