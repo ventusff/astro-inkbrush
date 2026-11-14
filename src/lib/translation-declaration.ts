@@ -66,15 +66,36 @@ export interface Page {
 }
 
 /**
+ * A directory that lies in no git checkout and has no i18n.config.json above
+ * it: whether its repository declares translation cannot be told, because the
+ * declaration lives at the repository top and a copy of part of a repository
+ * leaves it behind.
+ */
+export class OutsideCheckoutError extends Error {
+  /** the directory the search started from */
+  readonly dir: string;
+
+  constructor(dir: string) {
+    super(
+      `${dir} is in no git checkout and has no i18n.config.json above it: whether its pages are translated is declared at the repository top, so run the check inside the checkout`,
+    );
+    this.name = 'OutsideCheckoutError';
+    this.dir = dir;
+  }
+}
+
+/**
  * The i18n.config.json in `dir` or a directory above it, up to the
- * repository top (the nearest directory holding `.git`; a checkout without
- * one is searched up to the filesystem root); null when there is none.
+ * repository top (the nearest directory holding `.git`); null when the
+ * repository has none. Throws OutsideCheckoutError when `dir` is in no
+ * checkout and no declaration lies above it up to the filesystem root.
  */
 export function findTranslationDeclaration(dir: string): string | null {
   for (let at = resolve(dir); ; at = resolve(at, '..')) {
     const path = join(at, 'i18n.config.json');
     if (existsSync(path)) return path;
-    if (existsSync(join(at, '.git')) || resolve(at, '..') === at) return null;
+    if (existsSync(join(at, '.git'))) return null;
+    if (resolve(at, '..') === at) throw new OutsideCheckoutError(resolve(dir));
   }
 }
 

@@ -82,7 +82,9 @@ npm test
   check-content also holds every file's frontmatter to the site's schema
   (a Standard Schema export, or a `({ z }) => schema` factory called with
   Astro's zod). Under an `i18n.config.json` (the translation sync service's
-  declaration, read by `src/lib/translation-declaration.ts`) check-content
+  declaration at the repository top, read by
+  `src/lib/translation-declaration.ts`; a content root in no checkout with no
+  declaration above it stops both checks with `OutsideCheckoutError`) check-content
   also requires named code fences and reads every source-language page for
   Chinese in the code the service copies into every language
   (`src/lib/code-language.ts`; `src/lib/code-comments.ts` reads code-block

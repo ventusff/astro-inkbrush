@@ -49,7 +49,7 @@ const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
 const { markdownSyntax } = await import(pathToFileURL(join(engineRoot, 'src/lib/markdown-syntax.ts')).href);
 const { splitFrontmatter } = await import(pathToFileURL(join(engineRoot, 'src/lib/frontmatter.ts')).href);
 const { codeLanguageFindings } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
-const { findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
+const { OutsideCheckoutError, findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
 );
 
@@ -165,6 +165,10 @@ export async function main(argv) {
   try {
     result = await checkLanguage(root, { globs: globs.length > 0 ? globs : undefined, skip: many('skip'), math: argv.includes('--math'), site });
   } catch (err) {
+    if (err instanceof OutsideCheckoutError) {
+      console.error(err.message);
+      return 2;
+    }
     if (!(err instanceof SyntaxError)) throw err;
     console.error(`cannot read the translation declaration over ${root}: ${err.message}`);
     return 2;

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { findTranslationDeclaration, isSourcePage, pageOf, readTranslationDeclaration } from '../src/lib/translation-declaration.ts';
+import { OutsideCheckoutError, findTranslationDeclaration, isSourcePage, pageOf, readTranslationDeclaration } from '../src/lib/translation-declaration.ts';
 
 function repo(config: unknown, files: Record<string, string> = {}, lock?: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), 'translation-declaration-'));
@@ -31,7 +31,7 @@ const PREFIX = {
   ],
 };
 
-test('the declaration is found above the content root, up to the repository top', () => {
+test('the declaration is found above the content root, up to the repository top; outside any checkout it cannot be told', () => {
   const dir = repo({});
   try {
     mkdirSync(join(dir, 'site/src/docs'), { recursive: true });
@@ -41,6 +41,12 @@ test('the declaration is found above the content root, up to the repository top'
     assert.equal(findTranslationDeclaration(inner), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+  const copy = mkdtempSync(join(tmpdir(), 'translation-declaration-copy-'));
+  try {
+    assert.throws(() => findTranslationDeclaration(copy), OutsideCheckoutError);
+  } finally {
+    rmSync(copy, { recursive: true, force: true });
   }
 });
 

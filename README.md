@@ -101,7 +101,9 @@ yourself in the browser on the
   content-collection schema before the build does; in a repository whose
   pages a translation service translates from an `i18n.config.json`, every
   code fence names its language and a source page's code holds no Chinese,
-  since the service copies code into every language as written),
+  since the service copies code into every language as written; the
+  declaration sits at the repository top, so the check runs inside a
+  checkout and stops on a content root that is in none),
   `check-language.mjs` (that last check alone; its findings are warnings
   until the `--config` module exports `codeLanguage: 'error'`),
   `check-wikilinks.mjs` (dead or ambiguous `[[wikilinks]]`, dubious

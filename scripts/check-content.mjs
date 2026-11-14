@@ -104,7 +104,7 @@ const { frontmatterProblems, loadFrontmatterSchema } = await import(
 const { rehypeWikiBlocks } = await import(pathToFileURL(join(engineRoot, 'src/lib/rehype-wiki-blocks.ts')).href);
 const { blockStampProblems } = await import(pathToFileURL(join(engineRoot, 'src/lib/wiki-blocks-check.ts')).href);
 const { CODE_LANGUAGE_ADVICE, codeLanguageSeverity, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
-const { findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
+const { OutsideCheckoutError, findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
 );
 
@@ -334,8 +334,8 @@ export async function checkSource(source, options) {
 /**
  * The repository holding <root> declares translation sync: `i18n.config.json`
  * in <root> or a directory above it, up to the repository top (the nearest
- * directory holding `.git`; a checkout without one is searched up to the
- * filesystem root). Its pages are then translated by the sync service, which
+ * directory holding `.git`; a <root> in no checkout with no declaration above
+ * it throws OutsideCheckoutError). Its pages are then translated by the sync service, which
  * keeps or translates a code fence by the language the fence names — so every
  * fence must name one — and copies a page's code into every language.
  */
@@ -487,6 +487,10 @@ export async function main(argv) {
       frontmatter,
     });
   } catch (err) {
+    if (err instanceof OutsideCheckoutError) {
+      console.error(err.message);
+      return 2;
+    }
     if (!(err instanceof SyntaxError)) throw err;
     console.error(`cannot read the translation declaration over ${root}: ${err.message}`);
     return 2;

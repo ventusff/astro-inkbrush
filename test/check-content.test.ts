@@ -97,6 +97,7 @@ test('a nonexistent root and an empty corpus fail; --allow-empty accepts only th
   assert.equal(await main([missing, '--allow-empty']), 1);
   const empty = mkdtempSync(join(tmpdir(), 'inkbrush-empty-'));
   try {
+    mkdirSync(join(empty, '.git'));
     assert.equal(await main([empty]), 1);
     assert.equal(await main([empty, '--allow-empty']), 0);
   } finally {
@@ -108,6 +109,7 @@ test('the walker follows symlinks only inside the root and terminates on cycles'
   const dir = mkdtempSync(join(tmpdir(), 'inkbrush-content-'));
   const outside = mkdtempSync(join(tmpdir(), 'inkbrush-elsewhere-'));
   try {
+    mkdirSync(join(dir, '.git'));
     mkdirSync(join(outside, 'leak'));
     writeFileSync(join(outside, 'leak', 'index.md'), 'text with an `**` unpaired marker\n');
     mkdirSync(join(dir, 'note'));
@@ -197,12 +199,13 @@ test('a repo that declares translation sync (i18n.config.json at its root) needs
   }
 });
 
-test('a checkout without .git still finds the translation-sync declaration at its top', async () => {
+test('a checkout without .git still finds the translation-sync declaration at its top; with neither, the check stops', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'check-content-fences-nogit-'));
   try {
     mkdirSync(join(repo, 'src/docs/setup'), { recursive: true });
-    writeFileSync(join(repo, 'i18n.config.json'), '{}');
     writeFileSync(join(repo, 'src/docs/setup/index.md'), '# Setup\n\n```\nnpm ci\n```\n');
+    assert.equal(await main([join(repo, 'src/docs')]), 2);
+    writeFileSync(join(repo, 'i18n.config.json'), '{}');
     const f = byFile((await checkContent(join(repo, 'src/docs'))).findings);
     assert.match(f.get('setup/index.md')?.[0] ?? '', /names no language/);
   } finally {

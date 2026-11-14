@@ -62,6 +62,7 @@ test('without a matching record the first block takes the gap, as a lone block d
 test('check-content: display formulas written back to back keep a sound block map under KaTeX', async () => {
   const root = mkdtempSync(join(tmpdir(), 'inkbrush-ranges-'));
   try {
+    mkdirSync(join(root, '.git'));
     for (const name of ['md/index.md', 'mdx/index.mdx']) {
       mkdirSync(join(root, name, '..'), { recursive: true });
       writeFileSync(join(root, name), SOURCE);
