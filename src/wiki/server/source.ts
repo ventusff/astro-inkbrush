@@ -37,7 +37,7 @@ import { fail, type HttpError, json, readBody, refusal, refuse } from './index.t
 import { renderMarkdown } from './markdown.ts';
 import { createRootedScanner } from './note-scan.ts';
 import { frontmatterField, NOTE_ID } from './note-id.ts';
-import { containedPath } from './paths.ts';
+import { containedPath, realpathDeep } from './paths.ts';
 import { appendNdjson, projectRoot, readNdjson, wikiDataDir, withLock, writeFileAtomic } from './store.ts';
 import { validateSource } from './validate.ts';
 
@@ -275,7 +275,10 @@ function inGitQueue<T>(operation: () => Promise<T>): Promise<T> {
  * is computed with `git merge-tree`, which writes no file, and the checkout
  * moves to the merge commit by a fast-forward, which updates only the files
  * origin changed and stops rather than overwrite a file a save has written
- * and not committed yet. A merge that conflicts (the same lines edited here
+ * and not committed yet. The merge holds the write lock of every file origin
+ * changed, the lock a save holds from reading the file to writing it back, so
+ * a save reads such a file wholly before the merge or wholly after it and
+ * never writes back bytes the merge replaced. A merge that conflicts (the same lines edited here
  * and on origin) is not made: the commits stay local, every later push turns
  * back the same way, and the log says so until a person merges by hand.
  * The network steps run outside the queue, so no save waits on them.
@@ -290,15 +293,22 @@ async function pushToUpstream(repoRoot: string, skipCi: boolean): Promise<void> 
   }
   try {
     await git('fetch');
-    await inGitQueue(async () => {
-      // a push turned back for another reason (network, credentials) has nothing to merge
-      if (await git('merge-base', '--is-ancestor', '@{upstream}', 'HEAD').then(() => true, () => false)) return;
-      const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
-      const tree = (await git('merge-tree', '--write-tree', 'HEAD', '@{upstream}')).stdout.split('\n')[0]!;
-      const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
-      const merge = (await git('commit-tree', tree, '-p', 'HEAD', '-p', '@{upstream}', '-m', message)).stdout.trim();
-      await git('merge', '--ff-only', merge);
-    });
+    // a push turned back for another reason (network, credentials) has nothing to merge
+    if (await git('merge-base', '--is-ancestor', '@{upstream}', 'HEAD').then(() => true, () => false)) return;
+    // the files origin changed since the common ancestor: exactly the files the fast-forward rewrites,
+    // whatever this checkout commits meanwhile; their locks are taken in sorted order, before the git
+    // queue, the order a save takes its file's lock and then the queue for its commit
+    const changed = (await git('diff', '--name-only', '-z', 'HEAD...@{upstream}')).stdout.split('\0').filter(Boolean);
+    const keys = [...new Set(changed.map((rel) => realpathDeep(resolve(repoRoot, rel))))].sort();
+    const merge = () =>
+      inGitQueue(async () => {
+        const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
+        const tree = (await git('merge-tree', '--write-tree', 'HEAD', '@{upstream}')).stdout.split('\n')[0]!;
+        const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
+        const commit = (await git('commit-tree', tree, '-p', 'HEAD', '-p', '@{upstream}', '-m', message)).stdout.trim();
+        await git('merge', '--ff-only', commit);
+      });
+    await keys.reduceRight<() => Promise<void>>((next, key) => () => withLock(key, next), merge)();
     await git('push');
   } catch (err) {
     console.error('[wiki autopush]', err);

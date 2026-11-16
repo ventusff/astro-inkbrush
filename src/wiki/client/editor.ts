@@ -14,6 +14,9 @@
  * width; the site's appearance layer styles it exactly as it styles the
  * slide.
  *
+ * The editor owns the keys pressed in it: none reaches the page's own
+ * shortcuts (a presented slide's keys among them), and Escape closes it.
+ *
  * Save = PUT /block (optimistic lock via slice hash + whole-file MDX compile
  * gate on the server). On success astro's content HMR reloads the page; the
  * scroll position is remembered so the reader doesn't lose their place.
@@ -69,7 +72,9 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   const cmHost = h('div', { class: 'wiki-editor-cm' });
   const title = block.frontmatter ? S.editor.frontmatterTitle : S.editor.title(block.jsx);
   const slide = block.el.closest<HTMLElement>('[data-deck-canvas]')?.closest<HTMLElement>('[data-deck-slide]') ?? null;
-  const slidePreview = slide ? slideCopy(slide, block.el) : null;
+  // the block being edited carries `data-wiki-editing` while the editor is open, for the site's styles to read
+  block.el.dataset['wikiEditing'] = '';
+  const slidePreview = slide ? slideCopy(slide) : null;
 
   const shell = h(
     'div',
@@ -122,8 +127,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
       return;
     }
     if (hasJsx(source)) {
-      if (slidePreview) previewBody.replaceChildren(slidePreview.frame);
-      else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
+      previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
       return;
     }
     previewTimer = setTimeout(async () => {
@@ -168,6 +172,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
     view.destroy();
     shell.remove();
     slidePreview?.dispose();
+    delete block.el.dataset['wikiEditing'];
     if (hostDisplay) block.el.style.setProperty('display', hostDisplay, hostDisplayPriority);
     else block.el.style.removeProperty('display');
     activeCleanup = null;
@@ -217,7 +222,6 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
       history(),
       keymap.of([
         { key: 'Mod-Enter', run: () => save() },
-        { key: 'Escape', run: () => (close(), true) },
         ...defaultKeymap,
         ...historyKeymap,
       ]),
@@ -234,10 +238,18 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
 
   saveBtn.addEventListener('click', () => save());
   cancelBtn.addEventListener('click', close);
+  // an Escape the editor itself took (closing its completion list) is not a close
+  shell.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.defaultPrevented) {
+      e.preventDefault();
+      close();
+    }
+    e.stopPropagation();
+  });
 
   if (slide) {
     document.body.append(shell);
-    slidePreview!.fit(previewBody);
+    slidePreview!.fit();
   } else {
     block.el.style.display = 'none';
     block.el.insertAdjacentElement('afterend', shell);
@@ -250,20 +262,22 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
 
 /**
  * A copy of a slide for the docked editor's preview: the slide element
- * cloned, the edited block's place in it remembered, scaled to the width of
- * the box it is shown in (`--deck-k`, the scale the site's slide styles read).
+ * cloned as a picture of the slide (its blocks are not blocks of the page,
+ * so the editor's marks on them, `wiki-block`, are dropped), the edited
+ * block's place in it remembered, its canvas scaled to
+ * the copy's own inner width (`--deck-k`, the scale the site's slide styles
+ * read), so the whole canvas shows in whatever box the copy is laid out in.
  * `put` replaces the block's rendering on the copy; the copy's components are
  * mounted by the site's own scripts on `astro:page-load`.
  */
-function slideCopy(slide: HTMLElement, blockEl: HTMLElement): {
+function slideCopy(slide: HTMLElement): {
   frame: HTMLElement;
   put(html: string): void;
-  fit(box: HTMLElement): void;
+  fit(): void;
   dispose(): void;
 } {
-  blockEl.dataset['wikiEditing'] = '';
   const copy = slide.cloneNode(true) as HTMLElement;
-  delete blockEl.dataset['wikiEditing'];
+  for (const el of copy.querySelectorAll('.wiki-block')) el.classList.remove('wiki-block');
   copy.removeAttribute('id');
   copy.setAttribute('aria-hidden', 'true');
   copy.inert = true;
@@ -286,10 +300,10 @@ function slideCopy(slide: HTMLElement, blockEl: HTMLElement): {
       shown = nodes;
       document.dispatchEvent(new Event('astro:page-load'));
     },
-    fit(box) {
-      const scale = () => copy.style.setProperty('--deck-k', String(box.clientWidth / width));
+    fit() {
+      const scale = () => copy.style.setProperty('--deck-k', String(copy.clientWidth / width));
       resize = new ResizeObserver(scale);
-      resize.observe(box);
+      resize.observe(copy);
       scale();
     },
     dispose() {
