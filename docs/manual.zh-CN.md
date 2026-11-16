@@ -238,7 +238,7 @@ export default defineInkbrushConfig({
 | `inbox.dir` | 关 | Obsidian 收件箱监听目录(支持 `~/`) |
 | `inbox.ignore` | `[]` | 导入跳过清单(路径/文件名前缀) |
 | `autocommit` | `false` | 每次保存后在内容仓自动 git commit(作者 = 登录用户) |
-| `autopush` | `false` | 每次 autocommit 后异步 git push——部署机开启 |
+| `autopush` | `false` | 每次 autocommit 后异步 git push;origin 已有新提交、推送被顶回时,先把 origin 合并进来再推一次——部署机开启 |
 | `skipCi` | `false` | 每条自动提交的信息末尾加一行 `[skip ci]`——站上保存与线上就是同一台服务器(一站一面)时开启,保存本身已经生效,不该再让任何流水线重建或重启 |
 | `claude.bin` / `claude.model` | `'claude'` / CLI 自身默认 | AI 端点用哪个 CLI / 哪个模型 |
 | `claude.companions` | 无 | `(note) => string[]`——笔记目录之外,任务还可以读写的项目相对路径(文件或目录) |
@@ -962,8 +962,11 @@ scripts/        check-content.mjs / check-language.mjs / check-wikilinks.mjs / c
   `auth.dev: false` 换真实登录方式、内容检出放持久卷,`autocommit` +
   `autopush` 把每次保存送回内容仓,再由 CI 重建读者站。
 - 一个 dev server 进程服务一个编辑团队:对同一篇笔记的写入在进程内按文件
-  串行,同一块的并发保存会被 409 拒绝而不是覆盖;进程之间没有协调——每个
-  内容仓只跑一个实例。
+  串行,同一块的并发保存会被 409 拒绝而不是覆盖;进程之间不互相协调:每个
+  站只跑一个实例。几个站(以及人、流水线)可以推同一个内容仓:推送被顶回
+  的保存先把 origin 合并进来再推一次。合并只更新 origin 改过的文件,不覆盖
+  还没提交的保存;本地与 origin 改了同几行时不合并,提交留在本地,之后每次
+  推送都记一行 `[wiki autopush]`,直到有人手动合并。
 
 典型配法:
 

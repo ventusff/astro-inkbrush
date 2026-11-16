@@ -15,7 +15,8 @@
  * Edit history is two layers: the journal is the fine-grained per-block
  * audit log (each record has a unique id); git in the content repo is the
  * durable versioning — `autocommit` commits each save with the signed-in
- * user as author, `autopush` pushes asynchronously after each commit, and
+ * user as author, `autopush` pushes asynchronously after each commit (merging
+ * origin in when another writer pushed first), and
  * `skipCi` marks each commit so no pipeline reacts to a save.
  */
 import { execFile } from 'node:child_process';
@@ -255,9 +256,54 @@ function authorIdent({ name, email }: { name: string; email: string }): string {
   return `${clean(name) || address.split('@')[0] || address} <${address}>`;
 }
 
-// git operations run one at a time behind this queue, so concurrent saves
-// cannot interleave their add/status/commit sequences
+// git operations on the working tree run one at a time behind this queue, so
+// concurrent saves cannot interleave their add/status/commit sequences, and
+// origin's commits are taken in between them, never in the middle of one
 let gitChain: Promise<unknown> = Promise.resolve();
+
+function inGitQueue<T>(operation: () => Promise<T>): Promise<T> {
+  const chained = gitChain.then(operation, operation);
+  gitChain = chained.catch(() => undefined);
+  return chained;
+}
+
+/**
+ * Push the content repo's branch to its upstream. Other writers push to the
+ * same repository (people, pipelines, other sites kept in it), so a push is
+ * turned back whenever origin has moved on since the last fetch. Then
+ * origin's tip is merged in and the push is made once more: the merge's tree
+ * is computed with `git merge-tree`, which writes no file, and the checkout
+ * moves to the merge commit by a fast-forward, which updates only the files
+ * origin changed and stops rather than overwrite a file a save has written
+ * and not committed yet. A merge that conflicts (the same lines edited here
+ * and on origin) is not made: the commits stay local, every later push turns
+ * back the same way, and the log says so until a person merges by hand.
+ * The network steps run outside the queue, so no save waits on them.
+ */
+async function pushToUpstream(repoRoot: string, skipCi: boolean): Promise<void> {
+  const git = (...args: string[]) => execFileP('git', args, { cwd: repoRoot });
+  try {
+    await git('push');
+    return;
+  } catch {
+    // turned back: merge origin below; any other failure fails the fetch too
+  }
+  try {
+    await git('fetch');
+    await inGitQueue(async () => {
+      // a push turned back for another reason (network, credentials) has nothing to merge
+      if (await git('merge-base', '--is-ancestor', '@{upstream}', 'HEAD').then(() => true, () => false)) return;
+      const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
+      const tree = (await git('merge-tree', '--write-tree', 'HEAD', '@{upstream}')).stdout.split('\n')[0]!;
+      const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
+      const merge = (await git('commit-tree', tree, '-p', 'HEAD', '-p', '@{upstream}', '-m', message)).stdout.trim();
+      await git('merge', '--ff-only', merge);
+    });
+    await git('push');
+  } catch (err) {
+    console.error('[wiki autopush]', err);
+  }
+}
 
 /**
  * Per-save git commit (+ optional async push) of the given project-relative
@@ -310,17 +356,11 @@ export function autocommit(
       console.error('[wiki autocommit]', err);
       return 'failed';
     }
-    if (cfg.autopush) {
-      // the save never waits on the network
-      execFileP('git', ['push'], { cwd: repoRoot }).catch((err: unknown) => {
-        console.error('[wiki autopush]', err);
-      });
-    }
+    // the save never waits on the network
+    if (cfg.autopush) void pushToUpstream(repoRoot, cfg.skipCi);
     return outside ? 'failed' : 'committed';
   };
-  const chained = gitChain.then(run, run);
-  gitChain = chained.catch(() => undefined);
-  return chained;
+  return inGitQueue(run);
 }
 
 /* ---------------- routes ---------------- */

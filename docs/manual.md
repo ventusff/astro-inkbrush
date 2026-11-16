@@ -307,7 +307,7 @@ export default defineInkbrushConfig({
 | `inbox.dir` | off | Obsidian inbox watch folder (`~/` supported) |
 | `inbox.ignore` | `[]` | Import skip list (path/basename prefixes) |
 | `autocommit` | `false` | git commit in the content repo after every save (author = the signed-in user) |
-| `autopush` | `false` | async git push after each autocommit — turn on for deployment machines |
+| `autopush` | `false` | async git push after each autocommit; a push turned back because origin moved on merges origin in and pushes again — turn on for deployment machines |
 | `skipCi` | `false` | every autocommit message ends with a `[skip ci]` line — for a single-surface deployment, where the saving server is the site and no pipeline should rebuild or restart for a save |
 | `claude.bin` / `claude.model` | `'claude'` / CLI default | Which CLI binary / `--model` the AI endpoints run |
 | `claude.companions` | none | `(note) => string[]` — project-relative files or directories a job may read and change beside the note's directory |
@@ -1189,8 +1189,14 @@ so the editing machine runs one, as a product, while readers never touch it:
   every save back to the content repo, where CI rebuilds the reader site.
 - One dev-server process serves one editing team: writes to a note are
   serialized per file inside the process, a concurrent save of the same
-  block is refused with 409 instead of overwritten, and there is no
-  cross-process coordination — run one instance per content repository.
+  block is refused with 409 instead of overwritten, and processes do not
+  coordinate with each other: run one instance per site. Several sites
+  (and people, and pipelines) may push to one content repository: a save
+  whose push is turned back merges origin in and pushes again. The merge
+  updates only the files origin changed and never overwrites a save not
+  yet committed; when the same lines were edited here and on origin it is
+  not made, the commits stay local, and every later push logs
+  `[wiki autopush]` until a person merges by hand.
 
 Typical setups:
 
