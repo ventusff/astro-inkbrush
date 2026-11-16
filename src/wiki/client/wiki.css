@@ -894,6 +894,9 @@ select.wiki-members-role {
   transition: opacity 0.12s ease, transform 0.12s ease;
   pointer-events: none;
 }
+.wiki-handle.wiki-handle-on-slide {
+  z-index: 1160;
+}
 .wiki-handle.show {
   opacity: 1;
   transform: none;

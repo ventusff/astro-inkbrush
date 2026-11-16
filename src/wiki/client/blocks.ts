@@ -224,6 +224,8 @@ export function mountBlocks(ctx: PageContext): void {
     setTabStop(block);
     syncAvailability();
     block.el.classList.add('wiki-block-hover');
+    // a slide being presented covers the page, the handle of a block on it rises above it
+    handle.classList.toggle('wiki-handle-on-slide', block.el.closest('[data-deck-canvas]') !== null);
     if (positionHandle(block)) {
       handle.classList.add('show');
       handle.inert = false;
