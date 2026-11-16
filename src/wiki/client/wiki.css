@@ -88,7 +88,7 @@
 .wiki-popover,
 .wiki-popover *,
 .wiki-editor,
-.wiki-editor *,
+.wiki-editor :not(.wiki-editor-slide, .wiki-editor-slide *),
 .wiki-chat,
 .wiki-chat *,
 .wiki-comments,
@@ -1015,6 +1015,40 @@ select.wiki-members-role {
   font: 400 12px/1.5 var(--wiki-mono);
   white-space: pre-wrap;
   border-top: 1px solid color-mix(in srgb, var(--wiki-danger) 20%, transparent);
+}
+
+/* A block on a slide is edited in a panel docked to the right edge, over the
+   deck (1100) and the block handle, under popovers and toasts; the preview is
+   a copy of the slide at the panel's width. */
+.wiki-editor.wiki-editor-docked {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1160;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 24px));
+  margin: 0;
+}
+.wiki-editor-docked .wiki-editor-preview {
+  flex: none;
+  max-height: none;
+  padding: 12px;
+  background: var(--wiki-glass);
+}
+.wiki-editor-docked .wiki-editor-cm {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.wiki-editor-docked .wiki-editor-cm .cm-scroller {
+  max-height: none;
+}
+/* the slide copy keeps the page's own box model (the chrome's border-box rule leaves it out) */
+.wiki-editor-slide > * {
+  margin: 0;
+  pointer-events: none;
 }
 
 /* ---------------- AI popover (block-level) ---------------- */

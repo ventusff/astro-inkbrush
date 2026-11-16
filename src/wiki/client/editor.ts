@@ -5,6 +5,15 @@
  * edits as YAML (no preview: the page head re-renders from it after save);
  * component blocks have no preview either.
  *
+ * A block on a slide (inside an element carrying `data-deck-canvas`, the
+ * slide's canvas, whose slide carries `data-deck-slide`) is edited in a panel
+ * docked beside the slide instead: the slide is a fixed-size scaled canvas,
+ * too small for an editor and clipped while presented. The panel previews
+ * the whole slide as the slide shows it — a copy of the slide element, the
+ * edited block's rendering in place of the block, scaled to the panel's
+ * width; the site's appearance layer styles it exactly as it styles the
+ * slide.
+ *
  * Save = PUT /block (optimistic lock via slice hash + whole-file MDX compile
  * gate on the server). On success astro's content HMR reloads the page; the
  * scroll position is remembered so the reader doesn't lose their place.
@@ -59,10 +68,12 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   const cancelBtn = h('button', { type: 'button', class: 'wiki-btn' }, S.editor.cancel);
   const cmHost = h('div', { class: 'wiki-editor-cm' });
   const title = block.frontmatter ? S.editor.frontmatterTitle : S.editor.title(block.jsx);
+  const slide = block.el.closest<HTMLElement>('[data-deck-canvas]')?.closest<HTMLElement>('[data-deck-slide]') ?? null;
+  const slidePreview = slide ? slideCopy(slide, block.el) : null;
 
   const shell = h(
     'div',
-    { class: 'wiki-editor', role: 'region', 'aria-label': title },
+    { class: slide ? 'wiki-editor wiki-editor-docked' : 'wiki-editor', role: 'region', 'aria-label': title },
     h(
       'div',
       { class: 'wiki-editor-head' },
@@ -95,6 +106,14 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
     previewRequest?.abort();
     previewRequest = null;
   };
+  /** show the rendered block: on the slide's copy when the block is on a slide, else in the preview box */
+  const showPreview = (html: string): void => {
+    if (slidePreview && html.trim()) {
+      slidePreview.put(html);
+      previewBody.replaceChildren(slidePreview.frame);
+    } else if (html.trim()) previewBody.innerHTML = html;
+    else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.empty));
+  };
   const refreshPreview = (source: string): void => {
     cancelPreview();
     const generation = previewGeneration;
@@ -103,7 +122,8 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
       return;
     }
     if (hasJsx(source)) {
-      previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
+      if (slidePreview) previewBody.replaceChildren(slidePreview.frame);
+      else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.jsxNoPreview(block.jsx)));
       return;
     }
     previewTimer = setTimeout(async () => {
@@ -120,8 +140,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
           { signal: request.signal },
         );
         if (generation !== previewGeneration) return;
-        if (html.trim()) previewBody.innerHTML = html;
-        else previewBody.replaceChildren(h('div', { class: 'empty' }, S.editor.empty));
+        showPreview(html);
       } catch (err) {
         // an aborted request carries a bumped generation; anything else is a
         // real failure and replaces the (now stale) preview with the error
@@ -148,6 +167,7 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
     cancelPreview();
     view.destroy();
     shell.remove();
+    slidePreview?.dispose();
     if (hostDisplay) block.el.style.setProperty('display', hostDisplay, hostDisplayPriority);
     else block.el.style.removeProperty('display');
     activeCleanup = null;
@@ -215,10 +235,65 @@ async function openEditorInner(ctx: PageContext, block: BlockRef, onClose: () =>
   saveBtn.addEventListener('click', () => save());
   cancelBtn.addEventListener('click', close);
 
-  block.el.style.display = 'none';
-  block.el.insertAdjacentElement('afterend', shell);
+  if (slide) {
+    document.body.append(shell);
+    slidePreview!.fit(previewBody);
+  } else {
+    block.el.style.display = 'none';
+    block.el.insertAdjacentElement('afterend', shell);
+    shell.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
   refreshPreview(initial.source);
   view.focus();
-  shell.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   activeCleanup = close;
+}
+
+/**
+ * A copy of a slide for the docked editor's preview: the slide element
+ * cloned, the edited block's place in it remembered, scaled to the width of
+ * the box it is shown in (`--deck-k`, the scale the site's slide styles read).
+ * `put` replaces the block's rendering on the copy; the copy's components are
+ * mounted by the site's own scripts on `astro:page-load`.
+ */
+function slideCopy(slide: HTMLElement, blockEl: HTMLElement): {
+  frame: HTMLElement;
+  put(html: string): void;
+  fit(box: HTMLElement): void;
+  dispose(): void;
+} {
+  blockEl.dataset['wikiEditing'] = '';
+  const copy = slide.cloneNode(true) as HTMLElement;
+  delete blockEl.dataset['wikiEditing'];
+  copy.removeAttribute('id');
+  copy.setAttribute('aria-hidden', 'true');
+  copy.inert = true;
+  const frame = h('div', { class: 'wiki-editor-slide' }, copy);
+  const canvas = copy.querySelector<HTMLElement>('[data-deck-canvas]')!;
+  let shown: Node[] = [copy.querySelector('[data-wiki-editing]')!];
+  const [width, height] = (canvas.dataset['deckCanvas'] ?? '960x540').split('x').map(Number) as [number, number];
+  copy.style.setProperty('--deck-h', `${height}px`);
+  let resize: ResizeObserver | null = null;
+  return {
+    frame,
+    put(html) {
+      // `html` is never blank (showPreview), so the rendering always leaves a node to replace next time
+      const parsed = document.createElement('template');
+      parsed.innerHTML = html;
+      const nodes = [...parsed.content.childNodes];
+      const first = shown[0]!;
+      first.parentNode?.insertBefore(parsed.content, first);
+      for (const node of shown) node.parentNode?.removeChild(node);
+      shown = nodes;
+      document.dispatchEvent(new Event('astro:page-load'));
+    },
+    fit(box) {
+      const scale = () => copy.style.setProperty('--deck-k', String(box.clientWidth / width));
+      resize = new ResizeObserver(scale);
+      resize.observe(box);
+      scale();
+    },
+    dispose() {
+      resize?.disconnect();
+    },
+  };
 }
