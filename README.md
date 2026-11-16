@@ -22,7 +22,7 @@
 
 **Inkbrush** (笔 — the ink brush) adds an optional editing layer to any Astro
 site: hover a paragraph, click ✎, edit the Markdown source right there, save —
-the page hot-reloads, and with `autocommit` on the change is a git commit. No
+the page takes the new text in place, and with `autocommit` on the change is a git commit. No
 database, no admin panel, no separate authoring app. Your content files stay
 the single source of truth; git stays the history.
 
@@ -45,7 +45,13 @@ yourself in the browser on the
   someone else is refused, never overwritten), and a whole-file build gate —
   the dialect, the content guard, your plugins, MDX compilation — before
   anything is written. The frontmatter is a block too, edited as YAML from
-  the page head.
+  the page head. A block of an MDX note previews with its components
+  rendered as the page renders them; a block on a slide is edited in a panel
+  docked beside the slide, which previews the whole slide; a component that
+  declares its parameters (`data-inkbrush-props`) gets a form for them over
+  its source. A save updates the page without a reload: a component that
+  takes the fresh page (a deck swaps only the slides that changed) keeps
+  its place, anything else reloads with the scroll kept.
 - 🕘 **Block-level revision history** — every save is journaled with a
   unique id; browse a block's history and revert a block edit in one click
   (whole-file operations — imports, translations — are journaled for the

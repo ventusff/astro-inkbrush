@@ -23,6 +23,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import type { BlockRenderer } from '../block-renderer.ts';
 import {
   englishOf,
   failure,
@@ -72,6 +73,10 @@ export interface ApiOptions {
   onDuty?: (() => boolean) | undefined;
   /** the site's media store, from `inkbrush({ media })` */
   media?: { origin: string } | undefined;
+  /** the dev server's renderer of MDX notes' blocks (../block-renderer.ts) */
+  renderBlock?: BlockRenderer | undefined;
+  /** what the dev server is told of each note the CMS writes (../content-updates.ts) */
+  noteWritten?: ((file: string) => void) | undefined;
 }
 
 /* ---------------- plumbing ---------------- */
@@ -459,16 +464,18 @@ on('POST', '/logout', ({ req, res }) => {
 
 /* ---------------- feature routes (registered by modules) ---------------- */
 
+import { registerBlockPreviewRoutes, setBlockRenderer } from './block-preview.ts';
 import { registerClaudeRoutes } from './claude.ts';
 import { registerCommentRoutes } from './comments.ts';
 import { registerIdentityRoutes } from './identity.ts';
 import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
 import { registerShareRoutes, startShareFollowing } from './share.ts';
 import { startSnapshotWarmer } from './snapshot.ts';
-import { registerSourceRoutes } from './source.ts';
+import { registerSourceRoutes, setNoteWritten } from './source.ts';
 import { registerSyndicationRoutes } from './syndication.ts';
 
 registerSourceRoutes(on);
+registerBlockPreviewRoutes(on);
 registerClaudeRoutes(on);
 registerInboxRoutes(on);
 registerCommentRoutes(on);
@@ -493,6 +500,8 @@ export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): voi
   setProjectRoot(root);
   setSiteHooks(opts.markdown);
   setMediaOrigin(opts.media?.origin);
+  setBlockRenderer(opts.renderBlock);
+  setNoteWritten(opts.noteWritten);
   setDutyCheck(opts.onDuty);
   wikiConfig();
   ensureRegistry();
@@ -560,6 +569,8 @@ export async function handleApi(
   setProjectRoot(opts.root);
   setSiteHooks(opts.markdown);
   setMediaOrigin(opts.media?.origin);
+  setBlockRenderer(opts.renderBlock);
+  setNoteWritten(opts.noteWritten);
   const url = new URL(req.url ?? '/', 'http://local');
   const path = url.pathname.replace(/^\/api\/wiki/, '') || '/';
   try {

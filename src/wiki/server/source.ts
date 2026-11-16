@@ -213,6 +213,13 @@ export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRec
   return full;
 }
 
+let announceWrite: ((file: string) => void) | undefined;
+
+/** what the dev server is told of each note written (../content-updates.ts), handed over by the integration */
+export function setNoteWritten(listener: ((file: string) => void) | undefined): void {
+  announceWrite = listener;
+}
+
 /**
  * Replace the file's content under its lock: `produce` computes the next
  * content from the file as it is at write time (and refuses with an error
@@ -223,7 +230,8 @@ export function journalRevision(record: Omit<RevisionRecord, 'id'>): RevisionRec
  * inside the lock, so the save's autocommit stages exactly what the save
  * wrote — attribution correctness wins over save throughput. Returns the
  * commit outcome (null when no `commit` is given). A file inside a copy
- * synced from another wiki is never written: 423.
+ * synced from another wiki is never written: 423. The dev server is told
+ * of each write as it happens (`setNoteWritten`).
  */
 export async function writeNote(
   file: string,
@@ -241,6 +249,7 @@ export async function writeNote(
     // that became a copy meanwhile is not written
     refuseCopyWrite(file);
     writeFileAtomic(file, next);
+    announceWrite?.(file);
     afterWrite?.(next);
     return commit ? await commit() : null;
   });

@@ -182,13 +182,12 @@ export interface Strings {
     save: string;
     cancel: string;
     validating: string;
-    savedReloading: string;
+    savedUpdating: string;
     saved: string;
     saveFailed: string;
     readFailed: string;
     empty: string;
     previewFailed: string;
-    jsxNoPreview: (name: string | null) => string;
     frontmatterNoPreview: string;
   };
   ai: {
@@ -547,14 +546,12 @@ const en: Strings = {
     save: 'Save',
     cancel: 'Cancel',
     validating: 'Validating…',
-    savedReloading: 'Saved · reloading…',
+    savedUpdating: 'Saved · updating the page…',
     saved: 'Saved',
     saveFailed: 'Save failed',
     readFailed: 'Failed to read the block source',
     empty: '(empty)',
     previewFailed: 'Preview failed',
-    jsxNoPreview: (name) =>
-      `⟨${name ?? 'component'}⟩ component blocks have no standalone preview — the page hot-reloads right after save`,
     frontmatterNoPreview:
       'Frontmatter has no preview — title, description and the rest of the page head re-render from it right after save',
   },
@@ -1167,13 +1164,12 @@ const zh: Strings = {
     save: '保存',
     cancel: '取消',
     validating: '校验中…',
-    savedReloading: '已保存 · 刷新中…',
+    savedUpdating: '已保存 · 正在更新页面…',
     saved: '已保存',
     saveFailed: '保存失败',
     readFailed: '读取源码失败',
     empty: '（空）',
     previewFailed: '预览失败',
-    jsxNoPreview: (name) => `⟨${name ?? '组件'}⟩ 组件块没有独立预览 — 保存后页面即时热更新`,
     frontmatterNoPreview: '页面元信息没有预览 — 标题、描述等页头内容保存后随页面即时重绘',
   },
   ai: {
@@ -1787,14 +1783,12 @@ const de: Strings = {
     save: 'Speichern',
     cancel: 'Abbrechen',
     validating: 'Wird geprüft…',
-    savedReloading: 'Gespeichert · wird neu geladen…',
+    savedUpdating: 'Gespeichert · Seite wird aktualisiert…',
     saved: 'Gespeichert',
     saveFailed: 'Speichern fehlgeschlagen',
     readFailed: 'Der Quelltext des Blocks konnte nicht gelesen werden',
     empty: '(leer)',
     previewFailed: 'Vorschau fehlgeschlagen',
-    jsxNoPreview: (name) =>
-      `Komponentenblöcke ⟨${name ?? 'Komponente'}⟩ haben keine eigene Vorschau – die Seite lädt direkt nach dem Speichern neu`,
     frontmatterNoPreview:
       'Frontmatter hat keine Vorschau – Titel, Beschreibung und der übrige Seitenkopf werden direkt nach dem Speichern neu gerendert',
   },

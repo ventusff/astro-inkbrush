@@ -2,15 +2,17 @@
  * Wiki client entry — injected into every page by the wiki integration
  * (WIKI=1 dev mode only; the static build never includes this).
  *
- * Responsibilities: mount the session chip everywhere; on note pages,
- * activate block editing, the Claude affordances, the comment section and
- * the note's outward controls (share, syndication).
+ * Responsibilities: mount the session chip everywhere and follow the notes
+ * saved through the CMS (./content-updates.ts); on note pages, activate
+ * block editing, the Claude affordances, the comment section and the
+ * note's outward controls (share, syndication).
  */
 import './wiki.css';
 
 import type { NoteMeta } from '../shared/types';
 import { api } from './api';
 import { mountAuthChip, shareAvailability, syndicationPeers } from './auth';
+import { followContentUpdates } from './content-updates';
 import { restoreScroll } from './scroll';
 
 export interface PageContext {
@@ -44,6 +46,7 @@ async function init(): Promise<void> {
   document.documentElement.dataset['inkbrushMounted'] = '1';
 
   restoreScroll();
+  const updates = followContentUpdates();
   await mountSafely('account chip', () => mountAuthChip());
 
   const id = noteIdFromPage();
@@ -57,7 +60,11 @@ async function init(): Promise<void> {
   const ctx: PageContext = { meta };
 
   // feature modules load lazily so the base bundle stays light
-  await mountSafely('block editing', async () => (await import('./blocks')).mountBlocks(ctx));
+  await mountSafely('block editing', async () => {
+    const { mountBlocks } = await import('./blocks');
+    mountBlocks(ctx);
+    updates.note = { file: meta.file, rebind: () => mountBlocks(ctx) };
+  });
   await mountSafely('chat panel', async () => (await import('./chat-panel')).mountChatPanel(ctx));
   await mountSafely('comments', async () => (await import('./comments')).mountComments(ctx));
   // share module (config-driven): off ⇒ the module isn't even loaded

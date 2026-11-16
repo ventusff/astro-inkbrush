@@ -75,7 +75,14 @@ function collectBlocks(): BlockRef[] {
   return refs;
 }
 
+/** undoes the current mount */
+let unmountCurrent = (): void => undefined;
+import.meta.hot?.dispose(() => unmountCurrent());
+
+/** binds the page's blocks; mounting again rebinds them to the page as it is now */
 export function mountBlocks(ctx: PageContext): void {
+  unmountCurrent();
+  unmountCurrent = () => undefined;
   if (ctx.meta.origin) return;
   const blocks = collectBlocks();
   if (blocks.length === 0) return;
@@ -403,7 +410,7 @@ export function mountBlocks(ctx: PageContext): void {
 
   // Unmount: drop the document listeners, remove the injected chrome and
   // restore every host attribute this mount touched.
-  const unmount = (): void => {
+  unmountCurrent = (): void => {
     for (const [type, fn, opts] of documentListeners) document.removeEventListener(type, fn, opts);
     handle.remove();
     hint.remove();
@@ -419,6 +426,4 @@ export function mountBlocks(ctx: PageContext): void {
   // the editor is what a visitor on a note page asks for next: its chunk
   // (CodeMirror) loads in idle time, so the first edit opens at once
   whenIdle(() => void import('./editor'));
-
-  import.meta.hot?.dispose(unmount);
 }

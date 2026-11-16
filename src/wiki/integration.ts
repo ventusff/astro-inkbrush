@@ -10,6 +10,11 @@
  *    so server code hot-reloads too)
  *  - hands the site's Markdown pipeline (`markdown` option) to the server,
  *    so preview and save-time validation use the page's own plugins
+ *  - hands the server a renderer of MDX notes' blocks, which compiles and
+ *    renders them, components included, on the dev server as the page does
+ *    (./block-renderer.ts)
+ *  - delivers each note the CMS writes to the open pages as one message,
+ *    in place of the full reloads Astro sends for it (./content-updates.ts)
  *  - calls the server-side init (project root + whatever the deployment's
  *    inkbrush.config.ts enables, e.g. the optional Obsidian inbox watcher),
  *    handing it the site's `onDuty` verdict for the background tasks
@@ -19,8 +24,10 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AstroIntegration } from 'astro';
+import type { AstroConfig, AstroIntegration } from 'astro';
 
+import { blockModulePlugin, createBlockRenderer } from './block-renderer.ts';
+import { contentUpdatePlugin, noteWritten } from './content-updates.ts';
 import type { SiteMarkdownHooks } from './server/site.ts';
 
 export interface InkbrushOptions {
@@ -91,6 +98,7 @@ export const CLIENT_DEPENDENCIES = [
 export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
   let root = process.cwd();
   let srcDir = '';
+  let siteConfig: AstroConfig | null = null;
   const serverOptions = { markdown: options.markdown, onDuty: options.onDuty, media: options.media };
   return {
     name: 'inkbrush',
@@ -101,6 +109,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
           return;
         }
         root = fileURLToPath(config.root);
+        siteConfig = config;
         srcDir = wikiSrcDir(root);
         injectScript('page', `import '${viteId(join(srcDir, 'client/index.ts'))}';`);
         // the deployment's Host header (vite allowedHosts) is the site's own
@@ -110,6 +119,7 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
           // dev` without WIKI never loads this integration and keeps it)
           devToolbar: { enabled: false },
           vite: {
+            plugins: [blockModulePlugin(), contentUpdatePlugin()],
             // `.wiki/` is the CMS's private state (session secret, journals,
             // the cached snapshot build): never a module and never a page.
             // Left watched, every file a snapshot build writes there is a
@@ -128,13 +138,14 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
       },
       'astro:server:setup': async ({ server, logger }) => {
         const serverEntry = viteId(join(srcDir || join(root, 'src/wiki'), 'server/index.ts'));
+        const apiOptions = { ...serverOptions, renderBlock: createBlockRenderer(server, siteConfig!), noteWritten };
         server.middlewares.use((req, res, next) => {
           if (!req.url?.startsWith('/api/wiki/')) return next();
           server
             .ssrLoadModule(serverEntry)
             .then((mod) =>
               (mod as { handleApi: (rq: typeof req, rs: typeof res, o: { root: string; markdown?: SiteMarkdownHooks | undefined }) => Promise<void> })
-                .handleApi(req, res, { root, ...serverOptions }),
+                .handleApi(req, res, { root, ...apiOptions }),
             )
             .catch((err: unknown) => {
               logger.error(`api error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
@@ -155,9 +166,9 @@ export function inkbrush(options: InkbrushOptions = {}): AstroIntegration {
         // double-start across HMR reloads.
         try {
           const mod = (await server.ssrLoadModule(serverEntry)) as {
-            initWiki: (root: string, o: typeof serverOptions) => void;
+            initWiki: (root: string, o: typeof apiOptions) => void;
           };
-          mod.initWiki(root, serverOptions);
+          mod.initWiki(root, apiOptions);
         } catch (err) {
           logger.error(`wiki init failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
           throw err;

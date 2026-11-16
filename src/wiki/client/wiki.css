@@ -961,6 +961,38 @@ select.wiki-members-role {
 .wiki-editor-head .spacer {
   flex: 1;
 }
+/* a component's parameters, one labelled field each, over its source */
+.wiki-editor-props {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--wiki-line);
+  font: 13px/1.3 var(--wiki-font);
+  color: var(--wiki-on-surface);
+}
+.wiki-editor-props label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wiki-editor-props label > span {
+  font-family: var(--wiki-mono);
+  color: var(--wiki-faint);
+}
+.wiki-editor-props :is(input, select) {
+  min-width: 7em;
+  padding: 4px 6px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 4px;
+  background: var(--wiki-field);
+  color: inherit;
+  font: inherit;
+}
+.wiki-editor-props :is(input, select):focus-visible {
+  outline: 2px solid var(--wiki-accent);
+  outline-offset: 1px;
+}
 /* The preview is page typography: the shell sets no font of its own, so the
    rendered block inherits the host's fonts exactly like the block it
    replaces; the editor chrome (head, foot, buttons, source) each declare
@@ -1049,7 +1081,7 @@ select.wiki-members-role {
   max-height: none;
 }
 /* the slide copy keeps the page's own box model (the chrome's border-box rule leaves it out) */
-.wiki-editor-slide > * {
+.wiki-editor-slide [data-deck-slide] {
   margin: 0;
   pointer-events: none;
 }
