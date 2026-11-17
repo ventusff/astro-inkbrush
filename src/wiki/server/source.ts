@@ -16,8 +16,9 @@
  * audit log (each record has a unique id); git in the content repo is the
  * durable versioning — `autocommit` commits each save with the signed-in
  * user as author, `autopush` pushes asynchronously after each commit (merging
- * origin in when another writer pushed first), and
- * `skipCi` marks each commit so no pipeline reacts to a save.
+ * origin in when another writer pushed first), `follow` takes origin's new
+ * commits into the checkout every minute so the running server serves them,
+ * and `skipCi` marks each commit so no pipeline reacts to a save.
  */
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -32,6 +33,7 @@ import type { LocaleDef } from '../shared/locales.ts';
 import { failure, type WikiFailure } from '../shared/errors.ts';
 import type { BlockSource, CopyOrigin, NoteLocale, NoteMeta, RevisionRecord } from '../shared/types.ts';
 import { wikiConfig } from './config.ts';
+import { onDuty } from './duty.ts';
 import type { RouteRegistrar } from './index.ts';
 import { fail, type HttpError, json, readBody, refusal, refuse } from './index.ts';
 import { renderMarkdown } from './markdown.ts';
@@ -276,52 +278,139 @@ function inGitQueue<T>(operation: () => Promise<T>): Promise<T> {
   return chained;
 }
 
+type Git = (...args: string[]) => Promise<{ stdout: string; stderr: string }>;
+
+const gitIn = (repoRoot: string): Git => (...args) => execFileP('git', args, { cwd: repoRoot });
+
+const isAncestor = (git: Git, ancestor: string, of: string): Promise<boolean> =>
+  git('merge-base', '--is-ancestor', ancestor, of).then(
+    () => true,
+    () => false,
+  );
+
 /**
- * Push the content repo's branch to its upstream. Other writers push to the
- * same repository (people, pipelines, other sites kept in it), so a push is
- * turned back whenever origin has moved on since the last fetch. Then
- * origin's tip is merged in and the push is made once more: the merge's tree
- * is computed with `git merge-tree`, which writes no file, and the checkout
- * moves to the merge commit by a fast-forward, which updates only the files
+ * Take origin's commits, as of the last fetch, into the checkout. Other
+ * writers push to the same repository (people, pipelines, other sites kept in
+ * it). With no local commits origin lacks, the checkout fast-forwards to
+ * origin; otherwise origin's tip is merged in: the merge's tree is computed
+ * with `git merge-tree`, which writes no file, and the checkout moves to the
+ * merge commit by a fast-forward. Either fast-forward updates only the files
  * origin changed and stops rather than overwrite a file a save has written
- * and not committed yet. The merge holds the write lock of every file origin
+ * and not committed yet. It holds the write lock of every file origin
  * changed, the lock a save holds from reading the file to writing it back, so
- * a save reads such a file wholly before the merge or wholly after it and
- * never writes back bytes the merge replaced. A merge that conflicts (the same lines edited here
- * and on origin) is not made: the commits stay local, every later push turns
- * back the same way, and the log says so until a person merges by hand.
- * The network steps run outside the queue, so no save waits on them.
+ * a save reads such a file wholly before the update or wholly after it and
+ * never writes back bytes the update replaced. A merge that conflicts (the
+ * same lines edited here and on origin) is not made and throws: the commits
+ * stay local until a person merges by hand. The running dev server watches
+ * the working tree, so the files origin changed are served from the next
+ * request on.
+ *
+ * Origin's tip is resolved once, so a fetch made meanwhile by another writer
+ * of this checkout cannot change what is taken in after the locks are
+ * chosen; the check repeated inside the queue makes a second caller that
+ * waited for the first take in nothing. Returns whether a merge commit was
+ * made (the one outcome that leaves commits origin lacks).
+ */
+async function takeUpstream(git: Git, skipCi: boolean): Promise<'merged' | 'unchanged'> {
+  const tip = (await git('rev-parse', '--verify', '@{upstream}^{commit}')).stdout.trim();
+  if (await isAncestor(git, tip, 'HEAD')) return 'unchanged';
+  // the files origin changed since the common ancestor, both sides of a rename: exactly the files the
+  // fast-forward rewrites or removes, whatever this checkout commits meanwhile; their locks are taken
+  // in sorted order, before the git queue, the order a save takes its file's lock and then the queue
+  // for its commit
+  const repoRoot = (await git('rev-parse', '--show-toplevel')).stdout.trim();
+  const changed = (await git('diff', '--name-only', '--no-renames', '-z', `HEAD...${tip}`)).stdout.split('\0').filter(Boolean);
+  const keys = [...new Set(changed.map((rel) => realpathDeep(resolve(repoRoot, rel))))].sort();
+  const update = () =>
+    inGitQueue(async (): Promise<'merged' | 'unchanged'> => {
+      if (await isAncestor(git, tip, 'HEAD')) return 'unchanged';
+      if (await isAncestor(git, 'HEAD', tip)) {
+        await git('merge', '--ff-only', tip);
+        return 'unchanged';
+      }
+      const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
+      const tree = (await git('merge-tree', '--write-tree', 'HEAD', tip)).stdout.split('\n')[0]!;
+      const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
+      const commit = (await git('commit-tree', tree, '-p', 'HEAD', '-p', tip, '-m', message)).stdout.trim();
+      await git('merge', '--ff-only', commit);
+      return 'merged';
+    });
+  return await keys.reduceRight<() => Promise<'merged' | 'unchanged'>>(
+    (next, key) => () => withLock(key, next),
+    update,
+  )();
+}
+
+/**
+ * Push the content repo's branch to its upstream. A push is turned back
+ * whenever origin has moved on since the last fetch; then origin is fetched,
+ * taken in (takeUpstream) and the push is made once more. A merge that
+ * conflicts leaves every later push turned back the same way, and the log
+ * says so until a person merges by hand. The network steps run outside the
+ * git queue, so no save waits on them.
  */
 async function pushToUpstream(repoRoot: string, skipCi: boolean): Promise<void> {
-  const git = (...args: string[]) => execFileP('git', args, { cwd: repoRoot });
+  const git = gitIn(repoRoot);
   try {
     await git('push');
     return;
   } catch {
-    // turned back: merge origin below; any other failure fails the fetch too
+    // turned back: take origin in below; any other failure fails the fetch too
   }
   try {
     await git('fetch');
-    // a push turned back for another reason (network, credentials) has nothing to merge
-    if (await git('merge-base', '--is-ancestor', '@{upstream}', 'HEAD').then(() => true, () => false)) return;
-    // the files origin changed since the common ancestor: exactly the files the fast-forward rewrites,
-    // whatever this checkout commits meanwhile; their locks are taken in sorted order, before the git
-    // queue, the order a save takes its file's lock and then the queue for its commit
-    const changed = (await git('diff', '--name-only', '-z', 'HEAD...@{upstream}')).stdout.split('\0').filter(Boolean);
-    const keys = [...new Set(changed.map((rel) => realpathDeep(resolve(repoRoot, rel))))].sort();
-    const merge = () =>
-      inGitQueue(async () => {
-        const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
-        const tree = (await git('merge-tree', '--write-tree', 'HEAD', '@{upstream}')).stdout.split('\n')[0]!;
-        const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
-        const commit = (await git('commit-tree', tree, '-p', 'HEAD', '-p', '@{upstream}', '-m', message)).stdout.trim();
-        await git('merge', '--ff-only', commit);
-      });
-    await keys.reduceRight<() => Promise<void>>((next, key) => () => withLock(key, next), merge)();
+    // a push turned back for another reason (network, credentials) has nothing to take in
+    if (await isAncestor(git, '@{upstream}', 'HEAD')) return;
+    await takeUpstream(git, skipCi);
     await git('push');
   } catch (err) {
     console.error('[wiki autopush]', err);
   }
+}
+
+const FOLLOW_INTERVAL_MS = 60_000;
+const FOLLOWER_KEY = '__wikiUpstreamFollower';
+
+/**
+ * `follow`: every minute, on duty, fetch the content repo's upstream branch
+ * and take its new commits into the checkout (takeUpstream); with
+ * `autopush`, push the merge commit that took origin in. Notes pushed from
+ * elsewhere are then live without restarting the server. Commits origin
+ * lacks for any other reason are left to the next save's push: when origin
+ * was rewound on purpose, the follower does not push the removed commits
+ * back. Runs never overlap, a failure is logged once until the next run
+ * that ends differently, and starting it again replaces the running one
+ * (server module reloads), so one process never runs two followers on two
+ * copies of the locks.
+ */
+export function startUpstreamFollowing(): void {
+  const globals = globalThis as Record<string, unknown>;
+  (globals[FOLLOWER_KEY] as (() => void) | undefined)?.();
+  globals[FOLLOWER_KEY] = undefined;
+  const cfg = wikiConfig();
+  if (!cfg.follow) return;
+  let running = false;
+  let lastError = '';
+  const tick = async (): Promise<void> => {
+    if (running || !onDuty()) return;
+    running = true;
+    try {
+      const git = gitIn((await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd: contentRoot() })).stdout.trim());
+      await git('fetch', '--quiet', '--no-recurse-submodules');
+      if ((await takeUpstream(git, cfg.skipCi)) === 'merged' && cfg.autopush) await git('push');
+      lastError = '';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== lastError) console.error('[wiki follow]', message);
+      lastError = message;
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(() => void tick(), FOLLOW_INTERVAL_MS);
+  timer.unref();
+  globals[FOLLOWER_KEY] = () => clearInterval(timer);
+  void tick();
 }
 
 /**

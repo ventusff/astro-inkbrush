@@ -290,6 +290,7 @@ export default defineInkbrushConfig({
   inbox: { dir: '~/vault/inbox', ignore: ['daily/'] },   // omit dir = watcher off
   autocommit: false,
   autopush: false,
+  // follow: autopush,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
@@ -308,6 +309,7 @@ export default defineInkbrushConfig({
 | `inbox.ignore` | `[]` | Import skip list (path/basename prefixes) |
 | `autocommit` | `false` | git commit in the content repo after every save (author = the signed-in user) |
 | `autopush` | `false` | async git push after each autocommit; a push turned back because origin moved on merges origin in and pushes again — turn on for deployment machines |
+| `follow` | value of `autopush` | every minute fetch the content repo's upstream and take its new commits into the checkout (the same merge a turned-back push makes); with `autopush`, push the merge commit that took origin in. The server watches its working tree, so notes pushed from elsewhere are live without a restart. Turn off where the checkout moves forward by other means, such as a site that validates each upstream version before switching to it |
 | `skipCi` | `false` | every autocommit message ends with a `[skip ci]` line — for a single-surface deployment, where the saving server is the site and no pipeline should rebuild or restart for a save |
 | `claude.bin` / `claude.model` | `'claude'` / CLI default | Which CLI binary / `--model` the AI endpoints run |
 | `claude.companions` | none | `(note) => string[]` — project-relative files or directories a job may read and change beside the note's directory |
@@ -387,7 +389,7 @@ Env vars override the config **per run** (the file stays the durable truth):
 | `WIKI_IDENTITY_DIR` | `identity.dir` (setting it enables the module) |
 | `WIKI_INBOX_DIR` | `inbox.dir` (empty string = watcher off for this run) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore` (comma-separated) |
-| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `skipCi` (`0`/`1`) |
+| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_FOLLOW` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `follow` / `skipCi` (`0`/`1`) |
 | `WIKI_TRUST_PROXY` | `server.trustProxy` (`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
@@ -1192,11 +1194,16 @@ so the editing machine runs one, as a product, while readers never touch it:
   block is refused with 409 instead of overwritten, and processes do not
   coordinate with each other: run one instance per site. Several sites
   (and people, and pipelines) may push to one content repository: a save
-  whose push is turned back merges origin in and pushes again. The merge
-  updates only the files origin changed and never overwrites a save not
-  yet committed; when the same lines were edited here and on origin it is
-  not made, the commits stay local, and every later push logs
-  `[wiki autopush]` until a person merges by hand.
+  whose push is turned back merges origin in and pushes again, and with
+  `follow` (on wherever `autopush` is) the checkout takes origin's new
+  commits every minute, so a note pushed from a workstation or a pipeline
+  is live on the editing machine without a restart; only a change to the
+  site's code, dependencies or deployment needs one. The merge updates
+  only the files origin changed and never overwrites a save not yet
+  committed; when the same lines were edited here and on origin it is not
+  made, the commits stay local, and every later push logs
+  `[wiki autopush]` (every later minute `[wiki follow]`) until a person
+  merges by hand.
 
 Typical setups:
 

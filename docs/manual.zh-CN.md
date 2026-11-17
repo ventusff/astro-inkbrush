@@ -221,6 +221,7 @@ export default defineInkbrushConfig({
   inbox: { dir: '~/vault/收件箱', ignore: ['daily/'] },   // 省略 dir = 不监听
   autocommit: false,
   autopush: false,
+  // follow: autopush,
   // claude: { bin: 'claude', model: '…', companions?: (note) => [...], rules?: [...] },
   // content: { dir: 'src/content/notes', locales: [...] },
   // share: { gatewayUrl: 'http://gateway.internal:8787', publicBase: 'https://share.example.com', prewarm: true, followIdleMinutes: 20 },
@@ -239,6 +240,7 @@ export default defineInkbrushConfig({
 | `inbox.ignore` | `[]` | 导入跳过清单(路径/文件名前缀) |
 | `autocommit` | `false` | 每次保存后在内容仓自动 git commit(作者 = 登录用户) |
 | `autopush` | `false` | 每次 autocommit 后异步 git push;origin 已有新提交、推送被顶回时,先把 origin 合并进来再推一次——部署机开启 |
+| `follow` | 同 `autopush` | 每分钟取一次内容仓的上游,把它的新提交收进检出(与推送被顶回时同一种合并);开着 `autopush` 时把这次合并出的提交推上去。服务器监视自己的工作区,别处推来的笔记不重启就生效。检出另有前进办法的站点关掉它,比如每个上游版本先校验再切换的站 |
 | `skipCi` | `false` | 每条自动提交的信息末尾加一行 `[skip ci]`——站上保存与线上就是同一台服务器(一站一面)时开启,保存本身已经生效,不该再让任何流水线重建或重启 |
 | `claude.bin` / `claude.model` | `'claude'` / CLI 自身默认 | AI 端点用哪个 CLI / 哪个模型 |
 | `claude.companions` | 无 | `(note) => string[]`——笔记目录之外,任务还可以读写的项目相对路径(文件或目录) |
@@ -309,7 +311,7 @@ locales: [
 | `WIKI_IDENTITY_DIR` | `identity.dir`(设置即启用 identity 模块) |
 | `WIKI_INBOX_DIR` | `inbox.dir`(设为空字符串 = 本次运行不监听) |
 | `WIKI_INBOX_IGNORE` | `inbox.ignore`(逗号分隔) |
-| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `skipCi`(`0`/`1`) |
+| `WIKI_AUTOCOMMIT` / `WIKI_AUTOPUSH` / `WIKI_FOLLOW` / `WIKI_SKIP_CI` | `autocommit` / `autopush` / `follow` / `skipCi`(`0`/`1`) |
 | `WIKI_TRUST_PROXY` | `server.trustProxy`(`0`/`1`) |
 | `WIKI_CLAUDE_BIN` / `WIKI_CLAUDE_MODEL` | `claude.bin` / `claude.model` |
 | `WIKI_SHARE_GATEWAY_URL` / `WIKI_SHARE_PUBLIC_BASE` | `share.gatewayUrl` / `share.publicBase` |
@@ -964,9 +966,12 @@ scripts/        check-content.mjs / check-language.mjs / check-wikilinks.mjs / c
 - 一个 dev server 进程服务一个编辑团队:对同一篇笔记的写入在进程内按文件
   串行,同一块的并发保存会被 409 拒绝而不是覆盖;进程之间不互相协调:每个
   站只跑一个实例。几个站(以及人、流水线)可以推同一个内容仓:推送被顶回
-  的保存先把 origin 合并进来再推一次。合并只更新 origin 改过的文件,不覆盖
-  还没提交的保存;本地与 origin 改了同几行时不合并,提交留在本地,之后每次
-  推送都记一行 `[wiki autopush]`,直到有人手动合并。
+  的保存先把 origin 合并进来再推一次;开着 `follow`(凡开 `autopush` 处默认
+  开)时,检出每分钟收一次 origin 的新提交,工作站或流水线推来的笔记不重启
+  编辑机就生效,只有站点的代码、依赖或部署件改了才需要重启。合并只更新
+  origin 改过的文件,不覆盖还没提交的保存;本地与 origin 改了同几行时不合并,
+  提交留在本地,之后每次推送都记一行 `[wiki autopush]`(之后每分钟记一行
+  `[wiki follow]`),直到有人手动合并。
 
 典型配法:
 

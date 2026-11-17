@@ -125,7 +125,7 @@ npm test
   controls: the share button and the syndication chips.
 - `inkbrush.config.ts` (site root, per-machine, gitignored) +
   `defineInkbrushConfig`: auth / identity / inbox / autocommit / autopush /
-  claude / content / share / syndication. CMS concerns only — no site
+  follow / claude / content / share / syndication. CMS concerns only — no site
   business.
 - `astro-inkbrush/session` → `currentUser(req)`: a **read-only** identity
   contract for sibling data planes in the same process. Read is exported;
@@ -151,8 +151,8 @@ npm test
   (`WIKI=1`, `WIKI_*` env, `/api/wiki`, `.wiki/` state, UI copy). Keep
   them apart.
 - The content directory (`config content.dir`) is the content repo's
-  working tree: outside the CMS's own autocommit/autopush, perform zero
-  git operations there; never read, modify or commit `inbox/**`.
+  working tree: outside the CMS's own autocommit/autopush/follow, perform
+  zero git operations there; never read, modify or commit `inbox/**`.
   Syndication's git work happens in its private bare mirrors under
   `.wiki/data/syndication/`, never in the content directory, and the
   peer's content is read there, never imported or executed.

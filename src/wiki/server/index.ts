@@ -471,7 +471,7 @@ import { registerIdentityRoutes } from './identity.ts';
 import { registerInboxRoutes, startInboxWatcher } from './obsidian.ts';
 import { registerShareRoutes, startShareFollowing } from './share.ts';
 import { startSnapshotWarmer } from './snapshot.ts';
-import { registerSourceRoutes, setNoteWritten } from './source.ts';
+import { registerSourceRoutes, setNoteWritten, startUpstreamFollowing } from './source.ts';
 import { registerSyndicationRoutes } from './syndication.ts';
 
 registerSourceRoutes(on);
@@ -520,6 +520,8 @@ export function initWiki(root: string, opts: Omit<ApiOptions, 'root'> = {}): voi
   // shares follow their notes (a no-op while share is off/unconfigured or
   // followIdleMinutes is 0)
   startShareFollowing();
+  // the checkout follows its upstream (a no-op while follow is off)
+  startUpstreamFollowing();
 }
 
 /** the request's own origins — both of them, when both exist:

@@ -54,6 +54,7 @@ Contract of the editing machine:
   by the lockfile present.
 - **Health.** nginx listens on IPv6 as well (alpine's wget resolves
   `localhost` to `::1`); the probe is `/healthz`.
-- **Two webhooks, filtered by committer.** The static site rebuilds on every
-  push; the editing machine restarts only on pushes from outside (its own
-  autopush commits must not restart it).
+- **The static site rebuilds on every push; the editing machine follows.**
+  `follow` takes every push into the editing machine's checkout within a
+  minute, so a push restarts it only when it changes the site's code,
+  dependencies or deployment files (its own autopush commits never do).

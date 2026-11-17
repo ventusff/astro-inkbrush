@@ -212,6 +212,14 @@ export interface WikiConfigInput {
   /** async git push of the content repo after each autocommit (turn on for
    *  deployment machines). default false */
   autopush?: boolean;
+  /** keep the checkout on its upstream branch: every minute fetch it and take
+   *  its new commits into the working tree (the same locked merge a turned-back
+   *  autopush makes) and, with autopush, push the merge that took it in. The
+   *  running server watches the working tree, so notes pushed from elsewhere
+   *  are live without a restart. Turn it off where the checkout moves forward
+   *  by other means (a site that validates each upstream version before
+   *  switching to it). default: the value of autopush */
+  follow?: boolean;
   /** end every autocommit message with a `[skip ci]` line, the marker GitHub
    *  Actions and dokploy both honour. For a single-surface deployment — the
    *  server that saved the note is the site — a save is already live, and no
@@ -295,6 +303,7 @@ export interface WikiConfig {
   };
   autocommit: boolean;
   autopush: boolean;
+  follow: boolean;
   skipCi: boolean;
   claude: {
     bin: string;

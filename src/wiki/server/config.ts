@@ -239,6 +239,7 @@ export function wikiConfig(): WikiConfig {
   // dev login: the default (nothing set anywhere) is loopback-only at the
   // route; only an explicit config/env value serves non-loopback clients
   const devFlag = envFlag('WIKI_DEV_LOGIN');
+  const autopush = envFlag('WIKI_AUTOPUSH') ?? input.autopush ?? false;
   const resolved: WikiConfig = {
     server,
     auth: {
@@ -254,7 +255,8 @@ export function wikiConfig(): WikiConfig {
       ignore: envList('WIKI_INBOX_IGNORE') ?? input.inbox?.ignore ?? [],
     },
     autocommit: envFlag('WIKI_AUTOCOMMIT') ?? input.autocommit ?? false,
-    autopush: envFlag('WIKI_AUTOPUSH') ?? input.autopush ?? false,
+    autopush,
+    follow: envFlag('WIKI_FOLLOW') ?? input.follow ?? autopush,
     skipCi: envFlag('WIKI_SKIP_CI') ?? input.skipCi ?? false,
     claude: {
       bin: envStr('WIKI_CLAUDE_BIN') ?? input.claude?.bin ?? 'claude',
