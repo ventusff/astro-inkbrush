@@ -311,11 +311,11 @@ test('a rejected submission: the gate refuses, the origin reads the verdict', as
     '✗ chasing/index.mdx',
     '  7:1 something the peer dislikes',
     '  second line',
+    '1/3 files have problems (dialect).',
     '⚠ chasing/attention/index.mdx',
     '  3:1  Chinese in inline code: 追',
     '1 warning in 1 file (listed, not failing the run).',
     ...advice.split('\n'),
-    '1/3 files have problems (dialect).',
   ];
 
   await assert.rejects(

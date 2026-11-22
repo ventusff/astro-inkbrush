@@ -154,7 +154,9 @@ interface Copied {
   decode?: boolean;
 }
 
-function message(place: CodePlace, name: string | undefined): string {
+/** what is wrong, on one line: a name that holds line breaks (an info string's `&#10;`) reads with spaces */
+function message(place: CodePlace, rawName: string | undefined): string {
+  const name = rawName?.replace(/\s+/g, ' ');
   switch (place) {
     case 'script':
       return 'Chinese in the page\'s script';
@@ -170,8 +172,8 @@ function message(place: CodePlace, name: string | undefined): string {
 /** message() read back: the place each message names */
 const MESSAGE_PLACES: readonly (readonly [RegExp, CodePlace])[] = [
   [/^Chinese in the page's script$/, 'script'],
-  [/^Chinese in (?:a spread attribute|the attribute `[^`]*`)$/, 'attribute'],
-  [/^Chinese in a (?:\S+ )?code block outside its comments$/, 'code-block'],
+  [/^Chinese in (?:a spread attribute|the attribute `.*`)$/, 'attribute'],
+  [/^Chinese in a (?:.+ )?code block outside its comments$/, 'code-block'],
   [/^Chinese in inline code$/, 'inline-code'],
 ];
 
@@ -193,9 +195,15 @@ export function codeLanguageLine(f: Pick<CodeLanguageFinding, 'line' | 'column' 
 
 /** the place a report line of codeLanguageLine() names (indented or not), or null for any other line */
 export function codeLanguagePlaceOf(line: string): CodePlace | null {
-  const m = /^\s*\d+:\d+ {2}(.+?): /.exec(line);
+  const m = /^\s*\d+:\d+ {2}(Chinese in .*)$/.exec(line);
   if (!m) return null;
-  return MESSAGE_PLACES.find(([re]) => re.test(m[1]!))?.[1] ?? null;
+  // the message ends at the first `: ` after which the rest reads as one of the messages' endings
+  const rest = m[1]!;
+  for (let at = rest.indexOf(': '); at >= 0; at = rest.indexOf(': ', at + 1)) {
+    const place = MESSAGE_PLACES.find(([re]) => re.test(rest.slice(0, at)))?.[1];
+    if (place) return place;
+  }
+  return null;
 }
 
 /** the first line of the closing note a report prints when it lists code-language lines */

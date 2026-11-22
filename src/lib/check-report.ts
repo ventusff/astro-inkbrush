@@ -5,16 +5,19 @@
  *
  * A report is lines. A file's block opens at the start of a line with
  * `✗ <path>` — findings: the file fails the check — or `⚠ <path>` —
- * warnings: listed, never failing the run — and holds that file's entries
- * on the lines indented below it; an empty line ends a block. Every other
+ * warnings: listed, never failing the run — where the path is a page's
+ * (`.md`, `.mdx`) relative to the content root the check was given, and
+ * holds that file's entries on the lines indented below it, each warning on
+ * one line; an empty line ends a block. Every other
  * line opens a block of its own kind: the warnings' count line
  * (warningsCount()), the code-language note (codeLanguageAdvice() in
  * code-language.ts), a summary, or whatever another check prints.
  *
  * scopeReport() narrows a whole repository's report to the files one
- * submission brings: every finding stays — a failing file anywhere is why
- * the run failed — while warnings stay only for the files in scope, and the
- * count line and the code-language note are written anew for what is left.
+ * submission brings: everything that says why the run failed stays — every
+ * failing file's block, every line no file's block holds — while warnings
+ * stay only for the files in scope, and the count line and the
+ * code-language note are written anew for what is left.
  */
 import { codeLanguageAdvice, codeLanguagePlaceOf, CODE_LANGUAGE_ADVICE_HEAD, type CodePlace } from './code-language.ts';
 
@@ -47,7 +50,7 @@ function blocksOf(lines: readonly string[]): Block[] {
     } else if (open && /^\s/.test(line)) {
       open.lines.push(line);
     } else {
-      const file = /^(✗|⚠) (\S.*)$/.exec(line);
+      const file = /^(✗|⚠) (.+\.mdx?)$/.exec(line);
       open = file
         ? { kind: 'file', mark: file[1] as FileMark, path: file[2]!, lines: [line] }
         : { kind: WARNINGS_COUNT.test(line) ? 'count' : line === CODE_LANGUAGE_ADVICE_HEAD ? 'advice' : 'other', lines: [line] };
@@ -58,18 +61,20 @@ function blocksOf(lines: readonly string[]): Block[] {
 }
 
 /**
- * The report narrowed to the files `inScope` accepts: their blocks first —
- * findings and warnings, in the report's order — then every other block in
- * its place, without the warning blocks of files out of scope; the count line
- * counts the warnings left and the code-language note names the places the
- * remaining file blocks hold, each dropped when nothing is left for it.
- * Empty lines are not kept.
+ * The report narrowed to the files `inScope` accepts, what failed first: the
+ * failing blocks of the files in scope, then every other block that is no
+ * warning, in the report's order — another file's failures, another check's
+ * output, the summary — and last the warning blocks of the files in scope
+ * with the count line for them and the code-language note naming the places
+ * the remaining file blocks hold (each of the two dropped when nothing is
+ * left for it). Empty lines are not kept.
  */
 export function scopeReport(lines: readonly string[], inScope: (path: string) => boolean): string[] {
-  const blocks = blocksOf(lines).filter((b) => b.kind !== 'file' || b.mark === '✗' || inScope(b.path));
-  const own = blocks.filter((b) => b.kind === 'file' && inScope(b.path));
-  const files = blocks.filter((b): b is Extract<Block, { kind: 'file' }> => b.kind === 'file');
+  const blocks = blocksOf(lines);
+  const files = blocks.filter((b): b is Extract<Block, { kind: 'file' }> => b.kind === 'file' && (b.mark === '✗' || inScope(b.path)));
   const warnings = files.filter((b) => b.mark === '⚠');
+  const ownFailures = files.filter((b) => b.mark === '✗' && inScope(b.path));
+  const failures = blocks.filter((b) => (b.kind === 'file' ? b.mark === '✗' && !ownFailures.includes(b) : b.kind === 'other'));
   const places = new Set<CodePlace>();
   for (const b of files) {
     for (const line of b.lines.slice(1)) {
@@ -77,13 +82,10 @@ export function scopeReport(lines: readonly string[], inScope: (path: string) =>
       if (place) places.add(place);
     }
   }
-  const rest = blocks.filter((b) => !own.includes(b)).flatMap((b) => {
-    if (b.kind === 'count') {
-      const count = warnings.reduce((sum, w) => sum + w.lines.length - 1, 0);
-      return count > 0 ? [warningsCount(count, warnings.length)] : [];
-    }
-    if (b.kind === 'advice') return places.size > 0 ? codeLanguageAdvice(places) : [];
-    return b.lines;
-  });
-  return [...own.flatMap((b) => b.lines), ...rest];
+  const count = warnings.reduce((sum, w) => sum + w.lines.length - 1, 0);
+  return [
+    ...[...ownFailures, ...failures, ...warnings].flatMap((b) => b.lines),
+    ...(count > 0 ? [warningsCount(count, warnings.length)] : []),
+    ...(places.size > 0 ? codeLanguageAdvice(places) : []),
+  ];
 }

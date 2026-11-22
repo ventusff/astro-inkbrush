@@ -65,10 +65,11 @@
  *       [--base main] [--remote origin]
  *
  *     Record the verdict — the checks' output about `--staged`, narrowed
- *     to the unit (scopeReport in src/lib/check-report.ts: every failing
- *     file stays, warnings only for the unit's files, the unit's blocks
- *     first, the warnings' count and the code-language note written for
- *     what is left), at most 200 lines — as `<origin>/<unit>.json` on the
+ *     to the unit (scopeReport in src/lib/check-report.ts, the report's
+ *     paths relative to the content directory: what failed first, the
+ *     unit's own failures leading, then warnings only for the unit's files,
+ *     the warnings' count and the code-language note written for what is
+ *     left), at most 200 lines — as `<origin>/<unit>.json` on the
  *     `syndication-verdicts` branch (a commit on its tip; a tip that moved
  *     means rebuilding the one-file change on it) and delete the staging branch if it still
  *     points at `--staged`. The sending wiki reads that branch. A
@@ -390,10 +391,8 @@ async function finish(dir, opts) {
 
   if (opts.ok === false) {
     const text = opts.problems ? readFileSync(opts.problems, 'utf8') : '';
-    // the checks ran over the whole repository: every failure stays, warnings only about the unit
-    const inUnit = (path) =>
-      inUnitRoots(path, target.unit, opts.locales) ||
-      (opts.contentDir !== '' && path.startsWith(opts.contentDir) && inUnitRoots(path.slice(opts.contentDir.length), target.unit, opts.locales));
+    // the checks ran over the whole content root: every failure stays, warnings only about the unit
+    const inUnit = (path) => inUnitRoots(path, target.unit, opts.locales);
     const problems = scopeReport(text.split(/\r?\n/), inUnit).map((l) => l.trimEnd()).filter(Boolean);
     await recordVerdict(dir, opts, target, { ...verdictBase, problems: problems.length ? problems : ['the checks failed'] });
     return 0;

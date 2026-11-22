@@ -930,17 +930,18 @@ are reserved so nothing can land where no check looks. `check-content`
 writes its report to stdout, which is what the workflow captures as the
 problems file; the plugins' own chatter on stderr stays in the CI log.
 
-The checks run over the whole repository, and the verdict is about one
+The checks run over the whole content root, and the verdict is about one
 unit: `finish --fail` narrows the report before recording it. A file's
-block in the report — a line `✗ <path>` (the file fails) or `⚠ <path>`
-(warnings, listed without failing), its entries indented below it, the form
-`check-content` and `check-language` print — stays when it fails, wherever
-the file is: any failure is why the submission was not promoted. A warning
-block stays only for a file of the unit (under any of its locale
-directories). The unit's blocks come first; every other line — another
-check's output, a summary — stays in its place, and the warnings' count
-and the code-language note are written anew for what is left. Up to 200
-lines are recorded.
+block in the report — a line `✗ <path>` (the page fails) or `⚠ <path>`
+(warnings, listed without failing), the page's path relative to the content
+directory, its entries indented below it: the form `check-content` and
+`check-language` print — stays when it fails, wherever the page is: any
+failure is why the submission was not promoted, and so does every line in
+no page's block (another check's output, a summary). A warning block stays
+only for a page of the unit (under any of its locale directories). What
+failed comes first, the unit's own failures leading; the unit's warnings
+follow, with the warnings' count and the code-language note written anew
+for them. Up to 200 lines are recorded.
 
 ### Hard requirement: rulesets on the receiving repository
 
