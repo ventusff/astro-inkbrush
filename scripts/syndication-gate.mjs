@@ -64,10 +64,13 @@
  *   syndication-gate.mjs finish --branch <b> --staged <sha> --promoted <sha> --origins <a,b> --fail [--problems <file>]
  *       [--base main] [--remote origin]
  *
- *     Record the verdict — the checks' output, at most 200 lines, about
- *     `--staged` — as `<origin>/<unit>.json` on the `syndication-verdicts`
- *     branch (a commit on its tip; a tip that moved means rebuilding the
- *     one-file change on it) and delete the staging branch if it still
+ *     Record the verdict — the checks' output about `--staged`, narrowed
+ *     to the unit (scopeReport in src/lib/check-report.ts: every failing
+ *     file stays, warnings only for the unit's files, the unit's blocks
+ *     first, the warnings' count and the code-language note written for
+ *     what is left), at most 200 lines — as `<origin>/<unit>.json` on the
+ *     `syndication-verdicts` branch (a commit on its tip; a tip that moved
+ *     means rebuilding the one-file change on it) and delete the staging branch if it still
  *     points at `--staged`. The sending wiki reads that branch. A
  *     promotion removes the unit's file.
  *
@@ -90,6 +93,7 @@ const { splitFrontmatter } = await lib('frontmatter.ts');
 const gitLib = await lib('syndication-git.ts');
 const { buildTree, changedPaths, commitInfo, commitTree, committerIdentity, git, GitError, listTree, push, readUnitInTree, revParse, writeBlobs } = gitLib;
 const { decide, parseStagingBranch, parseSubmission, unitStateFrom, verdictPath, VERDICT_LINES, VERDICTS_BRANCH } = await lib('syndication-state.ts');
+const { scopeReport } = await lib('check-report.ts');
 const { LOCALES } = await import(pathToFileURL(join(engineRoot, 'src/wiki/shared/locales.ts')).href);
 
 const USAGE = `usage: syndication-gate.mjs prepare --branch <syndicate/<origin>/<unit>> --staged <sha> --origins <a,b> [--base main] [--remote origin] [--content-dir <dir>] [--locales <p/,p/>]
@@ -386,7 +390,11 @@ async function finish(dir, opts) {
 
   if (opts.ok === false) {
     const text = opts.problems ? readFileSync(opts.problems, 'utf8') : '';
-    const problems = text.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+    // the checks ran over the whole repository: every failure stays, warnings only about the unit
+    const inUnit = (path) =>
+      inUnitRoots(path, target.unit, opts.locales) ||
+      (opts.contentDir !== '' && path.startsWith(opts.contentDir) && inUnitRoots(path.slice(opts.contentDir.length), target.unit, opts.locales));
+    const problems = scopeReport(text.split(/\r?\n/), inUnit).map((l) => l.trimEnd()).filter(Boolean);
     await recordVerdict(dir, opts, target, { ...verdictBase, problems: problems.length ? problems : ['the checks failed'] });
     return 0;
   }

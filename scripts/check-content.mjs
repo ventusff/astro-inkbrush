@@ -103,7 +103,8 @@ const { frontmatterProblems, loadFrontmatterSchema } = await import(
 );
 const { rehypeWikiBlocks } = await import(pathToFileURL(join(engineRoot, 'src/lib/rehype-wiki-blocks.ts')).href);
 const { blockStampProblems } = await import(pathToFileURL(join(engineRoot, 'src/lib/wiki-blocks-check.ts')).href);
-const { CODE_LANGUAGE_ADVICE, codeLanguageSeverity, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
+const { codeLanguageAdvice, codeLanguageLine, codeLanguageSeverity, remarkCodeLanguage } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
+const { fileBlock, warningsCount } = await import(pathToFileURL(join(engineRoot, 'src/lib/check-report.ts')).href);
 const { OutsideCheckoutError, findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
 );
@@ -267,15 +268,6 @@ export function buildPipeline({ math = false, site, namedFences = false, codeLan
   const rehypePlugins = [...(site?.rehypePlugins ?? []), rehypeWikiBlocks, rehypeBlockStamps];
   const remarkRehypeOptions = { allowDangerousHtml: true, passThrough: [], ...(site?.remarkRehype ?? {}) };
   return { remarkPlugins, rehypePlugins, remarkRehypeOptions };
-}
-
-/** a code-language finding as one report line: `line:column  message: text` */
-export const codeLanguageLine = (f) => `${f.line}:${f.column}  ${f.message}: ${f.text}`;
-
-/** the closing note of a report that lists code-language lines: why, and what to write for each place listed */
-export function codeLanguageAdvice(places) {
-  const lines = [...places].map((p) => `  - ${CODE_LANGUAGE_ADVICE[p]}`);
-  return `\nChinese in a page's code: the translation sync service copies a page's code into every language as written, so English and German readers see it as written. Instead, in\n${lines.join('\n')}`;
 }
 
 /**
@@ -498,22 +490,14 @@ export async function main(argv) {
   const { checked, findings, warnings, codeLanguage, codeLanguagePlaces } = result;
   const scope = `dialect + content guard${math ? ' + math' : ''}${site ? ' + site plugins' : ''}${frontmatter ? ' + frontmatter schema' : ''} + block stamps${codeLanguage ? ' + code language' : ''}`;
   // the report is the tool's output and goes to stdout — a CI captures it
-  // as the findings; what the plugins themselves print (KaTeX warnings)
-  // stays on stderr with the usage errors
-  for (const { file, problems } of findings) {
-    console.log(`\n✗ ${file}`);
-    for (const p of problems) console.log(`  ${p.split('\n').join('\n  ')}`);
-  }
-  for (const { file, warnings: notes } of warnings) {
-    console.log(`\n⚠ ${file}`);
-    for (const n of notes) console.log(`  ${n}`);
-  }
-  if (warnings.length > 0) {
-    const count = warnings.reduce((sum, w) => sum + w.warnings.length, 0);
-    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-    console.log(`\n${plural(count, 'warning')} in ${plural(warnings.length, 'file')} (listed, not failing the run).`);
-  }
-  if (codeLanguagePlaces.size > 0) console.log(codeLanguageAdvice(codeLanguagePlaces));
+  // as the findings, in the form src/lib/check-report.ts reads back; what
+  // the plugins themselves print (KaTeX warnings) stays on stderr with the
+  // usage errors
+  const print = (lines) => console.log(['', ...lines].join('\n'));
+  for (const { file, problems } of findings) print(fileBlock('✗', file, problems));
+  for (const { file, warnings: notes } of warnings) print(fileBlock('⚠', file, notes));
+  if (warnings.length > 0) print([warningsCount(warnings.reduce((sum, w) => sum + w.warnings.length, 0), warnings.length)]);
+  if (codeLanguagePlaces.size > 0) print(codeLanguageAdvice(codeLanguagePlaces));
   if (findings.length > 0) {
     console.log(`\n${findings.length}/${checked} files have problems (${scope}).`);
     return 1;

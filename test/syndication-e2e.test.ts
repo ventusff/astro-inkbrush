@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import type { SyndicationPeer } from '../src/wiki/config.ts';
+import { CODE_LANGUAGE_ADVICE_HEAD } from '../src/lib/code-language.ts';
 import { setConfigInput } from '../src/wiki/server/config.ts';
 import { setSiteHooks } from '../src/wiki/server/site.ts';
 import { setProjectRoot } from '../src/wiki/server/store.ts';
@@ -297,23 +298,39 @@ test('a rejected submission: the gate refuses, the origin reads the verdict', as
   const stagedSha = await checkoutStaged(branch);
   const prepared = await runGate('prepare', '--branch', branch, '--staged', stagedSha, ...ORIGINS);
   assert.equal(prepared.code, 0, prepared.stderr);
-  writeFileSync(join(base, 'checks.log'), 'chasing/index.mdx:7:1 something the peer dislikes\nsecond line\n');
+  // the checks ran over the whole repository, in check-content's report form: the verdict keeps every
+  // failure and the unit's warnings, never another note's
+  const advice = `${CODE_LANGUAGE_ADVICE_HEAD}\n  - inline code: a placeholder is an English word (\`<run-id>\`) the prose explains`;
+  writeFileSync(
+    join(base, 'checks.log'),
+    `\n✗ chasing/index.mdx\n  7:1 something the peer dislikes\n  second line\n\n⚠ chasing/attention/index.mdx\n  3:1  Chinese in inline code: 追\n\n⚠ elsewhere/index.mdx\n  5:2  Chinese in a code block outside its comments: 别处\n\n2 warnings in 2 files (listed, not failing the run).\n\n${advice}\n\n1/3 files have problems (dialect).\n`,
+  );
   const finished = await runGate('finish', '--branch', branch, '--staged', stagedSha, '--promoted', prepared.stdout, ...ORIGINS, '--fail', '--problems', join(base, 'checks.log'));
   assert.equal(finished.code, 0, finished.stderr);
+  const problems = [
+    '✗ chasing/index.mdx',
+    '  7:1 something the peer dislikes',
+    '  second line',
+    '⚠ chasing/attention/index.mdx',
+    '  3:1  Chinese in inline code: 追',
+    '1 warning in 1 file (listed, not failing the run).',
+    ...advice.split('\n'),
+    '1/3 files have problems (dialect).',
+  ];
 
   await assert.rejects(
     awaitVerdict(peer, 'chasing', { commit: staged.commit, action: 'publish', revision: staged.revision }, never),
     (err: unknown) =>
       err instanceof SyndicationError &&
       err.code === 'rejected' &&
-      JSON.stringify(err.problems) === JSON.stringify(['chasing/index.mdx:7:1 something the peer dislikes', 'second line']),
+      JSON.stringify(err.problems) === JSON.stringify(problems),
   );
   const status = await unitStatus(peer, 'chasing', 0);
   assert.equal(status.copy, 'behind');
   assert.equal(status.revision, revision);
   assert.equal(status.submission?.state, 'rejected');
   assert.equal(status.submission?.revision, staged.revision);
-  assert.deepEqual(status.submission?.problems, ['chasing/index.mdx:7:1 something the peer dislikes', 'second line']);
+  assert.deepEqual(status.submission?.problems, problems);
 
   // publishing again clears the verdict once accepted
   const again = (await submitPublish(peer, 'chasing', user, {}))!;

@@ -793,8 +793,8 @@ publish ──commit on the tip──push──▶          refs/heads/syndicate
    nothing unchecked is ever pushed. Then the staging branch is deleted
    only if it still points at the checked commit (a newer submission
    stays), and the unit's verdict file, if any, is removed. `finish
-   --fail` records the checks' output (up to 200 lines) about the checked
-   commit as `<name>/<unit>.json` on the peer's **`syndication-verdicts`**
+   --fail` records the checks' output about the checked commit, narrowed
+   to the unit, as `<name>/<unit>.json` on the peer's **`syndication-verdicts`**
    branch — a commit on that branch's tip (a tip that moved means
    rebuilding the one-file change), a branch the peer's rulesets keep
    senders out of — and deletes the staging branch under the same lease.
@@ -929,6 +929,18 @@ any name its discovery and checks would see; the names they skip
 are reserved so nothing can land where no check looks. `check-content`
 writes its report to stdout, which is what the workflow captures as the
 problems file; the plugins' own chatter on stderr stays in the CI log.
+
+The checks run over the whole repository, and the verdict is about one
+unit: `finish --fail` narrows the report before recording it. A file's
+block in the report — a line `✗ <path>` (the file fails) or `⚠ <path>`
+(warnings, listed without failing), its entries indented below it, the form
+`check-content` and `check-language` print — stays when it fails, wherever
+the file is: any failure is why the submission was not promoted. A warning
+block stays only for a file of the unit (under any of its locale
+directories). The unit's blocks come first; every other line — another
+check's output, a summary — stays in its place, and the warnings' count
+and the code-language note are written anew for what is left. Up to 200
+lines are recorded.
 
 ### Hard requirement: rulesets on the receiving repository
 

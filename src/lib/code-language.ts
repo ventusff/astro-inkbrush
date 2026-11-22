@@ -167,6 +167,14 @@ function message(place: CodePlace, name: string | undefined): string {
   }
 }
 
+/** message() read back: the place each message names */
+const MESSAGE_PLACES: readonly (readonly [RegExp, CodePlace])[] = [
+  [/^Chinese in the page's script$/, 'script'],
+  [/^Chinese in (?:a spread attribute|the attribute `[^`]*`)$/, 'attribute'],
+  [/^Chinese in a (?:\S+ )?code block outside its comments$/, 'code-block'],
+  [/^Chinese in inline code$/, 'inline-code'],
+];
+
 /** what to write instead, one line per place */
 export const CODE_LANGUAGE_ADVICE: Readonly<Record<CodePlace, string>> = {
   script:
@@ -177,6 +185,27 @@ export const CODE_LANGUAGE_ADVICE: Readonly<Record<CodePlace, string>> = {
     'a code block: placeholders are English words (`<run-id>`) the prose explains; words for the reader go in a comment (in js, ts, python, sh, yaml, toml and the other languages code-comments.ts reads) or in a `text` block',
   'inline-code': 'inline code: a placeholder is an English word (`<run-id>`) the prose explains',
 };
+
+/** a finding as one report line: `line:column  message: text` */
+export function codeLanguageLine(f: Pick<CodeLanguageFinding, 'line' | 'column' | 'message' | 'text'>): string {
+  return `${f.line}:${f.column}  ${f.message}: ${f.text}`;
+}
+
+/** the place a report line of codeLanguageLine() names (indented or not), or null for any other line */
+export function codeLanguagePlaceOf(line: string): CodePlace | null {
+  const m = /^\s*\d+:\d+ {2}(.+?): /.exec(line);
+  if (!m) return null;
+  return MESSAGE_PLACES.find(([re]) => re.test(m[1]!))?.[1] ?? null;
+}
+
+/** the first line of the closing note a report prints when it lists code-language lines */
+export const CODE_LANGUAGE_ADVICE_HEAD =
+  "Chinese in a page's code: the translation sync service copies a page's code into every language as written, so English and German readers see it as written. Instead, in";
+
+/** that closing note: why, and what to write for each place the report lists */
+export function codeLanguageAdvice(places: Iterable<CodePlace>): string[] {
+  return [CODE_LANGUAGE_ADVICE_HEAD, ...[...places].map((p) => `  - ${CODE_LANGUAGE_ADVICE[p]}`)];
+}
 
 /** an attribute value as the browser reads it: character references decoded */
 function decodeReferences(text: string): string {

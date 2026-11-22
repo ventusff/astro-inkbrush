@@ -43,12 +43,13 @@ import remarkMdx from 'remark-mdx';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 
-import { codeLanguageAdvice, codeLanguageLine, contentFiles, loadSiteConfig } from './check-content.mjs';
+import { contentFiles, loadSiteConfig } from './check-content.mjs';
 
 const engineRoot = resolve(fileURLToPath(import.meta.url), '..', '..');
+const { fileBlock } = await import(pathToFileURL(join(engineRoot, 'src/lib/check-report.ts')).href);
 const { markdownSyntax } = await import(pathToFileURL(join(engineRoot, 'src/lib/markdown-syntax.ts')).href);
 const { splitFrontmatter } = await import(pathToFileURL(join(engineRoot, 'src/lib/frontmatter.ts')).href);
-const { codeLanguageFindings } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
+const { codeLanguageAdvice, codeLanguageFindings, codeLanguageLine } = await import(pathToFileURL(join(engineRoot, 'src/lib/code-language.ts')).href);
 const { OutsideCheckoutError, findTranslationDeclaration, isSourcePage, readTranslationDeclaration } = await import(
   pathToFileURL(join(engineRoot, 'src/lib/translation-declaration.ts')).href
 );
@@ -179,14 +180,14 @@ export async function main(argv) {
   }
   let errors = 0;
   let warnings = 0;
+  const print = (lines) => console.log(['', ...lines].join('\n'));
   for (const { file, errors: e, warnings: w } of result.files) {
-    console.log(`\n${e.length > 0 ? '✗' : '⚠'} ${file}`);
-    for (const line of e) console.log(`  ${line}`);
-    for (const line of w) console.log(`  warning ${line}`);
+    if (e.length > 0) print(fileBlock('✗', file, e));
+    if (w.length > 0) print(fileBlock('⚠', file, w));
     errors += e.length;
     warnings += w.length;
   }
-  if (result.places.size > 0) console.log(codeLanguageAdvice(result.places));
+  if (result.places.size > 0) print(codeLanguageAdvice(result.places));
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const scope = `${plural(result.checked, 'source page')}; the other languages copy their code`;
   if (errors > 0) {

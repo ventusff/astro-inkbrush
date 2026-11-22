@@ -112,7 +112,9 @@ npm test
   `scripts/syndication-gate.mjs` (`prepare` → its own checks → `finish
   --ok|--fail`, bound to the pushed commit, with an origin allowlist),
   and a verdict is `<name>/<unit>.json` on the peer's protected
-  `syndication-verdicts` branch. A receiving
+  `syndication-verdicts` branch: the checks' report narrowed to the unit
+  (every failure, the unit's own warnings), read in the form the content
+  checks print it, `src/lib/check-report.ts`. A receiving
   repository must carry the rulesets the manual names (the sender's
   credential may touch only `syndicate/**`, never `.github/**` or
   `_meta/**`).
