@@ -25,11 +25,18 @@
  * (`"pages:<root>:<id>": { "source": "en", … }`). A unit the lock does not
  * record yet takes the declaration's source language when the page exists in
  * it, else the first language of the declaration the page exists in.
+ *
+ * A unit whose page carries `origin` in its frontmatter, in any language, is
+ * a read-only copy synced from another wiki: the service leaves it alone and
+ * the source wiki owns its translations, so none of its pages is a source
+ * page.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import picomatch from 'picomatch';
+
+import { splitFrontmatter } from './frontmatter.ts';
 
 type Piece = { kind: 'text'; text: string } | { kind: 'id' } | { kind: 'locale' } | { kind: 'choice'; options: string[] };
 
@@ -268,8 +275,16 @@ export function sourceOfPage(declaration: TranslationDeclaration, page: Page): s
   return present.includes(declaration.source) ? declaration.source : (present[0] ?? declaration.source);
 }
 
-/** The file at absolute `path` is a page in its own source language. */
+/** `page` belongs to a read-only copy: the file of one of its languages carries `origin` (see the module comment). */
+export function isCopy(declaration: TranslationDeclaration, page: Page): boolean {
+  return declaration.locales.some((l) => {
+    const file = pagePath(declaration, page, l);
+    return existsSync(file) && splitFrontmatter(readFileSync(file, 'utf8')).data['origin'] !== undefined;
+  });
+}
+
+/** The file at absolute `path` is a page in its own source language, the language whose code the service copies into the others. */
 export function isSourcePage(declaration: TranslationDeclaration, path: string): boolean {
   const page = pageOf(declaration, path);
-  return page !== null && sourceOfPage(declaration, page) === page.locale;
+  return page !== null && !isCopy(declaration, page) && sourceOfPage(declaration, page) === page.locale;
 }

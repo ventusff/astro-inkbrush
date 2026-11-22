@@ -91,7 +91,7 @@ test('suffix layout: the language in the file name; the default leaves it out wi
   assert.equal(at(named, 'about/index.md'), null);
 });
 
-test('a page\'s source: the lock\'s record, else the declaration\'s source where the page exists, else its first language', () => {
+test('a page\'s source: the lock\'s record, else the declaration\'s source where the page exists, else its first language; a read-only copy has none', () => {
   const dir = repo(
     PREFIX,
     {
@@ -101,6 +101,8 @@ test('a page\'s source: the lock\'s record, else the declaration\'s source where
       'site/src/docs/en/both/index.mdx': '',
       'site/src/docs/en/english-only/index.mdx': '',
       'site/src/docs/de/english-only/index.mdx': '',
+      'site/src/docs/copied/index.mdx': '---\norigin:\n  wiki: elsewhere\n---\n',
+      'site/src/docs/en/copied/index.mdx': '---\norigin:\n  wiki: elsewhere\n---\n',
     },
     { version: 1, units: { 'pages:site/src/docs:recorded': { source: 'en', zh: 'a', en: 'b' } } },
   );
@@ -113,6 +115,7 @@ test('a page\'s source: the lock\'s record, else the declaration\'s source where
     assert.equal(source('en/both/index.mdx'), false);
     assert.equal(source('en/english-only/index.mdx'), true);
     assert.equal(source('de/english-only/index.mdx'), false);
+    assert.equal(source('copied/index.mdx'), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
