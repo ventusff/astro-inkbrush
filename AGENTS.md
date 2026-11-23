@@ -194,6 +194,11 @@ npm test                                  # unit tests (node:test, native TS)
 npm run typecheck                         # tsc --noEmit
 ```
 
+Every browser a test, probe or script starts runs headless
+(`--headless=new`, puppeteer's default) and never opens a window: the
+machine it runs on is someone's desktop, and a window there takes their
+mouse and keyboard.
+
 The integration build — an Astro site consuming the engine, `check-dist`
 over its output, the content CLIs over its notes — runs in the
 astro-inkstone repository, whose demo garden vendors this engine.
