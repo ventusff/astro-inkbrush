@@ -317,9 +317,11 @@ export function extractWikilinks(source: string, options: MaskOptions = {}): Ext
     if (cuts.some((c) => c > start && c < end)) continue;
     // `\[[` is an escaped bracket, not a wikilink opener
     if (escapedAt(masked, start)) continue;
+    // a GFM table cell writes the label pipe as `\|`, which the page reads as `|`
+    const unpipe = (part: string): string => (m[3] !== undefined && part.endsWith('\\') ? part.slice(0, -1) : part);
     out.push({
-      target: m[1]!.trim(),
-      anchor: m[2]?.trim(),
+      target: (m[2] === undefined ? unpipe(m[1]!) : m[1]!).trim(),
+      anchor: m[2] === undefined ? undefined : unpipe(m[2]).trim(),
       label: m[3]?.trim(),
       offset: m.index ?? 0,
       raw: m[0]!,
