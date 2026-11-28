@@ -48,12 +48,12 @@ Contract of the editing machine:
   it — and pushed after a successful update (a failed push of recovered
   commits stops the container). The update makes the checkout the
   upstream's tip with the volume's own commits rebased on top: the commits
-  above the fork point, the newest upstream tip the tracking branch's reflog
-  records in HEAD's history. A branch rewound or rewritten upstream on
-  purpose is followed as it is, and the commits it removed are neither
-  replayed nor pushed back. A rebase that does not apply, or a HEAD the
-  reflog places on no recorded tip, stops the container instead of serving
-  a diverged checkout. Lockfile drift is discarded with its diff printed,
+  of HEAD that no tip the upstream has held contains, every tip named on
+  either side of a line of the tracking branch's reflog. A branch rewound or
+  rewritten upstream on purpose is followed as it is, and the commits it
+  removed are neither replayed nor pushed back. A rebase that does not
+  apply, or own commits that do not sit on one commit the upstream held,
+  stop the container instead of serving a diverged checkout. Lockfile drift is discarded with its diff printed,
   never committed.
 - **Reproducible installs.** `npm ci` or `pnpm install --frozen-lockfile`,
   by the lockfile present.

@@ -114,14 +114,19 @@ fi
 
 echo "[entrypoint] updating $BRANCH ..."
 git -C "$D" fetch --quiet origin "$BRANCH"
-# The checkout becomes origin's tip with the volume's own commits rebased on
-# top. The reflog of origin/$BRANCH records every tip origin held as this
-# checkout saw it (each fetch, each push); the fork point is the newest of
-# them in HEAD's history, so the commits above it are the saves origin never
-# held, and commits origin removed by rewinding or rewriting the branch on
-# purpose stay behind.
-if ! BASE=$(git -C "$D" merge-base --fork-point "origin/$BRANCH" HEAD); then
-    echo "[entrypoint] FATAL: HEAD is built on no tip the reflog of origin/$BRANCH records; the volume needs a human (git -C $D log --graph HEAD origin/$BRANCH)." >&2
+# Every tip origin/$BRANCH has held as this checkout saw it: both sides of each line of its reflog (a line
+# records the tip before and after one fetch or push, so the tip a rewind left stays named on the rewind's
+# own line) and the tip now; a tip whose objects are gone holds nothing HEAD has.
+HELD=$(cd "$D" && log=$(git rev-parse --git-path "logs/refs/remotes/origin/$BRANCH") && {
+    if [ -f "$log" ]; then awk '{ print $1; print $2 }' "$log"; fi
+    git rev-parse "origin/$BRANCH"
+} | git cat-file --batch-check='%(objectname) %(objecttype)' | awk '$2 == "commit" { print $1 }' | sort -u)
+# The volume's own commits are those of HEAD that none of these tips holds, the saves origin never held: the
+# commits above the one best common ancestor of HEAD and the tips. They are replayed onto origin/$BRANCH, and
+# commits origin removed by rewinding or rewriting $BRANCH on purpose stay behind.
+# shellcheck disable=SC2086 # one argument per tip
+if ! BASE=$(git -C "$D" merge-base --all HEAD $HELD) || [ "$(printf '%s\n' "$BASE" | wc -l)" != 1 ]; then
+    echo "[entrypoint] FATAL: HEAD stands on no single tip origin/$BRANCH has held; the volume needs a human (git -C $D log --graph HEAD origin/$BRANCH)." >&2
     exit 1
 fi
 if ! git -C "$D" rebase --quiet --onto "origin/$BRANCH" "$BASE"; then
