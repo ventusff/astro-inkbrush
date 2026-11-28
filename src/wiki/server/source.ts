@@ -15,10 +15,12 @@
  * Edit history is two layers: the journal is the fine-grained per-block
  * audit log (each record has a unique id); git in the content repo is the
  * durable versioning — `autocommit` commits each save with the signed-in
- * user as author, `autopush` pushes asynchronously after each commit (merging
- * origin in when another writer pushed first), `follow` takes origin's new
- * commits into the checkout every minute so the running server serves them,
- * and `skipCi` marks each commit so no pipeline reacts to a save.
+ * user as author, `autopush` pushes asynchronously after each commit (its
+ * saves replayed onto origin when another writer pushed first), `follow`
+ * takes origin's branch into the checkout every minute so the running server
+ * serves it, and `skipCi` marks each commit so no pipeline reacts to a save.
+ * Only the checkout's own commits, the saves origin never held, are replayed
+ * or pushed: a branch rewound or rewritten on purpose is followed as it is.
  */
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -280,89 +282,179 @@ function inGitQueue<T>(operation: () => Promise<T>): Promise<T> {
 
 type Git = (...args: string[]) => Promise<{ stdout: string; stderr: string }>;
 
-const gitIn = (repoRoot: string): Git => (...args) => execFileP('git', args, { cwd: repoRoot });
+const gitIn =
+  (repoRoot: string, env?: NodeJS.ProcessEnv): Git =>
+  (...args) =>
+    execFileP('git', args, { cwd: repoRoot, ...(env ? { env: { ...process.env, ...env } } : {}) });
 
-const isAncestor = (git: Git, ancestor: string, of: string): Promise<boolean> =>
-  git('merge-base', '--is-ancestor', ancestor, of).then(
-    () => true,
-    () => false,
-  );
+/** where the checkout's branch is pushed (`remote`, `remoteRef`) and the branch that tracks it here */
+interface UpstreamBranch {
+  remote: string;
+  remoteRef: string;
+  trackingRef: string;
+}
 
-/**
- * Take origin's commits, as of the last fetch, into the checkout. Other
- * writers push to the same repository (people, pipelines, other sites kept in
- * it). With no local commits origin lacks, the checkout fast-forwards to
- * origin; otherwise origin's tip is merged in: the merge's tree is computed
- * with `git merge-tree`, which writes no file, and the checkout moves to the
- * merge commit by a fast-forward. Either fast-forward updates only the files
- * origin changed and stops rather than overwrite a file a save has written
- * and not committed yet. It holds the write lock of every file origin
- * changed, the lock a save holds from reading the file to writing it back, so
- * a save reads such a file wholly before the update or wholly after it and
- * never writes back bytes the update replaced. A merge that conflicts (the
- * same lines edited here and on origin) is not made and throws: the commits
- * stay local until a person merges by hand. The running dev server watches
- * the working tree, so the files origin changed are served from the next
- * request on.
- *
- * Origin's tip is resolved once, so a fetch made meanwhile by another writer
- * of this checkout cannot change what is taken in after the locks are
- * chosen; the check repeated inside the queue makes a second caller that
- * waited for the first take in nothing. Returns whether a merge commit was
- * made (the one outcome that leaves commits origin lacks).
- */
-async function takeUpstream(git: Git, skipCi: boolean): Promise<'merged' | 'unchanged'> {
-  const tip = (await git('rev-parse', '--verify', '@{upstream}^{commit}')).stdout.trim();
-  if (await isAncestor(git, tip, 'HEAD')) return 'unchanged';
-  // the files origin changed since the common ancestor, both sides of a rename: exactly the files the
-  // fast-forward rewrites or removes, whatever this checkout commits meanwhile; their locks are taken
-  // in sorted order, before the git queue, the order a save takes its file's lock and then the queue
-  // for its commit
-  const repoRoot = (await git('rev-parse', '--show-toplevel')).stdout.trim();
-  const changed = (await git('diff', '--name-only', '--no-renames', '-z', `HEAD...${tip}`)).stdout.split('\0').filter(Boolean);
-  const keys = [...new Set(changed.map((rel) => realpathDeep(resolve(repoRoot, rel))))].sort();
-  const update = () =>
-    inGitQueue(async (): Promise<'merged' | 'unchanged'> => {
-      if (await isAncestor(git, tip, 'HEAD')) return 'unchanged';
-      if (await isAncestor(git, 'HEAD', tip)) {
-        await git('merge', '--ff-only', tip);
-        return 'unchanged';
-      }
-      const upstream = (await git('rev-parse', '--abbrev-ref', '@{upstream}')).stdout.trim();
-      const tree = (await git('merge-tree', '--write-tree', 'HEAD', tip)).stdout.split('\n')[0]!;
-      const message = `wiki: merge ${upstream}${skipCi ? '\n\n[skip ci]' : ''}`;
-      const commit = (await git('commit-tree', tree, '-p', 'HEAD', '-p', tip, '-m', message)).stdout.trim();
-      await git('merge', '--ff-only', commit);
-      return 'merged';
-    });
-  return await keys.reduceRight<() => Promise<'merged' | 'unchanged'>>(
-    (next, key) => () => withLock(key, next),
-    update,
-  )();
+async function upstreamBranch(git: Git): Promise<UpstreamBranch> {
+  const branch = (await git('symbolic-ref', '--quiet', 'HEAD')).stdout.trim();
+  const format = '--format=%(upstream:remotename)%00%(upstream:remoteref)%00%(upstream)';
+  const [remote, remoteRef, trackingRef] = (await git('for-each-ref', format, branch)).stdout.trim().split('\0');
+  if (!remote || !remoteRef || !trackingRef) throw new Error(`${branch} has no upstream branch to follow`);
+  return { remote, remoteRef, trackingRef };
 }
 
 /**
- * Push the content repo's branch to its upstream. A push is turned back
- * whenever origin has moved on since the last fetch; then origin is fetched,
- * taken in (takeUpstream) and the push is made once more. A merge that
- * conflicts leaves every later push turned back the same way, and the log
- * says so until a person merges by hand. The network steps run outside the
- * git queue, so no save waits on them.
+ * The upstream tip this checkout's own commits sit on. The tracking branch's
+ * reflog records every tip the upstream held as this checkout saw it, each
+ * fetch and each push, and `git merge-base --fork-point` gives the newest
+ * recorded tip HEAD contains. Every commit at or below it the upstream once
+ * held; the commits above it are this checkout's own, the saves it has not
+ * pushed. So commits the upstream has since removed, by rewinding its branch
+ * or rewriting it, are never this checkout's and are never replayed or pushed
+ * back. Throws when the reflog places HEAD on no recorded tip (HEAD holds
+ * none, or two that diverged): a person then settles the checkout.
  */
-async function pushToUpstream(repoRoot: string, skipCi: boolean): Promise<void> {
+async function forkPoint(git: Git, upstream: UpstreamBranch): Promise<string> {
+  const found = await git('merge-base', '--fork-point', upstream.trackingRef, 'HEAD').then(
+    ({ stdout }) => stdout.trim(),
+    () => '',
+  );
+  if (!found) {
+    throw new Error(`HEAD is built on no tip the reflog of ${upstream.trackingRef} records; the checkout needs a person`);
+  }
+  return found;
+}
+
+/** this checkout's own commits, oldest first: HEAD's history above the fork point `base` that `tip` lacks, merges left out */
+async function ownCommits(git: Git, base: string, tip: string): Promise<string[]> {
+  return (await git('rev-list', '--reverse', '--no-merges', 'HEAD', '--not', base, tip)).stdout.split('\n').filter(Boolean);
+}
+
+/**
+ * `commits` (oldest first, none a merge) replayed onto `onto` without
+ * touching the working tree or the index, as `git rebase` would replay them:
+ * each commit's change from its parent is merged into the replayed tip by
+ * `git merge-tree` and committed under the commit's own author, date and
+ * message. A commit that already sits on the replayed tip is kept as it is;
+ * one whose change the replayed tip already holds is dropped. Throws on a
+ * conflict, naming the commit and the files. Returns the new tip.
+ */
+async function replay(repoRoot: string, onto: string, commits: readonly string[]): Promise<string> {
+  const git = gitIn(repoRoot);
+  let tip = onto;
+  for (const commit of commits) {
+    const parent = (await git('rev-parse', `${commit}^`)).stdout.trim();
+    if (parent === tip) {
+      tip = commit;
+      continue;
+    }
+    // merge-tree takes its merge base from history, so the replayed tip's tree enters as a child of the
+    // commit's parent: the three-way merge then has that parent as its base, the base a cherry-pick uses
+    const tipTree = (await git('rev-parse', `${tip}^{tree}`)).stdout.trim();
+    const theirs = (await git('commit-tree', tipTree, '-p', parent, '-m', 'replay base')).stdout.trim();
+    const merged = await git('merge-tree', '--write-tree', '--name-only', '--no-messages', theirs, commit).catch(
+      (err: { stdout?: string }) => {
+        const files = (err.stdout ?? '').split('\n').slice(1).filter(Boolean).join(', ');
+        throw new Error(`replaying ${commit} onto ${tip} conflicts in ${files || 'its files'}; the checkout needs a person`);
+      },
+    );
+    const tree = merged.stdout.split('\n')[0]!;
+    if (tree === tipTree) continue;
+    const [name, email, date, message] = (
+      await git('show', '-s', '--date=raw', '--format=%an%x00%ae%x00%ad%x00%B', commit)
+    ).stdout.split('\0');
+    const author = gitIn(repoRoot, { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_AUTHOR_DATE: date });
+    tip = (await author('commit-tree', tree, '-p', tip, '-m', message!.replace(/\n+$/, ''))).stdout.trim();
+  }
+  return tip;
+}
+
+/**
+ * Take the upstream branch, as of the last fetch, into the checkout: the
+ * checkout becomes the upstream's tip with this checkout's own commits
+ * replayed on top (forkPoint, replay). The one rule covers every way the
+ * upstream moves. Moved forward, the checkout fast-forwards, or its saves are
+ * replayed onto the new commits; rewound to an older commit or rewritten on
+ * purpose, the checkout follows it and only its unpushed saves are replayed
+ * onto the new history, so nothing the upstream removed comes back. Other
+ * writers push to the same repository (people, pipelines, other sites kept in
+ * it).
+ *
+ * The new commits are written by `git merge-tree` and `git commit-tree`,
+ * which touch no file, and the checkout moves to them by `git reset --keep`,
+ * which rewrites only the files that differ and stops rather than overwrite
+ * one a save has written and not committed yet. It holds the write lock of
+ * every such file, the lock a save holds from reading the file to writing it
+ * back, so a save reads such a file wholly before the update or wholly after
+ * it and never writes back bytes the update replaced. A replay that conflicts
+ * (the same lines edited here and on the upstream) is not made and throws:
+ * the commits stay local until a person rebases them by hand. The running dev
+ * server watches the working tree, so the files that changed are served from
+ * the next request on.
+ *
+ * The upstream's tip and the fork point are resolved once, so a fetch made
+ * meanwhile by another writer of this checkout cannot change what is taken in
+ * after the locks are chosen; inside the queue the own commits are read again,
+ * so a save committed while the locks were taken is replayed too (its file
+ * differs between the two tips only where an own commit or the upstream
+ * changed it, so it is among the files locked), and a second caller that
+ * waited for the first takes in nothing. Returns whether the checkout now
+ * holds commits the upstream lacks: its own, for the push.
+ */
+async function takeUpstream(git: Git, repoRoot: string): Promise<boolean> {
+  const upstream = await upstreamBranch(git);
+  const tip = (await git('rev-parse', '--verify', `${upstream.trackingRef}^{commit}`)).stdout.trim();
+  const base = await forkPoint(git, upstream);
+  const head = (await git('rev-parse', 'HEAD')).stdout.trim();
+  const next = await replay(repoRoot, tip, await ownCommits(git, base, tip));
+  if (next === head) return next !== tip;
+  // both sides of a rename: exactly the files the reset rewrites or removes; their locks are taken in
+  // sorted order, before the git queue, the order a save takes its file's lock and then the queue for
+  // its commit
+  const changed = (await git('diff', '--name-only', '--no-renames', '-z', head, next)).stdout.split('\0').filter(Boolean);
+  const keys = [...new Set(changed.map((rel) => realpathDeep(resolve(repoRoot, rel))))].sort();
+  const update = () =>
+    inGitQueue(async (): Promise<boolean> => {
+      const now = (await git('rev-parse', 'HEAD')).stdout.trim();
+      const target = now === head ? next : await replay(repoRoot, tip, await ownCommits(git, base, tip));
+      if (target !== now) await git('reset', '--quiet', '--keep', target);
+      return target !== tip;
+    });
+  return await keys.reduceRight<() => Promise<boolean>>((then, key) => () => withLock(key, then), update)();
+}
+
+/**
+ * Push the checkout's own commits. HEAD goes to the upstream branch only
+ * while the upstream still stands at the fork point, the tip those commits
+ * sit on (the lease of `--force-with-lease`), so a push made after the
+ * upstream was rewound or rewritten is turned back instead of putting the
+ * removed commits back; HEAD descends from the fork point, so every push that
+ * goes through is a fast-forward.
+ */
+async function pushOwnCommits(git: Git): Promise<void> {
+  const upstream = await upstreamBranch(git);
+  const base = await forkPoint(git, upstream);
+  await git('push', '--quiet', `--force-with-lease=${upstream.remoteRef}:${base}`, upstream.remote, `HEAD:${upstream.remoteRef}`);
+}
+
+/**
+ * Push the content repo's branch to its upstream (pushOwnCommits). A push is
+ * turned back whenever the upstream has moved since the last fetch; then the
+ * upstream is fetched, taken in (takeUpstream) and the push is made once more.
+ * A replay that conflicts leaves every later push turned back the same way,
+ * and the log says so until a person rebases by hand. The network steps run
+ * outside the git queue, so no save waits on them.
+ */
+async function pushToUpstream(repoRoot: string): Promise<void> {
   const git = gitIn(repoRoot);
   try {
-    await git('push');
+    await pushOwnCommits(git);
     return;
   } catch {
-    // turned back: take origin in below; any other failure fails the fetch too
+    // turned back: take the upstream in below; any other failure fails again there and is logged
   }
   try {
-    await git('fetch');
-    // a push turned back for another reason (network, credentials) has nothing to take in
-    if (await isAncestor(git, '@{upstream}', 'HEAD')) return;
-    await takeUpstream(git, skipCi);
-    await git('push');
+    await git('fetch', '--quiet', '--no-recurse-submodules');
+    if (await takeUpstream(git, repoRoot)) await pushOwnCommits(git);
   } catch (err) {
     console.error('[wiki autopush]', err);
   }
@@ -373,15 +465,14 @@ const FOLLOWER_KEY = '__wikiUpstreamFollower';
 
 /**
  * `follow`: every minute, on duty, fetch the content repo's upstream branch
- * and take its new commits into the checkout (takeUpstream); with
- * `autopush`, push the merge commit that took origin in. Notes pushed from
- * elsewhere are then live without restarting the server. Commits origin
- * lacks for any other reason are left to the next save's push: when origin
- * was rewound on purpose, the follower does not push the removed commits
- * back. Runs never overlap, a failure is logged once until the next run
- * that ends differently, and starting it again replaces the running one
- * (server module reloads), so one process never runs two followers on two
- * copies of the locks.
+ * and take it into the checkout (takeUpstream); with `autopush`, push the
+ * checkout's own commits it leaves on top, the saves replayed onto the
+ * upstream and any a save's push left behind. Notes pushed from elsewhere are
+ * then live without restarting the server, and a rewound or rewritten
+ * upstream is followed without its removed commits coming back. Runs never
+ * overlap, a failure is logged once until the next run that ends differently,
+ * and starting it again replaces the running one (server module reloads), so
+ * one process never runs two followers on two copies of the locks.
  */
 export function startUpstreamFollowing(): void {
   const globals = globalThis as Record<string, unknown>;
@@ -395,9 +486,10 @@ export function startUpstreamFollowing(): void {
     if (running || !onDuty()) return;
     running = true;
     try {
-      const git = gitIn((await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd: contentRoot() })).stdout.trim());
+      const repoRoot = (await execFileP('git', ['rev-parse', '--show-toplevel'], { cwd: contentRoot() })).stdout.trim();
+      const git = gitIn(repoRoot);
       await git('fetch', '--quiet', '--no-recurse-submodules');
-      if ((await takeUpstream(git, cfg.skipCi)) === 'merged' && cfg.autopush) await git('push');
+      if ((await takeUpstream(git, repoRoot)) && cfg.autopush) await pushOwnCommits(git);
       lastError = '';
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -465,7 +557,7 @@ export function autocommit(
       return 'failed';
     }
     // the save never waits on the network
-    if (cfg.autopush) void pushToUpstream(repoRoot, cfg.skipCi);
+    if (cfg.autopush) void pushToUpstream(repoRoot);
     return outside ? 'failed' : 'committed';
   };
   return inGitQueue(run);

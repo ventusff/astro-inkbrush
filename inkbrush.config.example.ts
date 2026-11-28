@@ -85,10 +85,10 @@ export default defineInkbrushConfig({
   // async git push after each autocommit (turn on for deployment machines;
   // default off)
   // autopush: true,
-  // every minute take the content repo's new upstream commits into the
-  // checkout, so notes pushed from elsewhere are live without a restart
-  // (default: the value of autopush; turn off where the checkout moves
-  // forward by other means)
+  // every minute take the content repo's upstream branch into the checkout,
+  // its unpushed saves replayed on top, so notes pushed from elsewhere are
+  // live without a restart (default: the value of autopush; turn off where
+  // the checkout moves forward by other means)
   // follow: false,
   // The AI endpoints. Every job runs in a throwaway copy that holds the
   // note's directory; `companions` names further project-relative files or

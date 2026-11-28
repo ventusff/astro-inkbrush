@@ -212,9 +212,11 @@ export interface WikiConfigInput {
   /** async git push of the content repo after each autocommit (turn on for
    *  deployment machines). default false */
   autopush?: boolean;
-  /** keep the checkout on its upstream branch: every minute fetch it and take
-   *  its new commits into the working tree (the same locked merge a turned-back
-   *  autopush makes) and, with autopush, push the merge that took it in. The
+  /** keep the checkout on its upstream branch: every minute fetch it and make
+   *  the working tree the upstream's tip with the checkout's own unpushed saves
+   *  replayed on top (the same locked update a turned-back autopush makes) and,
+   *  with autopush, push those saves. An upstream rewound or rewritten on
+   *  purpose is followed as it is: only saves it never held are replayed. The
    *  running server watches the working tree, so notes pushed from elsewhere
    *  are live without a restart. Turn it off where the checkout moves forward
    *  by other means (a site that validates each upstream version before

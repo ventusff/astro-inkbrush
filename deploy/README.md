@@ -46,10 +46,15 @@ Contract of the editing machine:
   are committed before the update — tracked changes across the whole repo
   plus new files under the content tree, since companion files live outside
   it — and pushed after a successful update (a failed push of recovered
-  commits stops the container). A fast-forward is tried first, then a
-  rebase of local commits; a rebase that does not apply stops the container
-  instead of serving a diverged checkout. Lockfile drift is discarded with
-  its diff printed, never committed.
+  commits stops the container). The update makes the checkout the
+  upstream's tip with the volume's own commits rebased on top: the commits
+  above the fork point, the newest upstream tip the tracking branch's reflog
+  records in HEAD's history. A branch rewound or rewritten upstream on
+  purpose is followed as it is, and the commits it removed are neither
+  replayed nor pushed back. A rebase that does not apply, or a HEAD the
+  reflog places on no recorded tip, stops the container instead of serving
+  a diverged checkout. Lockfile drift is discarded with its diff printed,
+  never committed.
 - **Reproducible installs.** `npm ci` or `pnpm install --frozen-lockfile`,
   by the lockfile present.
 - **Health.** nginx listens on IPv6 as well (alpine's wget resolves

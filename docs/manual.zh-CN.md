@@ -239,8 +239,8 @@ export default defineInkbrushConfig({
 | `inbox.dir` | 关 | Obsidian 收件箱监听目录(支持 `~/`) |
 | `inbox.ignore` | `[]` | 导入跳过清单(路径/文件名前缀) |
 | `autocommit` | `false` | 每次保存后在内容仓自动 git commit(作者 = 登录用户) |
-| `autopush` | `false` | 每次 autocommit 后异步 git push;origin 已有新提交、推送被顶回时,先把 origin 合并进来再推一次——部署机开启 |
-| `follow` | 同 `autopush` | 每分钟取一次内容仓的上游,把它的新提交收进检出(与推送被顶回时同一种合并);开着 `autopush` 时把这次合并出的提交推上去。服务器监视自己的工作区,别处推来的笔记不重启就生效。检出另有前进办法的站点关掉它,比如每个上游版本先校验再切换的站 |
+| `autopush` | `false` | 每次 autocommit 后异步 git push,只在 origin 仍停在这次保存所基于的那个提交时推得上去;origin 动过、推送被顶回时,把检出里没推过的保存重放到 origin 之上再推一次——部署机开启 |
+| `follow` | 同 `autopush` | 每分钟取一次内容仓的上游,把检出变成上游的尖端、再把检出自己没推过的保存重放在上面(与推送被顶回时同一种更新);开着 `autopush` 时把这些保存推上去。「自己的保存」是检出记下的最新一个上游尖端之上的提交(在跟踪分支的 reflog 上跑 `git merge-base --fork-point`),所以有人故意把分支退回或改写时,检出照着新的分支走,被撤掉的提交不会被带回去。服务器监视自己的工作区,别处推来的笔记不重启就生效。检出另有前进办法的站点关掉它,比如每个上游版本先校验再切换的站 |
 | `skipCi` | `false` | 每条自动提交的信息末尾加一行 `[skip ci]`——站上保存与线上就是同一台服务器(一站一面)时开启,保存本身已经生效,不该再让任何流水线重建或重启 |
 | `claude.bin` / `claude.model` | `'claude'` / CLI 自身默认 | AI 端点用哪个 CLI / 哪个模型 |
 | `claude.companions` | 无 | `(note) => string[]`——笔记目录之外,任务还可以读写的项目相对路径(文件或目录) |

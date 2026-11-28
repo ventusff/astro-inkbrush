@@ -114,22 +114,31 @@ fi
 
 echo "[entrypoint] updating $BRANCH ..."
 git -C "$D" fetch --quiet origin "$BRANCH"
-if ! git -C "$D" merge --ff-only "origin/$BRANCH" 2>/dev/null; then
-    echo "[entrypoint] diverged — replaying local commits with rebase ..."
-    if ! git -C "$D" rebase "origin/$BRANCH"; then
-        git -C "$D" rebase --abort || true
-        echo "[entrypoint] FATAL: rebase failed; the volume needs a human (git -C $D status)." >&2
-        exit 1
-    fi
+# The checkout becomes origin's tip with the volume's own commits rebased on
+# top. The reflog of origin/$BRANCH records every tip origin held as this
+# checkout saw it (each fetch, each push); the fork point is the newest of
+# them in HEAD's history, so the commits above it are the saves origin never
+# held, and commits origin removed by rewinding or rewriting the branch on
+# purpose stay behind.
+if ! BASE=$(git -C "$D" merge-base --fork-point "origin/$BRANCH" HEAD); then
+    echo "[entrypoint] FATAL: HEAD is built on no tip the reflog of origin/$BRANCH records; the volume needs a human (git -C $D log --graph HEAD origin/$BRANCH)." >&2
+    exit 1
+fi
+if ! git -C "$D" rebase --quiet --onto "origin/$BRANCH" "$BASE"; then
+    git -C "$D" rebase --abort || true
+    echo "[entrypoint] FATAL: rebase failed; the volume needs a human (git -C $D status)." >&2
+    exit 1
 fi
 
 # Push policy: a recovery commit exists only in this volume and autopush
 # replays only future saves, so this step must push it, and a failed push
 # stops the container (under set -e). With nothing recovered, any older
-# local commits are autopush's to deliver — no push, no failure here.
+# local commits are autopush's to deliver — no push, no failure here. The
+# push goes through only while origin still stands where the commits were
+# rebased onto.
 if [ "$RECOVERED" = 1 ]; then
     echo "[entrypoint] pushing recovered commits ..."
-    git -C "$D" push origin "HEAD:$BRANCH"
+    git -C "$D" push --force-with-lease="$BRANCH:$(git -C "$D" rev-parse "origin/$BRANCH")" origin "HEAD:$BRANCH"
 fi
 
 echo "[entrypoint] engine submodule ($ENGINE_PATH) ..."
